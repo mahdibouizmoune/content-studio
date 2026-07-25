@@ -9,8 +9,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Richmido/content-studio/actions/workflows/ci.yml"><img alt="Build status" src="https://github.com/Richmido/content-studio/actions/workflows/ci.yml/badge.svg"></a>
-  <a href="https://github.com/Richmido/content-studio/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/Richmido/content-studio"></a>
+  <a href="https://github.com/mahdibouizmoune/content-studio/actions/workflows/ci.yml"><img alt="Build status" src="https://github.com/mahdibouizmoune/content-studio/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/mahdibouizmoune/content-studio/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/mahdibouizmoune/content-studio"></a>
   <img alt="Electron" src="https://img.shields.io/badge/Electron-40-47848F?logo=electron">
   <img alt="React" src="https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=111827">
 </p>
@@ -112,7 +112,7 @@ npm run build
 
 ## Download
 
-Windows installers are available from [GitHub Releases](https://github.com/Richmido/content-studio/releases/latest).
+Windows installers are available from [GitHub Releases](https://github.com/mahdibouizmoune/content-studio/releases/latest).
 
 ## License
 
