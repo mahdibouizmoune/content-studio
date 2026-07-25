@@ -15,6 +15,8 @@
   <img alt="React" src="https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=111827">
 </p>
 
+![Content Studio article workflow](docs/screenshots/content-studio-articles.png)
+
 ## What It Does
 
 Content Studio keeps the complete publishing workflow in one desktop application:

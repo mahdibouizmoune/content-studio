@@ -69,7 +69,7 @@ export default function Sidebar({ activeScreen, setActiveScreen, counts, theme, 
           </div>
         ) : null}
         <div className="mt-3 flex shrink-0 items-center justify-between border-t border-white/10 pt-3 text-xs font-bold text-slate-400">
-          <span>Version 1.2.9</span>
+          <span>Version {__APP_VERSION__}</span>
           <CircleCheck className="h-4 w-4 text-emerald-400" />
         </div>
       </aside>
