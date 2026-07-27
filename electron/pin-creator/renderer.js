@@ -269,6 +269,10 @@ async function loadBoardSettings() {
       postInterval: Number(settings.postInterval || settings.pinCreator?.postInterval || 120),
       pinsPerDay: Number(settings.pinsPerDay || settings.pinCreator?.pinsPerDay || 15)
     };
+    const preferredRatio = settings.pinterestPinRatio || '2:3';
+    if (aspectRatio?.querySelector(`option[value="${preferredRatio}"]`)) {
+      aspectRatio.value = preferredRatio;
+    }
   } catch (error) {
     console.error('Error loading board settings:', error);
     boardNames = [];

@@ -33,6 +33,8 @@ const { extractCleanPinPrompt, fallbackPinPrompt } = require('./pin-prompt-quali
 const { normalizeArticleIdentity, normalizeImportedArticles } = require('./article-storage');
 const { normalizeArticleOutline, outlineSectionCount } = require('./article-outline');
 const { normalizeArticleMediaRecord } = require('./article-media');
+const { ratioToDimensions, resolveImageRatio } = require('./image-ratios');
+const { migrateSettings } = require('./settings-migrations');
 const { assertSafeRemoteRedirect, isPathInsideRoots, isSafeRemoteMediaUrl } = require('./media-security');
 const { escapeXmlText } = require('./xml-safety');
 const { mergePinStyles, migratePinStyles } = require('./pin-style-settings');
@@ -2386,6 +2388,13 @@ const articleSettingsDefaults = {
   imageSeoProMode: true,
   aiModel: 'gpt5nano',
   imageModel: 'z-image-turbo',
+  featuredImageRatio: '3:2',
+  intextImageRatio: '4:3',
+  pinterestPinRatio: '2:3',
+  instagramPortraitRatio: '4:5',
+  instagramStoryRatio: '9:16',
+  facebookFeedRatio: '1.91:1',
+  squareSocialRatio: '1:1',
   wordpressSites: [],
   enableInternalLinks: true,
   internalLinkCount: 3,
@@ -2622,6 +2631,12 @@ function initializePinReplicate() {
 
 ipcMain.handle('get-settings', async (event) => {
   let s = store.get('settings', {});
+  const settingsMigration = migrateSettings(s);
+  if (settingsMigration.changed) {
+    store.set('settings', settingsMigration.settings);
+    log.info(`Settings migration applied: ${settingsMigration.applied.join(', ') || 'schema normalization'}`);
+    s = settingsMigration.settings;
+  }
   if (!s.internalLinkDefaultsV3 || s.youtubeArticlePrompt !== undefined || Number(s.internalLinkMaxPosts) > 500) {
     const migrated = { ...s, internalLinkDefaultsV2: true, internalLinkDefaultsV3: true };
     delete migrated.youtubeArticlePrompt;
@@ -2841,8 +2856,9 @@ ipcMain.handle('save-settings', (event, settings) => {
   delete toStore.googleSearchConsoleConnected;
   delete toStore.pinterestAnalyticsAccessToken;
 
-  store.set('settings', toStore);
-  if (toStore.replicateApiToken_encrypted) initializePinReplicate();
+  const migratedSettings = migrateSettings(toStore).settings;
+  store.set('settings', migratedSettings);
+  if (migratedSettings.replicateApiToken_encrypted) initializePinReplicate();
   return { success: true };
 });
 
@@ -5850,48 +5866,44 @@ ipcMain.handle('generate-image', async (e, firstArg, pinAspectRatio = '9:16', pi
 
   const enhanced = `${prompt}, no text, no labels`;
   const m = settings.imageModel || 'seedream-4.5';
+  const ratioSelection = resolveImageRatio(m, aspectRatio);
+  const resolvedAspectRatio = ratioSelection.ratio;
   let apiUrl, body;
 
   if (m === 'z-image-turbo') {
-    const d = aspectRatio === '3:2' ? { width: 1024, height: 672 }
-            : aspectRatio === '16:9' ? { width: 1024, height: 576 }
-            : { width: 576, height: 1024 };
+    const d = ratioToDimensions(resolvedAspectRatio);
     apiUrl = 'https://api.replicate.com/v1/models/prunaai/z-image-turbo/predictions';
     body = { input: { prompt: enhanced, width: d.width, height: d.height, output_format: 'webp', guidance_scale: 0, output_quality: 80, num_inference_steps: 8 } };
   } else if (m === 'flux-schnell') {
-    const ar = aspectRatio === '3:2' ? '3:2' : aspectRatio === '16:9' ? '16:9' : '9:16';
     apiUrl = 'https://api.replicate.com/v1/models/black-forest-labs/flux-schnell/predictions';
-    body = { input: { prompt: enhanced, aspect_ratio: ar, output_format: 'webp', output_quality: 80, num_outputs: 1 } };
+    body = { input: { prompt: enhanced, aspect_ratio: resolvedAspectRatio, output_format: 'webp', output_quality: 80, num_outputs: 1 } };
   } else if (m === 'flux-pro-2') {
-    const d = aspectRatio === '3:2' ? { width: 1024, height: 672 }
-            : aspectRatio === '16:9' ? { width: 1024, height: 576 }
-            : { width: 576, height: 1024 };
+    const d = ratioToDimensions(resolvedAspectRatio);
     apiUrl = 'https://api.replicate.com/v1/models/black-forest-labs/flux-2-max/predictions';
     body = { input: { prompt: enhanced, width: d.width, height: d.height, aspect_ratio: 'custom', output_format: 'webp', output_quality: 80, safety_tolerance: 2 } };
   } else if (m === 'recraft-v4') {
-    const ar = aspectRatio === '3:2' ? '3:2' : aspectRatio === '16:9' ? '16:9' : '9:16';
     apiUrl = 'https://api.replicate.com/v1/models/recraft-ai/recraft-v4/predictions';
-    body = { input: { prompt: enhanced, aspect_ratio: ar } };
+    body = { input: { prompt: enhanced, aspect_ratio: resolvedAspectRatio } };
   } else if (m === 'qwen-image') {
-    const ar = aspectRatio === '3:2' ? '3:2' : aspectRatio === '16:9' ? '16:9' : '9:16';
     apiUrl = 'https://api.replicate.com/v1/models/qwen/qwen-image/predictions';
-    body = { input: { prompt: enhanced, aspect_ratio: ar, output_format: 'webp' } };
+    body = { input: { prompt: enhanced, aspect_ratio: resolvedAspectRatio, output_format: 'webp' } };
   } else if (m === 'gpt-image-2') {
-    const ar = aspectRatio === '3:2' ? '3:2' : '2:3';
     apiUrl = 'https://api.replicate.com/v1/models/openai/gpt-image-2/predictions';
-    body = { input: { prompt: enhanced, aspect_ratio: ar, quality: 'low', moderation: 'low', output_format: 'webp', number_of_images: 1, output_compression: 90 } };
+    body = { input: { prompt: enhanced, aspect_ratio: resolvedAspectRatio, quality: 'low', moderation: 'low', output_format: 'webp', number_of_images: 1, output_compression: 90 } };
   } else if (m === 'imagen-4-fast') {
-    const ar = aspectRatio === '3:2' ? '4:3' : aspectRatio === '16:9' ? '16:9' : '9:16';
     apiUrl = 'https://api.replicate.com/v1/models/google/imagen-4-fast/predictions';
-    body = { input: { prompt: enhanced, aspect_ratio: ar, output_format: 'jpg', safety_filter_level: 'block_only_high' } };
+    body = { input: { prompt: enhanced, aspect_ratio: resolvedAspectRatio, output_format: 'jpg', safety_filter_level: 'block_only_high' } };
   } else if (m === 'imagen-4-ultra') {
-    const ar = aspectRatio === '3:2' ? '4:3' : aspectRatio === '16:9' ? '16:9' : '9:16';
     apiUrl = 'https://api.replicate.com/v1/models/google/imagen-4-ultra/predictions';
-    body = { input: { prompt: enhanced, aspect_ratio: ar, output_format: 'jpg', safety_filter_level: 'block_only_high' } };
+    body = { input: { prompt: enhanced, aspect_ratio: resolvedAspectRatio, output_format: 'jpg', safety_filter_level: 'block_only_high' } };
   } else {
-    const ar = aspectRatio === '3:2' ? '3:2' : aspectRatio === '16:9' ? '16:9' : '9:16';
     apiUrl = 'https://api.replicate.com/v1/models/bytedance/seedream-4.5/predictions';
-    body = { input: { prompt: enhanced, size: '2K', aspect_ratio: ar, max_images: 1, image_input: [], sequential_image_generation: 'disabled' } };
+    if (['4:5', '1.91:1'].includes(resolvedAspectRatio)) {
+      const d = ratioToDimensions(resolvedAspectRatio, 2048);
+      body = { input: { prompt: enhanced, size: 'custom', width: d.width, height: d.height, max_images: 1, image_input: [], sequential_image_generation: 'disabled' } };
+    } else {
+      body = { input: { prompt: enhanced, size: '2K', aspect_ratio: resolvedAspectRatio, max_images: 1, image_input: [], sequential_image_generation: 'disabled' } };
+    }
   }
 
   const controller = new AbortController();
@@ -5919,7 +5931,18 @@ ipcMain.handle('generate-image', async (e, firstArg, pinAspectRatio = '9:16', pi
         try {
           const localPath = await downloadImage(imageUrl, wm);
           const localImageUrl = pathToFileURL(localPath).href;
-          return { imageUrl, remoteImageUrl: imageUrl, displayUrl: localImageUrl, localImageUrl, localPath, prompt };
+          return {
+            imageUrl,
+            remoteImageUrl: imageUrl,
+            displayUrl: localImageUrl,
+            localImageUrl,
+            localPath,
+            prompt,
+            requestedAspectRatio: ratioSelection.requestedRatio,
+            aspectRatio: resolvedAspectRatio,
+            ratioAdjusted: ratioSelection.adjusted,
+            ratioNotice: ratioSelection.notice
+          };
         } catch (error) {
           log.error('Generated article image could not be cached locally:', error.message);
           throw new Error(`Image generated but could not be saved locally: ${error.message}`);

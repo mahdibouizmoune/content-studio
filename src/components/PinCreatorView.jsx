@@ -419,7 +419,7 @@ export default function PinCreatorView({ settings }) {
   const [pins, setPins] = useState([]);
   const [selectedStyle, setSelectedStyle] = useState("custom-ingredient-closeup");
   const [textPlacement, setTextPlacement] = useState("middle");
-  const [aspectRatio, setAspectRatio] = useState("2:3");
+  const [aspectRatio, setAspectRatio] = useState(settings?.pinterestPinRatio || "2:3");
   const [imageModel, setImageModel] = useState("ideogram");
   const [status, setStatus] = useState("");
   const [working, setWorking] = useState(false);
