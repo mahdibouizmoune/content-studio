@@ -301,7 +301,8 @@ export default function ArticleEditor({ article, settings, saveSettings, onClose
     const publicPostUrl = isPublic ? (result.postUrl || readyDraft.wordpressPostUrl) : readyDraft.wordpressPostUrl;
     const next = {
       ...articleForPublish,
-      workflowStatus: result.success ? (isPublic ? "published" : "draft") : readyDraft.workflowStatus,
+      workflowStatus: result.success ? (isPublic ? "published" : "needs-review") : readyDraft.workflowStatus,
+      wordpressPublishStatus: result.status || readyDraft.wordpressPublishStatus || "",
       wordpressPostId: result.postId || readyDraft.wordpressPostId,
       wordpressPostUrl: publicPostUrl,
       wordpressDraftUrl: isPublic ? "" : (result.postUrl || readyDraft.wordpressDraftUrl || ""),
@@ -535,7 +536,7 @@ export default function ArticleEditor({ article, settings, saveSettings, onClose
           </div>
           <div className="flex flex-wrap gap-2">
             <Button variant="secondary" onClick={onClose}>Close</Button>
-            <Button variant="secondary" onClick={() => save({ ...draft, workflowStatus: "ready-to-publish" })}>Mark Ready</Button>
+            <Button variant="secondary" onClick={() => save({ ...draft, workflowStatus: "approved" })}>Mark Ready</Button>
             <Button variant="danger" onClick={remove}><Trash2 className="h-4 w-4" />Delete</Button>
             <Button onClick={() => save()}><Save className="h-4 w-4" />Save</Button>
           </div>
@@ -779,7 +780,7 @@ export default function ArticleEditor({ article, settings, saveSettings, onClose
                           </span>
                         </div>
                         <Field label="Category override">
-                          <select className={inputClass} value={draft.wordpressCategoryId || ""} onChange={(event) => setDraft({ ...draft, wordpressCategoryId: event.target.value, workflowStatus: event.target.value ? "ready-to-publish" : draft.workflowStatus })}>
+                          <select className={inputClass} value={draft.wordpressCategoryId || ""} onChange={(event) => setDraft({ ...draft, wordpressCategoryId: event.target.value, workflowStatus: event.target.value ? "approved" : draft.workflowStatus })}>
                             <option value="">Auto: {match.category?.name || "No category"}</option>
                             {(site.categories || []).map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
                           </select>

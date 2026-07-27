@@ -4,6 +4,8 @@ import SectionHeader from "@/components/SectionHeader";
 import { Button, EmptyState, Field, inputClass } from "@/components/ui";
 import { electronAPI } from "@/lib/electron";
 import { buildClusterPlan, detectCannibalization } from "@/lib/contentPlanning";
+import { buildSmartArticleDefaults } from "@/lib/smartContentEngine";
+import { resolveArticleGenerationSettings } from "@/lib/articleGenerationSettings.mjs";
 
 export default function ClusterPlanner({ articles, settings, refreshArticles, setActiveScreen, setArticlesWorkflowStage }) {
   const [seedTopic, setSeedTopic] = useState("");
@@ -34,6 +36,27 @@ export default function ClusterPlanner({ articles, settings, refreshArticles, se
       const now = Date.now();
       const clusterId = `cluster-${now}`;
       for (const [index, item] of plan.entries()) {
+        const articleDraft = {
+          type: "article",
+          seoBrief: {
+            targetKeyword: item.targetKeyword,
+            secondaryKeywords: item.secondaryKeywords,
+            searchIntent: item.intent,
+            audience: item.audience,
+            competitorNotes: item.notes
+          }
+        };
+        const smart = buildSmartArticleDefaults({
+          title: item.title,
+          mode: "article",
+          settings,
+          manual: articleDraft.seoBrief
+        });
+        const resolved = resolveArticleGenerationSettings({
+          article: articleDraft,
+          smartRecommendations: smart,
+          globalSettings: settings
+        });
         await electronAPI.saveArticle({
           id: `${clusterId}-${index}`,
           title: item.title,
@@ -41,23 +64,19 @@ export default function ClusterPlanner({ articles, settings, refreshArticles, se
           content: "",
           type: "article",
           category: "default",
-          workflowStatus: "cluster-planned",
+          workflowStatus: "queued",
           clusterId,
           clusterRole: item.role,
           clusterPillarTitle: plan[0]?.title || item.title,
           clusterInternalTargets: item.internalLinkTargets,
-          articleLength: settings.articleLength,
-          recipeCardEnabled: settings.recipeCardEnabled !== false,
-          requireOutlineApproval: false,
-          outlineApproved: true,
+          articleLength: resolved.articleLength,
+          articleLengthSource: resolved.articleLengthSource,
+          brandVoiceId: resolved.brandVoiceId,
+          recipeCardEnabled: resolved.recipeCardEnabled,
+          requireOutlineApproval: resolved.requireOutlineApproval,
+          outlineApproved: resolved.outlineApproved,
           outline: "",
-          seoBrief: {
-            targetKeyword: item.targetKeyword,
-            secondaryKeywords: item.secondaryKeywords,
-            searchIntent: item.intent,
-            audience: item.audience,
-            competitorNotes: item.notes
-          },
+          seoBrief: resolved.seoBrief,
           metaTitle: "",
           metaDescription: "",
           slug: "",

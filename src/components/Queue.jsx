@@ -19,6 +19,7 @@ import {
 import { applyInternalLinksToHtml, buildInternalLinkSuggestions, resolveArticleSite } from "@/lib/internalLinks";
 import { buildSmartGenerationSettings } from "@/lib/smartContentEngine";
 import { resolveArticleGenerationSettings } from "@/lib/articleGenerationSettings.mjs";
+import { deriveLegacyQueueStatus, workflowStatusForGenerationStep } from "@/lib/articleWorkflow.mjs";
 import { usesCompactRecipeCollection } from "@/lib/recipeTitle.mjs";
 import { applyAffiliateLinksToArticle } from "@/lib/affiliateLinks.mjs";
 import { buildListiclePrompt, parseItemCountFromTitle, parsePromisedRecipeCount } from "@/prompts";
@@ -57,7 +58,7 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
   }, 0), [pending, settings]);
   const completed = articles.filter((article) => article.queueStatus === "completed");
   const failed = articles.filter((article) => article.queueStatus === "error");
-  const activeRowsAll = articles.filter((article) => ["pending", "generating", "error", "completed"].includes(article.queueStatus));
+  const activeRowsAll = articles.filter((article) => ["pending", "generating", "outline-review", "error", "completed", "cancelled"].includes(article.queueStatus));
   const allowedStatuses = Array.isArray(rowStatusFilter) ? rowStatusFilter : rowStatusFilter === "all" ? null : [rowStatusFilter];
   const activeRows = allowedStatuses ? activeRowsAll.filter((article) => allowedStatuses.includes(article.queueStatus)) : activeRowsAll;
   const savedProgressPercent = activeRowsAll.length ? Math.round((completed.length / activeRowsAll.length) * 100) : 0;
@@ -177,9 +178,11 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
         stage,
         updatedAt: new Date().toISOString()
       };
+      const workflowStatus = workflowStatusForGenerationStep(stage);
       workingArticle = {
         ...workingArticle,
-        queueStatus: "generating",
+        queueStatus: deriveLegacyQueueStatus(workflowStatus),
+        workflowStatus,
         generationStep: stage,
         generationCheckpoint: checkpoint,
         errorMessage: ""
@@ -480,10 +483,10 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
       for (const article of pending) {
         await waitWhilePaused();
         if (cancelRequestedRef.current) break;
-        await saveStatus(article, { queueStatus: "generating", requireOutlineApproval: false, outlineApproved: true, errorMessage: "" });
+        await saveStatus(article, { queueStatus: "generating", workflowStatus: "generating-content", errorMessage: "" });
         await refreshArticles();
         if (cancelRequestedRef.current) {
-          await saveStatus(article, { queueStatus: "pending", errorMessage: "" });
+          await saveStatus(article, { queueStatus: "pending", workflowStatus: "queued", errorMessage: "" });
           break;
         }
         let cancelled = false;
@@ -492,14 +495,14 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
         } catch (error) {
           const recoveryArticle = error.recoveryArticle || article;
           if ((error.message || "").includes("Cancelled by user")) {
-            await saveStatus(recoveryArticle, { queueStatus: "pending", errorMessage: "" });
+            await saveStatus(recoveryArticle, { queueStatus: "pending", workflowStatus: "queued", errorMessage: "" });
             setProgress("Generation cancelled.");
             cancelled = true;
             break;
           }
           await saveStatus(recoveryArticle, {
             queueStatus: "error",
-            workflowStatus: "error",
+            workflowStatus: "failed",
             errorMessage: isAuthError(error) ? `${error.message}. Check your Replicate API token in Settings.` : error.message
           });
         }
@@ -640,6 +643,7 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
                   article.queueStatus === "completed" ? "bg-violet-100 text-violet-700" :
                   article.queueStatus === "error" ? "bg-slate-200 text-slate-700" :
                   article.queueStatus === "generating" ? "bg-indigo-100 text-indigo-700" :
+                  article.queueStatus === "outline-review" ? "bg-amber-100 text-amber-800" :
                   "bg-slate-100 text-slate-600"
                 }`}>{article.queueStatus}</span>
               </div>

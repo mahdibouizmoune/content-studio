@@ -4,6 +4,7 @@ import SectionHeader from "@/components/SectionHeader";
 import { Button, EmptyState, Field, inputClass } from "@/components/ui";
 import { electronAPI } from "@/lib/electron";
 import { buildSmartArticleDefaults } from "@/lib/smartContentEngine";
+import { resolveArticleGenerationSettings } from "@/lib/articleGenerationSettings.mjs";
 
 const countries = [
   ["US", "United States"],
@@ -207,6 +208,16 @@ export default function TrendsResearch({ settings, articles, refreshArticles, se
             brandVoiceId: preset.brandVoiceId || ""
           }
         });
+        const resolved = resolveArticleGenerationSettings({
+          article: {
+            type: item.contentType === "listicle" ? "listicle" : "article",
+            projectPresetId: preset.id || "",
+            seoBrief: smart.seoBrief
+          },
+          preset,
+          smartRecommendations: smart,
+          globalSettings: settings
+        });
         await electronAPI.saveArticle({
           id: `trend-${now}-${index}`,
           title: item.suggestedTitle,
@@ -214,19 +225,21 @@ export default function TrendsResearch({ settings, articles, refreshArticles, se
           content: "",
           type: item.contentType === "listicle" ? "listicle" : "article",
           category: smart.category,
-          workflowStatus: "draft-generated",
+          workflowStatus: "queued",
           projectPresetId: preset.id || "",
-          wordpressSiteId: preset.wordpressSiteId || "",
-          brandVoiceId: smart.brandVoiceId,
-          articleLength: smart.articleLength,
-          recipeCardEnabled: smart.recipeCardEnabled,
+          wordpressSiteId: resolved.wordpressSiteId || "",
+          wordpressCategoryId: resolved.wordpressCategoryId || "",
+          brandVoiceId: resolved.brandVoiceId,
+          articleLength: resolved.articleLength,
+          articleLengthSource: resolved.articleLengthSource,
+          recipeCardEnabled: resolved.recipeCardEnabled,
           smartIntentId: smart.smartIntentId,
           smartIntentLabel: smart.smartIntentLabel,
           smartPinStyle: smart.smartPinStyle,
-          requireOutlineApproval: false,
-          outlineApproved: true,
+          requireOutlineApproval: resolved.requireOutlineApproval,
+          outlineApproved: resolved.outlineApproved,
           outline: "",
-          seoBrief: smart.seoBrief,
+          seoBrief: resolved.seoBrief,
           keywordResearchId: research.id,
           keywordOpportunityScore: item.opportunityScore,
           recommendedPinterestBoard: item.board || "",

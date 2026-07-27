@@ -143,7 +143,8 @@ export default function ArticlesList({ articles, settings, saveSettings, refresh
         const publicPostUrl = isPublic ? (result.postUrl || readyArticle.wordpressPostUrl) : readyArticle.wordpressPostUrl;
         await electronAPI.saveArticle({
           ...articleForPublish,
-          workflowStatus: result.success ? (isPublic ? "published" : "draft") : readyArticle.workflowStatus,
+          workflowStatus: result.success ? (isPublic ? "published" : "needs-review") : readyArticle.workflowStatus,
+          wordpressPublishStatus: result.status || readyArticle.wordpressPublishStatus || "",
           wordpressPostId: result.postId || readyArticle.wordpressPostId,
           wordpressPostUrl: publicPostUrl,
           wordpressDraftUrl: isPublic ? "" : (result.postUrl || readyArticle.wordpressDraftUrl || ""),
