@@ -601,11 +601,75 @@ test('selected article length controls compact versus complete collection genera
   assert.equal(browserUsesCompactRecipeCollection(20, '4500-6000'), false);
 });
 
-test('queue generation gives the current Settings article size precedence', () => {
-  const queueSource = fs.readFileSync(require.resolve('../src/components/Queue.jsx'), 'utf8');
-  const smartSource = fs.readFileSync(require.resolve('../src/lib/smartContentEngine.js'), 'utf8');
-  assert.match(queueSource, /settings\.articleLength \|\| smartSettings\.articleLength \|\| article\.articleLength/);
-  assert.match(smartSource, /settings\.articleLength \|\| article\.articleLength \|\| profile\.articleLength/);
+test('article setting resolver gives a selected preset precedence over the global length', async () => {
+  const { resolveArticleGenerationSettings } = await import('../src/lib/articleGenerationSettings.mjs');
+  const resolved = resolveArticleGenerationSettings({
+    article: { projectPresetId: 'recipe-seo' },
+    preset: { id: 'recipe-seo', articleLength: '1400-1800' },
+    smartRecommendations: { articleLength: '1100-1500' },
+    globalSettings: { articleLength: '900-1200' }
+  });
+
+  assert.equal(resolved.articleLength, '1400-1800');
+  assert.equal(resolved.articleLengthSource, 'preset');
+});
+
+test('article setting resolver gives a custom article length precedence over a preset', async () => {
+  const { resolveArticleGenerationSettings } = await import('../src/lib/articleGenerationSettings.mjs');
+  const resolved = resolveArticleGenerationSettings({
+    article: { articleLength: '2200-2600', articleLengthSource: 'custom' },
+    preset: { articleLength: '1400-1800' },
+    smartRecommendations: { articleLength: '1100-1500' },
+    globalSettings: { articleLength: '900-1200' }
+  });
+
+  assert.equal(resolved.articleLength, '2200-2600');
+  assert.equal(resolved.articleLengthSource, 'custom');
+});
+
+test('article setting resolver uses smart length before the global fallback', async () => {
+  const { resolveArticleGenerationSettings } = await import('../src/lib/articleGenerationSettings.mjs');
+  const resolved = resolveArticleGenerationSettings({
+    article: {},
+    preset: {},
+    smartRecommendations: { articleLength: '1600-2000' },
+    globalSettings: { articleLength: '900-1200' }
+  });
+
+  assert.equal(resolved.articleLength, '1600-2000');
+  assert.equal(resolved.articleLengthSource, 'smart');
+});
+
+test('article setting resolver uses global then system length only as fallbacks', async () => {
+  const {
+    resolveArticleGenerationSettings,
+    SYSTEM_ARTICLE_GENERATION_DEFAULTS
+  } = await import('../src/lib/articleGenerationSettings.mjs');
+  const globalResolved = resolveArticleGenerationSettings({
+    globalSettings: { articleLength: '1000-1400' }
+  });
+  const systemResolved = resolveArticleGenerationSettings({
+    globalSettings: {},
+    systemDefaults: SYSTEM_ARTICLE_GENERATION_DEFAULTS
+  });
+
+  assert.equal(globalResolved.articleLengthSource, 'global');
+  assert.equal(globalResolved.articleLength, '1000-1400');
+  assert.equal(systemResolved.articleLengthSource, 'system');
+  assert.equal(systemResolved.articleLength, '900-1200');
+});
+
+test('article setting resolver preserves a legacy saved length without a source field', async () => {
+  const { resolveArticleGenerationSettings } = await import('../src/lib/articleGenerationSettings.mjs');
+  const resolved = resolveArticleGenerationSettings({
+    article: { articleLength: '1800-2200' },
+    preset: {},
+    smartRecommendations: {},
+    globalSettings: { articleLength: '900-1200' }
+  });
+
+  assert.equal(resolved.articleLength, '1800-2200');
+  assert.equal(resolved.articleLengthSource, 'custom');
 });
 
 test('recipe collection validation rejects thin or misnumbered recipes', () => {
