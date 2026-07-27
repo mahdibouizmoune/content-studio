@@ -5,6 +5,7 @@ import { Button, Field, inputClass } from "@/components/ui";
 import { electronAPI } from "@/lib/electron";
 import { detectCannibalization } from "@/lib/contentPlanning";
 import { buildSmartArticleDefaults, inferSmartIntent } from "@/lib/smartContentEngine";
+import { resolveArticleGenerationSettings } from "@/lib/articleGenerationSettings.mjs";
 
 function promptName(mode, category) {
   if (mode === "article") return "Classic article prompt";
@@ -105,6 +106,23 @@ export default function AddToQueue({ mode, settings, articles, refreshArticles, 
           brandVoiceId
         }
       });
+      const resolved = resolveArticleGenerationSettings({
+        article: {
+          type: mode,
+          projectPresetId,
+          brandVoiceId,
+          seoBrief: {
+            targetKeyword,
+            secondaryKeywords,
+            searchIntent,
+            audience,
+            competitorNotes
+          }
+        },
+        preset: selectedPreset || {},
+        smartRecommendations: smart,
+        globalSettings: settings
+      });
       await electronAPI.saveArticle({
         id: `${now}-${index}`,
         title,
@@ -113,20 +131,21 @@ export default function AddToQueue({ mode, settings, articles, refreshArticles, 
         content: "",
         type: mode,
         category: mode === "listicle" ? (settings.listicleCategory || smart.category) : smart.category,
-        workflowStatus: "draft-generated",
+        workflowStatus: "queued",
         projectPresetId,
-        wordpressSiteId: selectedPreset?.wordpressSiteId || "",
-        brandVoiceId: smart.brandVoiceId,
-        articleLength: settings.articleLength || smart.articleLength,
-        articleLengthSource: "settings",
-        recipeCardEnabled: smart.recipeCardEnabled,
+        wordpressSiteId: resolved.wordpressSiteId || "",
+        wordpressCategoryId: resolved.wordpressCategoryId || "",
+        brandVoiceId: resolved.brandVoiceId,
+        articleLength: resolved.articleLength,
+        articleLengthSource: resolved.articleLengthSource,
+        recipeCardEnabled: resolved.recipeCardEnabled,
         smartIntentId: smart.smartIntentId,
         smartIntentLabel: smart.smartIntentLabel,
         smartPinStyle: smart.smartPinStyle,
-        requireOutlineApproval: false,
-        outlineApproved: true,
+        requireOutlineApproval: resolved.requireOutlineApproval,
+        outlineApproved: resolved.outlineApproved,
         outline: "",
-        seoBrief: smart.seoBrief,
+        seoBrief: resolved.seoBrief,
         metaTitle: "",
         metaDescription: "",
         slug: "",

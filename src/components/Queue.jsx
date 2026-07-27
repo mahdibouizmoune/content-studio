@@ -18,6 +18,7 @@ import {
 } from "@/lib/articlePostProcess.mjs";
 import { applyInternalLinksToHtml, buildInternalLinkSuggestions, resolveArticleSite } from "@/lib/internalLinks";
 import { buildSmartGenerationSettings } from "@/lib/smartContentEngine";
+import { resolveArticleGenerationSettings } from "@/lib/articleGenerationSettings.mjs";
 import { usesCompactRecipeCollection } from "@/lib/recipeTitle.mjs";
 import { applyAffiliateLinksToArticle } from "@/lib/affiliateLinks.mjs";
 import { buildListiclePrompt, parseItemCountFromTitle, parsePromisedRecipeCount } from "@/prompts";
@@ -49,13 +50,11 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
   const pending = useMemo(() => articles.filter((article) => article.queueStatus === "pending"), [articles]);
   const extraCollectionTextCalls = useMemo(() => pending.reduce((total, article) => {
     const count = parsePromisedRecipeCount(article.title);
-    const articleLength = article.articleLengthSource === "custom"
-      ? article.articleLength
-      : settings.articleLength || article.articleLength;
+    const articleLength = articleSettings(article).articleLength;
     return count >= 6 && !usesCompactRecipeCollection(count, articleLength)
       ? total + Math.ceil(count / 5)
       : total;
-  }, 0), [pending, settings.articleLength]);
+  }, 0), [pending, settings]);
   const completed = articles.filter((article) => article.queueStatus === "completed");
   const failed = articles.filter((article) => article.queueStatus === "error");
   const activeRowsAll = articles.filter((article) => ["pending", "generating", "error", "completed"].includes(article.queueStatus));
@@ -119,16 +118,18 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
   }
 
   function articleSettings(article) {
-    const smartSettings = buildSmartGenerationSettings(article, settings);
-    const brandVoiceId = article.brandVoiceId || smartSettings.smartIntent?.brandVoiceId || "";
+    const smartRecommendations = buildSmartGenerationSettings(article, settings);
+    const selectedPreset = settings.projectPresets?.find((preset) => preset.id === article.projectPresetId);
+    const resolved = resolveArticleGenerationSettings({
+      article,
+      preset: selectedPreset,
+      smartRecommendations,
+      globalSettings: settings
+    });
+    const brandVoiceId = resolved.brandVoiceId || smartRecommendations.smartIntent?.brandVoiceId || "";
     const brandVoice = settings.brandVoices?.find((voice) => voice.id === brandVoiceId);
     return {
-      ...smartSettings,
-      articleLength: article.articleLengthSource === "custom"
-        ? article.articleLength
-        : settings.articleLength || smartSettings.articleLength || article.articleLength,
-      recipeCardEnabled: article.recipeCardEnabled ?? settings.recipeCardEnabled,
-      seoBrief: smartSettings.seoBrief,
+      ...resolved,
       brandVoice,
       outline: article.outlineApproved ? article.outline : ""
     };
@@ -145,25 +146,25 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
 
     if (isRecipeCollection) {
       const listicleItemCount = promisedRecipeCount || parseItemCountFromTitle(article.title);
-      const listicleCategory = promisedRecipeCount ? "food" : (article.category || settings.listicleCategory);
-      settingsForGen.articlePrompt = buildListiclePrompt(article.title, listicleCategory, listicleItemCount, settings);
+      const listicleCategory = promisedRecipeCount ? "food" : (article.category || settingsForGen.listicleCategory);
+      settingsForGen.articlePrompt = buildListiclePrompt(article.title, listicleCategory, listicleItemCount, settingsForGen);
       settingsForGen.listicleCategory = listicleCategory;
       settingsForGen.listicleItemCount = listicleItemCount;
     }
     settingsForGen.articleType = isRecipeCollection ? "listicle" : (article.type || "article");
     settingsForGen.articlePrompt = preparePrompt(settingsForGen.articlePrompt, settingsForGen);
 
-    const affiliateProvider = settings.affiliateProvider || "impact";
-    const impactReady = Boolean(settings.impactAccountSid && settings.impactAuthToken);
-    const amazonReady = Boolean(settings.amazonPartnerTag);
+    const affiliateProvider = settingsForGen.affiliateProvider || "impact";
+    const impactReady = Boolean(settingsForGen.impactAccountSid && settingsForGen.impactAuthToken);
+    const amazonReady = Boolean(settingsForGen.amazonPartnerTag);
     const selectedProviderReady = affiliateProvider === "both"
       ? impactReady || amazonReady
       : affiliateProvider === "amazon"
         ? amazonReady
         : impactReady;
-    const affiliateDiscoveryEnabled = settings.affiliateEnabled !== false
-      && settings.affiliateAutoDiscover !== false
-      && settings.affiliateAutoInsert !== false
+    const affiliateDiscoveryEnabled = settingsForGen.affiliateEnabled !== false
+      && settingsForGen.affiliateAutoDiscover !== false
+      && settingsForGen.affiliateAutoInsert !== false
       && selectedProviderReady;
     let totalStages = 4
       + (settingsForGen.enableIntextImages ? 1 + Math.max(0, Number(settingsForGen.intextImageCount ?? 1)) : 0)
@@ -221,7 +222,7 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
         await waitWhilePaused();
         const titleTask = generatedTitle
           ? Promise.resolve(generatedTitle)
-          : settings.keepOriginalTitles
+          : settingsForGen.keepOriginalTitles
             ? Promise.resolve(sanitizeTitleText(article.title))
             : electronAPI.generateArticleTitle({
                 title: article.title,
@@ -234,7 +235,7 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
           : electronAPI.generateFeaturedImagePrompt({
               content: baseContent,
               title: article.title,
-              settings,
+              settings: settingsForGen,
               jobKey: `${jobKey}:featured-prompt`
             });
         [generatedTitle, featuredImagePrompt] = await Promise.all([titleTask, featuredPromptTask]);
@@ -252,8 +253,8 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
         const featuredTask = needsFeatured
           ? electronAPI.generateImage({
               prompt: featuredImagePrompt,
-              aspectRatio: "3:2",
-              settings,
+              aspectRatio: settingsForGen.featuredImageRatio,
+              settings: settingsForGen,
               jobKey: `${jobKey}:featured-image`
             })
           : Promise.resolve(featured);
@@ -264,7 +265,7 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
               count: Number(settingsForGen.intextImageCount ?? 1),
               settings: settingsForGen,
               isListicle: isRecipeCollection,
-              category: isRecipeCollection ? "food" : (article.category || settings.listicleCategory),
+              category: isRecipeCollection ? "food" : (article.category || settingsForGen.listicleCategory),
               jobKey: `${jobKey}:image-prompts`
             })
           : Promise.resolve(prompts);
@@ -290,8 +291,8 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
           const results = await Promise.allSettled(batchIndexes.map((index) =>
             electronAPI.generateImage({
               prompt: prompts[index],
-              aspectRatio: "9:16",
-              settings,
+              aspectRatio: settingsForGen.intextImageRatio,
+              settings: settingsForGen,
               jobKey: `${jobKey}:in-text-${index + 1}`
             })
           ));
@@ -329,8 +330,8 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
 
       let internalLinks = [];
       let internalLinkSite = null;
-      if (settings.enableInternalLinks !== false && Number(settings.internalLinkCount ?? 3) > 0) {
-        internalLinkSite = resolveArticleSite(article, settings);
+      if (settingsForGen.enableInternalLinks !== false && Number(settingsForGen.internalLinkCount ?? 3) > 0) {
+        internalLinkSite = resolveArticleSite(article, settingsForGen);
         if (internalLinkSite?.url) {
           let linkSite = internalLinkSite;
           if (!linkSite.internalLinkPosts?.length && linkSite.username && linkSite.apiKey) {
@@ -344,7 +345,7 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
                   wordpressUsername: linkSite.username,
                   wordpressApiKey: linkSite.apiKey,
                   categories: linkSite.categories || [],
-                  maxPosts: settings.internalLinkMaxPosts || 500
+                  maxPosts: settingsForGen.internalLinkMaxPosts || 500
                 });
                 internalLinkPostsCacheRef.current.set(cacheKey, cached);
               }
@@ -356,7 +357,7 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
               linkSite = internalLinkSite;
             }
           }
-          const suggestions = buildInternalLinkSuggestions({ article, content: baseContent, site: linkSite, settings });
+          const suggestions = buildInternalLinkSuggestions({ article, content: baseContent, site: linkSite, settings: settingsForGen });
           const linked = applyInternalLinksToHtml(baseContent, suggestions);
           baseContent = linked.html;
           internalLinks = linked.applied;
@@ -386,7 +387,7 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
           completedAt: new Date().toISOString()
         };
         const availableAffiliateLinks = [
-          ...(settings.affiliateLinks || []),
+          ...(settingsForGen.affiliateLinks || []),
           ...(discovery.success ? discovery.affiliates || [] : [])
         ];
         if (availableAffiliateLinks.length) {
@@ -396,7 +397,6 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
               || (item.url && candidate.url === item.url)
             ) === index);
           const affiliateSettings = {
-            ...settings,
             ...settingsForGen,
             affiliateLinks: affiliateLibrary
           };

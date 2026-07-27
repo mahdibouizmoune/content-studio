@@ -223,11 +223,13 @@ export function buildSmartSeoBrief({ title = "", mode = "article", settings = {}
 export function buildSmartArticleDefaults({ title = "", mode = "article", settings = {}, preset = {}, manual = {} } = {}) {
   const profile = inferSmartIntent({ title, type: mode, seoBrief: manual });
   const seoBrief = buildSmartSeoBrief({ title, mode, settings, preset, manual });
+  const recommendedArticleLength = recommendedCollectionLength(title, mode) || profile.articleLength || "900-1200";
   return {
     smartIntentId: profile.id,
     smartIntentLabel: profile.label,
     smartPinStyle: profile.pinStyle,
-    articleLength: manual.articleLength || settings.articleLength || preset.articleLength || recommendedCollectionLength(title, mode) || profile.articleLength || "900-1200",
+    articleLength: manual.articleLength || preset.articleLength || recommendedArticleLength || settings.articleLength,
+    recommendedArticleLength,
     brandVoiceId: manual.brandVoiceId || preset.brandVoiceId || profile.brandVoiceId || "",
     recipeCardEnabled: preset.recipeCardEnabled ?? settings.recipeCardEnabled ?? true,
     category: mode === "listicle" ? "food" : "default",
@@ -246,10 +248,9 @@ export function buildSmartGenerationSettings(article = {}, settings = {}) {
     manual: existingBrief
   });
   return {
-    ...settings,
-    articleLength: article.articleLengthSource === "custom"
-      ? article.articleLength
-      : settings.articleLength || article.articleLength || profile.articleLength,
+    articleLength: recommendedCollectionLength(article.title, article.type) || profile.articleLength || "900-1200",
+    brandVoiceId: profile.brandVoiceId || "",
+    recipeCardEnabled: settings.recipeCardEnabled ?? true,
     seoBrief: {
       ...smartBrief,
       ...existingBrief,
