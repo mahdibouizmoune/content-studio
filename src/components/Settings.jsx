@@ -615,7 +615,7 @@ export default function Settings({ settings, saveSettings, refreshArticles, init
               </select>
             </Field>
           </div>
-          <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+          <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
             <label className="flex items-center justify-between gap-4 rounded-md bg-slate-50 p-4 font-bold text-slate-800 ring-1 ring-slate-100">
               <span><span className="block">Keep Original Titles</span><span className="text-sm font-medium text-slate-500">Skip viral title rewrite</span></span>
               <input type="checkbox" className="h-5 w-5" checked={!!draft.keepOriginalTitles} onChange={(event) => update({ keepOriginalTitles: event.target.checked })} />
@@ -636,7 +636,30 @@ export default function Settings({ settings, saveSettings, refreshArticles, init
               <span><span className="block">Approve Outlines</span><span className="text-sm font-medium text-slate-500">Review before full generation</span></span>
               <input type="checkbox" className="h-5 w-5" checked={draft.requireOutlineApproval === true} onChange={(event) => update({ requireOutlineApproval: event.target.checked })} />
             </label>
+            <label className="flex items-center justify-between gap-4 rounded-md bg-slate-50 p-4 font-bold text-slate-800 ring-1 ring-slate-100">
+              <span><span className="block">Reader Retention</span><span className="text-sm font-medium text-slate-500">One useful save note before the recipe card</span></span>
+              <input type="checkbox" className="h-5 w-5" checked={draft.readerRetentionEnabled !== false} onChange={(event) => update({ readerRetentionEnabled: event.target.checked })} />
+            </label>
           </div>
+          {draft.readerRetentionEnabled !== false ? (
+            <div className="mt-4 grid gap-4 md:grid-cols-2">
+              <Field label="Save-recipe note" hint="A short, practical reminder near the end. It is plain HTML and adds no scripts or page-weight risk.">
+                <textarea className={`${inputClass} min-h-24 resize-y`} value={draft.saveRecipeCtaText || ""} onChange={(event) => update({ saveRecipeCtaText: event.target.value })} />
+              </Field>
+              <div className="space-y-3">
+                <label className="flex items-center justify-between gap-4 rounded-md bg-slate-50 p-3 font-bold text-slate-800 ring-1 ring-slate-100">
+                  <span><span className="block">Newsletter Link</span><span className="text-sm font-medium text-slate-500">Optional, off by default</span></span>
+                  <input type="checkbox" className="h-5 w-5" checked={draft.newsletterCtaEnabled === true} onChange={(event) => update({ newsletterCtaEnabled: event.target.checked })} />
+                </label>
+                <Field label="Newsletter URL">
+                  <input type="url" className={inputClass} value={draft.newsletterCtaUrl || ""} onChange={(event) => update({ newsletterCtaUrl: event.target.value })} placeholder="https://your-site.com/newsletter/" />
+                </Field>
+                <Field label="Newsletter link text">
+                  <input className={inputClass} value={draft.newsletterCtaText || ""} onChange={(event) => update({ newsletterCtaText: event.target.value })} />
+                </Field>
+              </div>
+            </div>
+          ) : null}
         </SettingPanel>
 
         <SettingPanel id="api" open={open} setOpen={setOpen} icon={KeyRound} tone="icon-gradient-purple" title="API Configuration" subtitle="Replicate token and text model" badge={draft.replicateApiToken ? "connected" : ""}>

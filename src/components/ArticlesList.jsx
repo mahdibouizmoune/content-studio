@@ -9,6 +9,8 @@ import { inferSmartIntent } from "@/lib/smartContentEngine";
 import { categoryNeedsReview, matchWordPressCategory } from "@/lib/wordpressCategories";
 import { applyAffiliateLinksToArticle } from "@/lib/affiliateLinks.mjs";
 import { isArticlePublished } from "@/lib/articlePublication.mjs";
+import { buildArticleQualityReport } from "@/lib/articleQuality.mjs";
+import { applyReaderRetentionElements } from "@/lib/readerRetention.mjs";
 
 function wordsFromHtml(html = "") {
   return html.replace(/<[^>]+>/g, " ").trim().split(/\s+/).filter(Boolean).length;
@@ -36,12 +38,17 @@ function publishReadyArticle(article, settings = {}) {
     };
   }
   workingArticle.content = insertArticleImages(workingArticle.content || "", workingArticle.images || []);
+  workingArticle = applyReaderRetentionElements(workingArticle, settings);
   const metadata = buildMetadata(workingArticle, workingArticle.content || "");
   const structuredData = buildRecipeSchema({ ...workingArticle, ...metadata });
   const enriched = { ...workingArticle, ...metadata, structuredData };
   const seo = scoreArticle(enriched, workingArticle.content || "");
   const imageQa = qaArticleImages(enriched);
-  return { ...enriched, seoScore: seo.score, seoChecks: seo.checks, imageQa, rankMathMeta: buildRankMathMeta(enriched) };
+  const qualityReport = buildArticleQualityReport(
+    { ...enriched, seoScore: seo.score, seoChecks: seo.checks, imageQa },
+    { maxAffiliateLinks: settings.affiliateMaxLinks, requireFeaturedImage: true }
+  );
+  return { ...enriched, seoScore: seo.score, seoChecks: seo.checks, imageQa, qualityReport, rankMathMeta: buildRankMathMeta(enriched) };
 }
 
 function articleImageSrc(article) {

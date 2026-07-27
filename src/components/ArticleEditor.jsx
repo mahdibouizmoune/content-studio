@@ -1,5 +1,6 @@
 import { BadgeDollarSign, ExternalLink, Image, Link2, PackageCheck, Plus, Save, Search, Send, Sparkles, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { Button, Field, inputClass } from "@/components/ui";
 import { electronAPI } from "@/lib/electron";
 import { buildMetadata, buildRankMathMeta, buildRecipeSchema, buildSeoImageAlt, buildSeoImageFilename, insertArticleImages, qaArticleImages, scoreArticle } from "@/lib/articlePostProcess.mjs";
@@ -8,6 +9,9 @@ import { categoryNeedsReview, matchWordPressCategory } from "@/lib/wordpressCate
 import { sanitizeHtml } from "@/lib/sanitizeHtml";
 import { inferSmartIntent } from "@/lib/smartContentEngine";
 import { applyAffiliateLinksToArticle, findAffiliateOpportunities, removeManagedAffiliateLinks } from "@/lib/affiliateLinks.mjs";
+import { buildArticleBrief } from "@/lib/articleBrief.mjs";
+import { buildArticleQualityReport } from "@/lib/articleQuality.mjs";
+import { applyReaderRetentionElements } from "@/lib/readerRetention.mjs";
 
 export default function ArticleEditor({ article, settings, saveSettings, onClose, refreshArticles }) {
   const [draft, setDraft] = useState(article);
@@ -47,6 +51,14 @@ export default function ArticleEditor({ article, settings, saveSettings, onClose
 
   function rescore(nextDraft) {
     let workingDraft = { ...nextDraft };
+    workingDraft.articleBrief = buildArticleBrief({
+      article: workingDraft,
+      resolvedSettings: {
+        ...settings,
+        articleLength: workingDraft.articleLength || settings.articleLength,
+        seoBrief: workingDraft.seoBrief || {}
+      }
+    });
     if (settings.imageSeoProMode !== false) {
       workingDraft = {
         ...workingDraft,
@@ -60,12 +72,17 @@ export default function ArticleEditor({ article, settings, saveSettings, onClose
       };
     }
     workingDraft.content = insertArticleImages(workingDraft.content || "", workingDraft.images || []);
+    workingDraft = applyReaderRetentionElements(workingDraft, settings);
     const metadata = buildMetadata(workingDraft, workingDraft.content || "");
     const structuredData = buildRecipeSchema({ ...workingDraft, ...metadata });
     const enriched = { ...workingDraft, ...metadata, structuredData };
     const seo = scoreArticle(enriched, workingDraft.content || "");
     const imageQa = qaArticleImages(enriched);
-    return { ...enriched, seoScore: seo.score, seoChecks: seo.checks, imageQa, rankMathMeta: buildRankMathMeta(enriched) };
+    const qualityReport = buildArticleQualityReport(
+      { ...enriched, seoScore: seo.score, seoChecks: seo.checks, imageQa },
+      { maxAffiliateLinks: settings.affiliateMaxLinks, requireFeaturedImage: true }
+    );
+    return { ...enriched, seoScore: seo.score, seoChecks: seo.checks, imageQa, qualityReport, rankMathMeta: buildRankMathMeta(enriched) };
   }
 
   useEffect(() => {
@@ -79,6 +96,31 @@ export default function ArticleEditor({ article, settings, saveSettings, onClose
     await refreshArticles();
     setStatus("Article saved.");
     return rescored;
+  }
+
+  async function approve() {
+    let next = rescore({ ...draft, workflowStatus: "approved" });
+    if (next.qualityReport?.blockers?.length) {
+      const reason = window.prompt(
+        `${next.qualityReport.blockers.length} critical quality issue${next.qualityReport.blockers.length === 1 ? "" : "s"} remain. Enter an administrative override reason, or cancel and fix them.`
+      );
+      if (!reason?.trim()) {
+        setDraft(next);
+        setStatus("Approval paused. Fix the critical issues or provide an override reason.");
+        return;
+      }
+      next = {
+        ...next,
+        qualityOverride: {
+          reason: reason.trim().slice(0, 500),
+          action: "approve",
+          blockerIds: next.qualityReport.blockers.map((blocker) => blocker.id),
+          recordedAt: new Date().toISOString()
+        }
+      };
+    }
+    await save(next);
+    setStatus("Article approved for publishing.");
   }
 
   async function applyInternalLinksToDraft(inputDraft, site, shouldSave = true) {
@@ -133,6 +175,18 @@ export default function ArticleEditor({ article, settings, saveSettings, onClose
     setDraft(next);
     await refreshArticles();
     setStatus("Removed Content Studio affiliate links and disclosure.");
+  }
+
+  async function removeAffiliateRecommendation(id) {
+    const remaining = (draft.affiliateLinks || []).filter((item) => item.id !== id);
+    const stripped = removeManagedAffiliateLinks(draft);
+    const next = remaining.length
+      ? rescore(applyAffiliateLinksToArticle(stripped, { ...settings, affiliateLinks: remaining }))
+      : rescore(stripped);
+    await electronAPI.saveArticle(next);
+    setDraft(next);
+    await refreshArticles();
+    setStatus(remaining.length ? "Recommendation removed and remaining placements refreshed." : "Affiliate recommendation removed.");
   }
 
   async function searchImpactProducts() {
@@ -276,7 +330,33 @@ export default function ArticleEditor({ article, settings, saveSettings, onClose
         workingDraft = applyAffiliateLinksToArticle(workingDraft, { ...settings, affiliateLinks });
       }
     }
-    const readyDraft = rescore(workingDraft);
+    let readyDraft = rescore(workingDraft);
+    const publishQualityReport = buildArticleQualityReport(readyDraft, {
+      maxAffiliateLinks: settings.affiliateMaxLinks,
+      requireFeaturedImage: true,
+      requireSite: true,
+      site: publishSite
+    });
+    readyDraft = { ...readyDraft, qualityReport: publishQualityReport };
+    if (publishQualityReport.blockers.length) {
+      const reason = window.prompt(
+        `${publishQualityReport.blockers.length} critical publish issue${publishQualityReport.blockers.length === 1 ? "" : "s"} remain. Enter an administrative override reason, or cancel and fix them.`
+      );
+      if (!reason?.trim()) {
+        setDraft(readyDraft);
+        setStatus("Publishing paused. Fix the critical quality issues or provide an override reason.");
+        return;
+      }
+      readyDraft = {
+        ...readyDraft,
+        qualityOverride: {
+          reason: reason.trim().slice(0, 500),
+          action: "publish",
+          blockerIds: publishQualityReport.blockers.map((blocker) => blocker.id),
+          recordedAt: new Date().toISOString()
+        }
+      };
+    }
     if ((readyDraft.seoScore || 0) < 80 && !window.confirm(`SEO score is ${readyDraft.seoScore}/100. Publish anyway?`)) {
       setDraft(readyDraft);
       setStatus("Publishing paused. Fix SEO checks or publish again to confirm.");
@@ -522,7 +602,7 @@ export default function ArticleEditor({ article, settings, saveSettings, onClose
     setDraft({ ...draft, images });
   }
 
-  return (
+  return createPortal((
     <div className="fixed inset-0 z-30 overflow-y-auto bg-ink/35 p-4 backdrop-blur-sm">
       <div className="mx-auto max-w-7xl rounded-lg bg-paper p-5 shadow-panel">
         <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
@@ -536,7 +616,7 @@ export default function ArticleEditor({ article, settings, saveSettings, onClose
           </div>
           <div className="flex flex-wrap gap-2">
             <Button variant="secondary" onClick={onClose}>Close</Button>
-            <Button variant="secondary" onClick={() => save({ ...draft, workflowStatus: "approved" })}>Mark Ready</Button>
+            <Button variant="secondary" onClick={approve}>Approve</Button>
             <Button variant="danger" onClick={remove}><Trash2 className="h-4 w-4" />Delete</Button>
             <Button onClick={() => save()}><Save className="h-4 w-4" />Save</Button>
           </div>
@@ -554,6 +634,60 @@ export default function ArticleEditor({ article, settings, saveSettings, onClose
             </div>
 
             <div className="soft-card rounded-lg p-4">
+              <div className="mb-1 text-lg font-black text-slate-900">Article Brief</div>
+              <div className="mb-3 text-sm font-medium text-slate-500">This brief belongs to this article and guides the outline, draft, SEO, images, links, and review.</div>
+              <div className="space-y-3">
+                <div className="grid gap-3 md:grid-cols-2">
+                  <Field label="Primary keyword">
+                    <input className={inputClass} value={draft.articleBrief?.primaryKeyword || ""} onChange={(event) => setDraft({
+                      ...draft,
+                      rankMathFocusKeyword: event.target.value,
+                      seoBrief: { ...(draft.seoBrief || {}), targetKeyword: event.target.value },
+                      articleBrief: { ...(draft.articleBrief || {}), primaryKeyword: event.target.value }
+                    })} />
+                  </Field>
+                  <Field label="Search intent">
+                    <select className={inputClass} value={draft.articleBrief?.searchIntent || "informational"} onChange={(event) => setDraft({
+                      ...draft,
+                      seoBrief: { ...(draft.seoBrief || {}), searchIntent: event.target.value },
+                      articleBrief: { ...(draft.articleBrief || {}), searchIntent: event.target.value }
+                    })}>
+                      <option value="informational">Informational</option>
+                      <option value="commercial">Commercial</option>
+                      <option value="transactional">Transactional</option>
+                      <option value="navigational">Navigational</option>
+                    </select>
+                  </Field>
+                </div>
+                <Field label="Target audience">
+                  <textarea className={`${inputClass} min-h-20 resize-y`} value={draft.articleBrief?.targetAudience || ""} onChange={(event) => setDraft({ ...draft, articleBrief: { ...(draft.articleBrief || {}), targetAudience: event.target.value } })} />
+                </Field>
+                <Field label="Reader problem">
+                  <textarea className={`${inputClass} min-h-20 resize-y`} value={draft.articleBrief?.readerProblem || ""} onChange={(event) => setDraft({ ...draft, articleBrief: { ...(draft.articleBrief || {}), readerProblem: event.target.value } })} />
+                </Field>
+                <Field label="Article promise and unique angle">
+                  <textarea className={`${inputClass} min-h-24 resize-y`} value={[draft.articleBrief?.articlePromise, draft.articleBrief?.uniqueAngle].filter(Boolean).join("\n\n")} onChange={(event) => {
+                    const [articlePromise = "", ...angleParts] = event.target.value.split(/\n\n+/);
+                    setDraft({ ...draft, articleBrief: { ...(draft.articleBrief || {}), articlePromise, uniqueAngle: angleParts.join("\n\n") } });
+                  }} />
+                </Field>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <Field label="Secondary keywords" hint="One per line">
+                    <textarea className={`${inputClass} min-h-28 resize-y`} value={(draft.articleBrief?.secondaryKeywords || []).join("\n")} onChange={(event) => setDraft({ ...draft, articleBrief: { ...(draft.articleBrief || {}), secondaryKeywords: event.target.value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean) } })} />
+                  </Field>
+                  <Field label="Questions to answer" hint="One per line">
+                    <textarea className={`${inputClass} min-h-28 resize-y`} value={(draft.articleBrief?.keyQuestions || []).join("\n")} onChange={(event) => setDraft({ ...draft, articleBrief: { ...(draft.articleBrief || {}), keyQuestions: event.target.value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean) } })} />
+                  </Field>
+                </div>
+                {draft.articleBrief?.cannibalizationConflicts?.length ? (
+                  <div className="rounded-md border border-violet-200 bg-violet-50 px-3 py-2 text-sm font-bold text-violet-700">
+                    Possible overlap: {draft.articleBrief.cannibalizationConflicts.map((item) => `${item.title} (${item.score}%)`).join(", ")}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="soft-card rounded-lg p-4">
               <div className="mb-3 text-lg font-black text-slate-900">Rank Math SEO Fields</div>
               <div className="grid gap-3 md:grid-cols-2">
                 <Field label="SEO title"><input className={inputClass} value={draft.rankMathTitle || draft.metaTitle || ""} onChange={(event) => setDraft({ ...draft, rankMathTitle: event.target.value, metaTitle: event.target.value })} /></Field>
@@ -564,6 +698,39 @@ export default function ArticleEditor({ article, settings, saveSettings, onClose
                 <Field label="SEO description"><textarea className={`${inputClass} min-h-24 resize-y`} value={draft.rankMathDescription || draft.metaDescription || ""} onChange={(event) => setDraft({ ...draft, rankMathDescription: event.target.value, metaDescription: event.target.value })} /></Field>
                 <Field label="Tags"><input className={inputClass} value={(draft.tags || []).join(", ")} onChange={(event) => setDraft({ ...draft, tags: event.target.value.split(",").map((item) => item.trim()).filter(Boolean) })} /></Field>
               </div>
+            </div>
+
+            <div className="soft-card rounded-lg p-4">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="text-lg font-black text-slate-900">Helpful Content Review</div>
+                  <div className="text-sm font-medium text-slate-500">Separate, explainable checks instead of one mysterious score.</div>
+                </div>
+                <span className={`rounded-full px-3 py-1 text-sm font-black ${draft.qualityReport?.blockers?.length ? "bg-rose-100 text-rose-700" : "bg-emerald-100 text-emerald-700"}`}>
+                  {draft.qualityReport?.status || "needs-review"}
+                </span>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {(draft.qualityReport?.categories || []).map((category) => (
+                  <div key={category.id} className="rounded-md bg-white px-3 py-2 ring-1 ring-slate-200">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-sm font-black text-slate-800">{category.label}</span>
+                      <span className="text-sm font-black text-violet-700">{category.score}/100</span>
+                    </div>
+                    {category.issues[0] ? <div className="mt-1 text-xs font-semibold text-slate-500">{category.issues[0].reason}</div> : <div className="mt-1 text-xs font-semibold text-emerald-600">No issue found</div>}
+                  </div>
+                ))}
+              </div>
+              {draft.qualityReport?.blockers?.length ? (
+                <div className="mt-3 space-y-2">
+                  {draft.qualityReport.blockers.map((blocker) => (
+                    <div key={blocker.id} className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2">
+                      <div className="text-sm font-black text-rose-800">{blocker.reason}</div>
+                      <div className="mt-1 text-xs font-semibold text-rose-700">Fix: {blocker.fix}</div>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
             </div>
 
             <div className="soft-card rounded-lg p-4">
@@ -592,6 +759,9 @@ export default function ArticleEditor({ article, settings, saveSettings, onClose
                     <div key={`${link.url}-${index}`} className="rounded-md bg-white px-3 py-2 text-sm font-bold text-slate-700 ring-1 ring-slate-200">
                       <span className="block truncate">{link.title || link.anchor}</span>
                       <span className="block truncate text-xs font-medium text-slate-500">{link.url}</span>
+                      <span className="mt-1 block text-xs font-semibold text-violet-700">
+                        {link.reason || "topic relationship"}{link.score ? ` / confidence ${Math.min(100, Math.round(link.score))}%` : ""}
+                      </span>
                     </div>
                   ))}
                 </div>
@@ -678,6 +848,37 @@ export default function ArticleEditor({ article, settings, saveSettings, onClose
               <div className="mt-1 text-xs font-semibold leading-5 text-slate-500">
                 Matching through the selected provider runs automatically before a generated article moves to Completed. The controls above are optional repair tools.
               </div>
+              {(draft.affiliateLinks || []).length ? (
+                <div className="mt-3 space-y-2">
+                  <div className="text-sm font-black text-slate-800">Applied recommendation review</div>
+                  {(draft.affiliateLinks || []).map((item) => (
+                    <div key={item.id} className="rounded-md border border-slate-200 bg-white p-3">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="min-w-0 flex-1">
+                          <div className="font-black text-slate-900">{item.name}</div>
+                          <div className="mt-1 text-xs font-semibold text-slate-500">
+                            Merchant: {item.manufacturer || item.impactCampaignName || (item.source === "amazon" ? "Amazon" : "Not supplied")}
+                          </div>
+                          <div className="text-xs font-semibold text-slate-500">
+                            Provider: {item.source || settings.affiliateProvider || "affiliate library"} / Placement: {item.matchedTerm || item.matchedTerms?.[0] || "best relevant paragraph"}
+                          </div>
+                          <div className="text-xs font-semibold text-slate-500">
+                            Reason: {item.reason || "Relevant to a problem discussed in the article"}
+                          </div>
+                          <div className="text-xs font-semibold text-slate-500">
+                            Availability: {item.stockAvailability || item.availability || "Check merchant"} / Last checked: {item.lastCheckedAt ? new Date(item.lastCheckedAt).toLocaleDateString() : "Not supplied"}
+                          </div>
+                          <a className="mt-1 block truncate text-xs font-bold text-violet-700 underline" href={item.url} target="_blank" rel="noreferrer">{item.url}</a>
+                          <div className="mt-1 text-xs font-black text-emerald-700">
+                            {item.trackingVerified === true ? "Tracking verified" : "Tracking not explicitly verified"} / {draft.affiliateDisclosureApplied ? "Disclosure applied" : "Disclosure missing"}
+                          </div>
+                        </div>
+                        <Button variant="danger" onClick={() => removeAffiliateRecommendation(item.id)}>Remove</Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
               {draft.affiliateDiscovery ? (
                 <div className="mt-2 rounded-md bg-slate-50 px-3 py-2 text-xs font-semibold leading-5 text-slate-600 ring-1 ring-slate-100">
                   The selected provider reviewed {draft.affiliateDiscovery.reviewedProducts || 0} products, qualified {draft.affiliateDiscovery.qualifiedProducts || 0}, and applied {draft.affiliateDiscovery.appliedCount || draft.affiliateLinks?.length || 0}.
@@ -862,5 +1063,5 @@ export default function ArticleEditor({ article, settings, saveSettings, onClose
         </div>
       </div>
     </div>
-  );
+  ), document.body);
 }

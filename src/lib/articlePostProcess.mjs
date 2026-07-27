@@ -1,4 +1,5 @@
 import { parsePromisedRecipeCount } from "./recipeTitle.mjs";
+import { articleBriefPrompt } from "./articleBrief.mjs";
 
 export const ARTICLE_SIZE_OPTIONS = [
   { value: "600-800", label: "Short", detail: "600-800 words" },
@@ -79,6 +80,8 @@ export function preparePrompt(basePrompt, settings) {
       "Include an FAQ section only when it answers useful questions not already covered."
     ].filter(Boolean).join("\n");
   }
+  const fullBrief = articleBriefPrompt(settings.articleBrief);
+  if (fullBrief) prompt += `\n\n${fullBrief}`;
   if (settings.brandVoice?.content) {
     prompt += [
       "",
@@ -119,6 +122,7 @@ export function buildOutlinePrompt(article, settings) {
     brief.audience ? `Audience: ${brief.audience}` : "",
     brief.competitorNotes ? `Competitor notes: ${brief.competitorNotes}` : "",
     voice?.content ? `Brand voice: ${voice.content}` : "",
+    articleBriefPrompt(article.articleBrief),
     "",
     "Return HTML only:",
     "<h1>[working title]</h1>",
@@ -362,10 +366,26 @@ export function buildMetadata(article, content) {
   const title = sanitizeTitleText(article.generatedTitle || article.title || "");
   const text = stripHtml(content);
   const brief = article.seoBrief || {};
-  const metaTitle = article.metaTitle || (title.length > 60 ? `${title.slice(0, 57).trim()}...` : title);
+  const articleBrief = article.articleBrief || {};
+  const titleFallback = title.length < 25 && /recipe/i.test(`${title} ${articleBrief.recommendedArticleType || ""}`)
+    ? `${title} Recipe And Practical Tips`
+    : title;
+  const metaTitle = article.metaTitle || (titleFallback.length > 60 ? `${titleFallback.slice(0, 57).trim()}...` : titleFallback);
   const firstSentence = text.split(/(?<=[.!?])\s+/)[0] || text.slice(0, 155);
-  const metaDescription = article.metaDescription || sanitizeTitleText(firstSentence).slice(0, 155);
-  const focusKeyword = article.rankMathFocusKeyword || brief.targetKeyword || title;
+  const descriptionParts = [
+    sanitizeTitleText(firstSentence),
+    articleBrief.articlePromise,
+    /recipe/i.test(`${articleBrief.recommendedArticleType || ""} ${title}`)
+      ? "Find clear ingredients, steps, substitutions, storage, and reheating guidance."
+      : "Find practical steps, examples, and a clear next action."
+  ].map((item) => sanitizeTitleText(stripHtml(item || ""))).filter(Boolean);
+  let generatedDescription = descriptionParts[0] || title;
+  for (const part of descriptionParts.slice(1)) {
+    if (generatedDescription.length >= 120) break;
+    generatedDescription = `${generatedDescription.replace(/[.!?]*$/, ".")} ${part}`;
+  }
+  const metaDescription = article.metaDescription || generatedDescription.slice(0, 160).replace(/\s+\S*$/, "").replace(/[,:;]$/, "") || title;
+  const focusKeyword = article.rankMathFocusKeyword || articleBrief.primaryKeyword || brief.targetKeyword || title;
   const tags = [focusKeyword, ...(brief.secondaryKeywords || "").split(",")]
     .map((item) => item?.trim())
     .filter(Boolean)
@@ -378,7 +398,12 @@ export function buildMetadata(article, content) {
     rankMathFocusKeyword: focusKeyword,
     slug: article.slug || slugify(title),
     excerpt: metaDescription,
-    tags
+    tags,
+    openGraphTitle: article.openGraphTitle || metaTitle,
+    openGraphDescription: article.openGraphDescription || metaDescription,
+    pinterestTitle: article.pinterestTitle || metaTitle,
+    pinterestDescription: article.pinterestDescription || metaDescription,
+    canonicalUrl: article.canonicalUrl || article.wordpressPostUrl || ""
   };
 }
 

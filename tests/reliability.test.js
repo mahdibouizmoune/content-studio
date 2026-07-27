@@ -738,6 +738,174 @@ test('cost estimation separates text and image estimates and identifies models',
   assert.equal(estimate.approximate, true);
 });
 
+test('article briefs are article-specific, complete, and preserve user edits', async () => {
+  const { buildArticleBrief, articleBriefPrompt } = await import('../src/lib/articleBrief.mjs');
+  const brief = buildArticleBrief({
+    article: {
+      id: 'brief-1',
+      title: 'Easy Lemon Chicken For Weeknights',
+      type: 'article',
+      articleBrief: {
+        uniqueAngle: 'A one-pan method with a texture-first troubleshooting guide.',
+        keyQuestions: ['How do I keep the chicken juicy?']
+      }
+    },
+    resolvedSettings: {
+      articleLength: '1400-1800',
+      primaryKeyword: 'easy lemon chicken',
+      secondaryKeywords: 'one pan chicken, weeknight dinner',
+      searchIntent: 'informational',
+      targetAudience: 'Busy home cooks',
+      recipeCardEnabled: true,
+      featuredImageRatio: '3:2',
+      intextImageRatio: '4:3',
+      intextImageCount: 1,
+      enableIntextImages: true
+    },
+    cannibalizationConflicts: [{
+      article: { id: 'existing-1', title: 'Lemon Chicken Dinner' },
+      score: 68,
+      reason: 'Topic overlap'
+    }]
+  });
+
+  assert.equal(brief.primaryKeyword, 'easy lemon chicken');
+  assert.equal(brief.recommendedLength, '1400-1800');
+  assert.equal(brief.uniqueAngle, 'A one-pan method with a texture-first troubleshooting guide.');
+  assert.deepEqual(brief.keyQuestions, ['How do I keep the chicken juicy?']);
+  assert.equal(brief.recipeRequirements.completeRecipeCard, true);
+  assert.equal(brief.imageRequirements.featuredRatio, '3:2');
+  assert.equal(brief.cannibalizationConflicts[0].articleId, 'existing-1');
+  assert.match(articleBriefPrompt(brief), /Reader problem:/);
+  assert.match(articleBriefPrompt(brief), /Requires verification:/);
+});
+
+test('helpful-content report exposes category reasons and critical publish blockers', async () => {
+  const { buildArticleQualityReport, canApproveArticle } = await import('../src/lib/articleQuality.mjs');
+  const unsafeArticle = {
+    title: 'Recipe Placeholder',
+    content: '<p>I tested this miracle recipe.</p><p>[insert ingredients]</p>',
+    recipeCardEnabled: true,
+    articleBrief: {
+      primaryKeyword: 'lemon chicken',
+      recipeRequirements: { completeRecipeCard: true }
+    },
+    affiliateLinks: [{ id: 'bad-link', trackingVerified: false }]
+  };
+  const blocked = buildArticleQualityReport(unsafeArticle, { requireFeaturedImage: true, requireSite: true });
+  const blockerIds = blocked.blockers.map((item) => item.id);
+
+  assert.equal(blocked.status, 'blocked');
+  assert.equal(blocked.categories.length, 10);
+  assert.ok(blockerIds.includes('unsupported-first-hand-claim'));
+  assert.ok(blockerIds.includes('unresolved-placeholder'));
+  assert.ok(blockerIds.includes('missing-recipe-instructions'));
+  assert.ok(blockerIds.includes('invalid-recipe-schema'));
+  assert.ok(blockerIds.includes('missing-affiliate-disclosure'));
+  assert.ok(blockerIds.includes('unverified-affiliate-link'));
+  assert.ok(blockerIds.includes('missing-featured-image'));
+  assert.ok(blockerIds.includes('publishing-site-missing'));
+  assert.equal(canApproveArticle(unsafeArticle).allowed, false);
+});
+
+test('helpful-content report allows approval when critical recipe facts are complete', async () => {
+  const { buildArticleQualityReport } = await import('../src/lib/articleQuality.mjs');
+  const filler = Array.from({ length: 620 }, (_, index) => `useful${index}`).join(' ');
+  const content = `
+    <p>Easy lemon chicken is a practical one-pan dinner with clear doneness cues.</p>
+    <h2>Why this recipe works</h2><p>${filler}</p>
+    <h2>Substitutions and troubleshooting</h2><p>Use broth as an alternative. Avoid crowding the pan and fix a thin sauce by simmering it.</p>
+    <h2>Storage and reheating</h2><p>Refrigerate leftovers safely and reheat gently.</p>
+    <a href="/related-recipe/">Try a related chicken recipe</a>
+    <section id="recipe-card" class="recipe-card" itemscope itemtype="https://schema.org/Recipe">
+      <h2>Recipe Card</h2><h3 itemprop="name">Easy Lemon Chicken</h3>
+      <ul><li><strong>Prep Time:</strong> 10 minutes</li><li><strong>Cook Time:</strong> 20 minutes</li><li><strong>Total Time:</strong> 30 minutes</li><li><strong>Servings:</strong> 4</li></ul>
+      <h3>Ingredients</h3><ul itemprop="recipeIngredient"><li>1 pound chicken</li><li>1 lemon</li><li>1 tablespoon oil</li><li>1 cup broth</li></ul>
+      <h3>Instructions</h3><ol itemprop="recipeInstructions"><li>Heat the pan.</li><li>Cook the chicken until done.</li><li>Simmer the sauce for 5 minutes.</li></ol>
+    </section>`;
+  const report = buildArticleQualityReport({
+    title: 'Easy Lemon Chicken For Busy Weeknights',
+    generatedTitle: 'Easy Lemon Chicken For Busy Weeknights',
+    content,
+    articleLength: '600-800',
+    articleBrief: {
+      primaryKeyword: 'easy lemon chicken',
+      recipeRequirements: { completeRecipeCard: true }
+    },
+    rankMathFocusKeyword: 'easy lemon chicken',
+    rankMathTitle: 'Easy Lemon Chicken Recipe For Busy Weeknights',
+    rankMathDescription: 'Make easy lemon chicken with a one-pan method, practical substitutions, clear doneness cues, and simple storage and reheating guidance.',
+    slug: 'easy-lemon-chicken',
+    featuredImage: 'https://example.com/lemon-chicken.webp',
+    featuredImageAlt: 'Easy lemon chicken served in a skillet',
+    structuredData: JSON.stringify({
+      '@context': 'https://schema.org',
+      '@type': 'Recipe',
+      name: 'Easy Lemon Chicken',
+      recipeIngredient: ['1 pound chicken', '1 lemon', '1 tablespoon oil', '1 cup broth'],
+      recipeInstructions: [
+        { '@type': 'HowToStep', text: 'Heat the pan.' },
+        { '@type': 'HowToStep', text: 'Cook the chicken until done.' },
+        { '@type': 'HowToStep', text: 'Simmer the sauce for 5 minutes.' }
+      ],
+      prepTime: 'PT10M',
+      cookTime: 'PT20M',
+      totalTime: 'PT30M',
+      recipeYield: '4'
+    }),
+    affiliateLinks: []
+  }, { requireFeaturedImage: true });
+
+  assert.equal(report.blockers.length, 0);
+  assert.ok(report.averageScore >= 70);
+  assert.equal(report.categories.find((item) => item.id === 'recipe').score, 100);
+});
+
+test('reader retention note is lightweight, safe, configurable, and idempotent', async () => {
+  const { applyReaderRetentionElements } = await import('../src/lib/readerRetention.mjs');
+  const article = {
+    content: '<p>Useful recipe content.</p><section id="recipe-card"><h2>Recipe Card</h2></section>'
+  };
+  const settings = {
+    readerRetentionEnabled: true,
+    saveRecipeCtaText: 'Bookmark this recipe for your next weeknight dinner.',
+    newsletterCtaEnabled: true,
+    newsletterCtaUrl: 'https://example.com/newsletter/?ref=recipe',
+    newsletterCtaText: 'Get practical recipes each week.'
+  };
+  const first = applyReaderRetentionElements(article, settings);
+  const second = applyReaderRetentionElements(first, settings);
+
+  assert.equal((second.content.match(/id="reader-retention"/g) || []).length, 1);
+  assert.ok(second.content.indexOf('id="reader-retention"') < second.content.indexOf('id="recipe-card"'));
+  assert.match(second.content, /https:\/\/example\.com\/newsletter\/\?ref=recipe/);
+  assert.doesNotMatch(second.content, /<script|onclick=/i);
+  assert.equal(second.readerRetentionApplied, true);
+  assert.equal(applyReaderRetentionElements(article, { readerRetentionEnabled: false }).readerRetentionApplied, false);
+});
+
+test('article metadata creates natural SEO, Open Graph, Pinterest, and canonical fields', async () => {
+  const { buildMetadata } = await import('../src/lib/articlePostProcess.mjs');
+  const metadata = buildMetadata({
+    title: 'Lemon Chicken',
+    articleBrief: {
+      primaryKeyword: 'lemon chicken recipe',
+      recommendedArticleType: 'recipe guide',
+      articlePromise: 'Use a simple one-pan method with clear doneness cues and realistic substitutions.'
+    },
+    wordpressPostUrl: 'https://example.com/lemon-chicken/'
+  }, '<p>Lemon chicken is a bright, savory dinner that cooks in one pan.</p>');
+
+  assert.equal(metadata.rankMathFocusKeyword, 'lemon chicken recipe');
+  assert.ok(metadata.metaTitle.length >= 25 && metadata.metaTitle.length <= 60);
+  assert.ok(metadata.metaDescription.length >= 110 && metadata.metaDescription.length <= 160);
+  assert.equal(metadata.openGraphTitle, metadata.metaTitle);
+  assert.equal(metadata.openGraphDescription, metadata.metaDescription);
+  assert.equal(metadata.pinterestTitle, metadata.metaTitle);
+  assert.equal(metadata.pinterestDescription, metadata.metaDescription);
+  assert.equal(metadata.canonicalUrl, 'https://example.com/lemon-chicken/');
+});
+
 test('article import normalization preserves unknown legacy and custom fields', () => {
   const legacyArticle = {
     id: 'legacy-article',

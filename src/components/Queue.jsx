@@ -25,6 +25,10 @@ import { appendOutlineSection, outlineSectionCount, removeLastOutlineSection } f
 import { usesCompactRecipeCollection } from "@/lib/recipeTitle.mjs";
 import { applyAffiliateLinksToArticle } from "@/lib/affiliateLinks.mjs";
 import { buildListiclePrompt, parseItemCountFromTitle, parsePromisedRecipeCount } from "@/prompts";
+import { buildArticleBrief } from "@/lib/articleBrief.mjs";
+import { buildArticleQualityReport } from "@/lib/articleQuality.mjs";
+import { detectCannibalization } from "@/lib/contentPlanning";
+import { applyReaderRetentionElements } from "@/lib/readerRetention.mjs";
 
 function isAuthError(error) {
   return /401|403|api token|unauthorized|forbidden/i.test(error?.message || "");
@@ -233,10 +237,20 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
     });
     const brandVoiceId = resolved.brandVoiceId || smartRecommendations.smartIntent?.brandVoiceId || "";
     const brandVoice = settings.brandVoices?.find((voice) => voice.id === brandVoiceId);
+    const articleBrief = buildArticleBrief({
+      article,
+      resolvedSettings: resolved,
+      cannibalizationConflicts: detectCannibalization(
+        article.generatedTitle || article.title,
+        articles.filter((candidate) => candidate.id !== article.id),
+        { threshold: 62 }
+      )
+    });
     return {
       ...resolved,
       brandVoice,
-      outline: article.outlineApproved ? article.outline : ""
+      outline: article.outlineApproved ? article.outline : "",
+      articleBrief
     };
   }
 
@@ -249,6 +263,7 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
       queueStatus: "generating",
       workflowStatus: "generating-outline",
       requireOutlineApproval: true,
+      articleBrief: settingsForGen.articleBrief,
       outlineApproved: false,
       errorMessage: "",
       generationStep: "outline",
@@ -264,7 +279,7 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
     });
     try {
       const outline = await electronAPI.generateArticleOutline({
-        prompt: buildOutlinePrompt({ ...started, articleLength: settingsForGen.articleLength }, settingsForGen),
+        prompt: buildOutlinePrompt({ ...started, articleBrief: settingsForGen.articleBrief, articleLength: settingsForGen.articleLength }, settingsForGen),
         settings: settingsForGen,
         jobKey
       });
@@ -375,7 +390,7 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
     const isRecipeCollection = isListicle || promisedRecipeCount >= 6;
     const settingsForGen = articleSettings(article);
     const jobKey = `article:${article.id}:gen`;
-    let workingArticle = { ...article };
+    let workingArticle = { ...article, articleBrief: settingsForGen.articleBrief };
     let checkpoint = { ...(article.generationCheckpoint || {}) };
 
     if (isRecipeCollection) {
@@ -651,6 +666,10 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
           affiliateDiscovery.appliedCount = affiliateLinks.length;
         }
       }
+      baseContent = applyReaderRetentionElements(
+        { ...article, generatedTitle, content: baseContent },
+        settingsForGen
+      ).content;
 
       const completedArticle = {
         ...workingArticle,
@@ -700,8 +719,22 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
       const enriched = { ...completedArticle, ...metadata, structuredData };
       const seo = scoreArticle(enriched, baseContent);
       const imageQa = qaArticleImages(enriched);
+      const qualityReport = buildArticleQualityReport(
+        { ...enriched, seoScore: seo.score, seoChecks: seo.checks, imageQa },
+        {
+          maxAffiliateLinks: settingsForGen.affiliateMaxLinks,
+          requireFeaturedImage: true
+        }
+      );
 
-      await saveStatus(workingArticle, { ...enriched, seoScore: seo.score, seoChecks: seo.checks, imageQa, rankMathMeta: buildRankMathMeta(enriched) });
+      await saveStatus(workingArticle, {
+        ...enriched,
+        seoScore: seo.score,
+        seoChecks: seo.checks,
+        imageQa,
+        qualityReport,
+        rankMathMeta: buildRankMathMeta(enriched)
+      });
     } catch (error) {
       error.recoveryArticle = workingArticle;
       throw error;
