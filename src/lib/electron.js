@@ -247,7 +247,17 @@ function makeMockApi() {
     },
     async generateImage(firstArg) {
       const prompt = typeof firstArg === "string" ? firstArg : firstArg?.prompt;
-      return { success: true, imageUrl: "", localPath: "", prompt };
+      const requestedAspectRatio = typeof firstArg === "object" ? firstArg?.aspectRatio || "1:1" : "1:1";
+      return {
+        success: true,
+        imageUrl: "",
+        localPath: "",
+        prompt,
+        requestedAspectRatio,
+        aspectRatio: requestedAspectRatio,
+        ratioAdjusted: false,
+        ratioNotice: ""
+      };
     },
     async generateVideo({ prompt, model = "pruna-p-video" }) {
       const video = {

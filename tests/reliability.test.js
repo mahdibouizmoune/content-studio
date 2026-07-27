@@ -70,6 +70,8 @@ const {
   outlineSectionCount,
   removeLastOutlineSection
 } = require('../electron/article-outline');
+const { migrateSettings } = require('../electron/settings-migrations');
+const { ratioToDimensions, resolveImageRatio } = require('../electron/image-ratios');
 
 test('transient retry policy retries recoverable network failures only', async () => {
   let calls = 0;
@@ -666,6 +668,44 @@ test('outline helpers normalize model output and support section editing', () =>
   assert.doesNotMatch(normalized, /<h1>|```/);
   assert.equal(outlineSectionCount(withSection), 3);
   assert.equal(removed, normalized);
+});
+
+test('settings migration adds purpose-specific image ratios and preserves unknown fields', () => {
+  const legacy = {
+    imageModel: 'gpt-image-2',
+    customIntegration: { keep: true },
+    pinCreator: { aspectRatio: '1:1', customField: 'keep' }
+  };
+  const first = migrateSettings(legacy);
+  const second = migrateSettings(first.settings);
+
+  assert.equal(first.settings.featuredImageRatio, '3:2');
+  assert.equal(first.settings.intextImageRatio, '4:3');
+  assert.equal(first.settings.pinterestPinRatio, '1:1');
+  assert.equal(first.settings.instagramPortraitRatio, '4:5');
+  assert.equal(first.settings.instagramStoryRatio, '9:16');
+  assert.equal(first.settings.facebookFeedRatio, '1.91:1');
+  assert.equal(first.settings.squareSocialRatio, '1:1');
+  assert.deepEqual(first.settings.customIntegration, { keep: true });
+  assert.equal(first.settings.pinCreator.customField, 'keep');
+  assert.equal(first.changed, true);
+  assert.equal(second.changed, false);
+  assert.deepEqual(second.settings, first.settings);
+});
+
+test('image ratio selection keeps supported purposes and reports closest substitutions', () => {
+  assert.deepEqual(resolveImageRatio('seedream-4.5', '4:3'), {
+    requestedRatio: '4:3',
+    ratio: '4:3',
+    adjusted: false,
+    notice: ''
+  });
+  assert.equal(resolveImageRatio('gpt-image-2', '4:5').ratio, '2:3');
+  assert.equal(resolveImageRatio('gpt-image-2', '4:5').adjusted, true);
+  assert.equal(resolveImageRatio('imagen-4-fast', '1.91:1').ratio, '16:9');
+  assert.equal(resolveImageRatio('imagen-4-fast', '9:16').adjusted, false);
+  assert.deepEqual(ratioToDimensions('4:3'), { width: 1024, height: 768 });
+  assert.deepEqual(ratioToDimensions('2:3'), { width: 688, height: 1024 });
 });
 
 test('article import normalization preserves unknown legacy and custom fields', () => {

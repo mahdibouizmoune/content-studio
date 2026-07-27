@@ -436,6 +436,7 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
             })
           : Promise.resolve(prompts);
         [featured, prompts] = await Promise.all([featuredTask, imagePromptsTask]);
+        if (featured?.ratioNotice) setProgress(featured.ratioNotice);
         await saveCheckpoint("media-planning", { featured, imagePrompts: prompts });
       }
 
@@ -478,6 +479,10 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
               displayUrl: image.displayUrl || image.localImageUrl || image.imageUrl,
               localPath: image.localPath,
               prompt: prompts[index],
+              requestedAspectRatio: image.requestedAspectRatio || settingsForGen.intextImageRatio,
+              aspectRatio: image.aspectRatio || settingsForGen.intextImageRatio,
+              ratioAdjusted: image.ratioAdjusted === true,
+              ratioNotice: image.ratioNotice || "",
               altText: settingsForGen.imageSeoProMode !== false
                 ? buildSeoImageAlt({ ...article, generatedTitle }, { prompt: prompts[index] }, index, "in-text image")
                 : `${article.seoBrief?.targetKeyword || article.title} - ${prompts[index]}`,
@@ -587,6 +592,8 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
         featuredImageDisplay: featured.displayUrl || featured.localImageUrl || featured.imageUrl,
         featuredImageLocalPath: featured.localPath,
         featuredImagePrompt,
+        featuredImageRequestedAspectRatio: featured.requestedAspectRatio || settingsForGen.featuredImageRatio,
+        featuredImageAspectRatio: featured.aspectRatio || settingsForGen.featuredImageRatio,
         featuredImageAlt: settingsForGen.imageSeoProMode !== false
           ? buildSeoImageAlt({ ...article, generatedTitle }, { prompt: featuredImagePrompt }, 0, "featured")
           : `${article.seoBrief?.targetKeyword || generatedTitle} featured image`,
@@ -594,6 +601,14 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
           ? buildSeoImageFilename({ ...article, generatedTitle }, { prompt: featuredImagePrompt }, 0, "featured")
           : "",
         images,
+        imageRatioAdjustments: [featured, ...images]
+          .filter((image) => image?.ratioAdjusted)
+          .map((image) => ({
+            requestedRatio: image.requestedAspectRatio,
+            ratio: image.aspectRatio,
+            notice: image.ratioNotice,
+            model: settingsForGen.imageModel
+          })),
         queueStatus: "completed",
         workflowStatus: "needs-review",
         editorialQualityPassApplied: !!checkpoint.qualityPassApplied,

@@ -54,6 +54,26 @@ const imageModels = [
   ["imagen-4-ultra", "Imagen 4 Ultra", "Best quality Imagen option"]
 ];
 
+const imageRatioOptions = [
+  ["1:1", "1:1 Square"],
+  ["16:9", "16:9 Landscape"],
+  ["1.91:1", "1.91:1 Facebook feed"],
+  ["3:2", "3:2 Article landscape"],
+  ["4:3", "4:3 Article landscape"],
+  ["4:5", "4:5 Social portrait"],
+  ["3:4", "3:4 Portrait"],
+  ["2:3", "2:3 Pinterest portrait"],
+  ["9:16", "9:16 Story portrait"]
+];
+
+function ImageRatioSelect({ value, onChange }) {
+  return (
+    <select className={inputClass} value={value} onChange={(event) => onChange(event.target.value)}>
+      {imageRatioOptions.map(([ratio, label]) => <option key={ratio} value={ratio}>{label}</option>)}
+    </select>
+  );
+}
+
 const promptEditors = [
   { key: "articlePrompt", title: "Classic Article Prompt", subtitle: "Standard article generation" },
   { key: "listicleDefaultPrompt", title: "Listicle Prompts", subtitle: "Default category listicle generation" },
@@ -857,6 +877,15 @@ export default function Settings({ settings, saveSettings, refreshArticles, init
               <Field label={`Watermark opacity: ${draft.watermarkOpacity || 80}%`}>
                 <input type="range" min="10" max="100" value={draft.watermarkOpacity || 80} onChange={(event) => update({ watermarkOpacity: Number(event.target.value) })} className="w-full" />
               </Field>
+            </div>
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+              <Field label="Featured article image"><ImageRatioSelect value={draft.featuredImageRatio || "3:2"} onChange={(featuredImageRatio) => update({ featuredImageRatio })} /></Field>
+              <Field label="In-text article image"><ImageRatioSelect value={draft.intextImageRatio || "4:3"} onChange={(intextImageRatio) => update({ intextImageRatio })} /></Field>
+              <Field label="Pinterest pin"><ImageRatioSelect value={draft.pinterestPinRatio || "2:3"} onChange={(pinterestPinRatio) => update({ pinterestPinRatio })} /></Field>
+              <Field label="Instagram portrait"><ImageRatioSelect value={draft.instagramPortraitRatio || "4:5"} onChange={(instagramPortraitRatio) => update({ instagramPortraitRatio })} /></Field>
+              <Field label="Instagram Story or Reel"><ImageRatioSelect value={draft.instagramStoryRatio || "9:16"} onChange={(instagramStoryRatio) => update({ instagramStoryRatio })} /></Field>
+              <Field label="Facebook feed"><ImageRatioSelect value={draft.facebookFeedRatio || "1.91:1"} onChange={(facebookFeedRatio) => update({ facebookFeedRatio })} /></Field>
+              <Field label="Square social image"><ImageRatioSelect value={draft.squareSocialRatio || "1:1"} onChange={(squareSocialRatio) => update({ squareSocialRatio })} /></Field>
             </div>
             <div className="grid gap-4 md:grid-cols-[1fr_auto]">
               <Field label="Watermark file">
