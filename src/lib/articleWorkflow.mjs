@@ -78,6 +78,15 @@ export function canTransitionArticleWorkflow(from, to) {
   return ARTICLE_WORKFLOW_TRANSITIONS[from]?.includes(to) === true;
 }
 
+export function articleGenerationEntryAction(article = {}, resolvedSettings = {}) {
+  const requiresApproval = resolvedSettings.requireOutlineApproval === true
+    || article.requireOutlineApproval === true;
+  if (!requiresApproval || article.outlineApproved === true) return "generate-content";
+  return String(article.outline || "").trim()
+    ? "await-outline-approval"
+    : "generate-outline";
+}
+
 export function normalizeArticleWorkflow(article = {}) {
   const rawWorkflow = String(article.workflowStatus || "").trim();
   let workflowStatus = ARTICLE_WORKFLOW_STATUSES.includes(rawWorkflow)

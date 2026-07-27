@@ -31,6 +31,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openWorkspaceBackups: () => ipcRenderer.invoke('open-workspace-backups'),
 
   // Generation (each takes optional jobKey for cancellation)
+  generateArticleOutline: (params) => ipcRenderer.invoke('generate-article-outline', params),
   generateArticle: (params) => ipcRenderer.invoke('generate-article', params),
   generateImagePrompts: (params) => ipcRenderer.invoke('generate-image-prompts', params),
   generateFeaturedImagePrompt: (params) => ipcRenderer.invoke('generate-featured-image-prompt', params),
