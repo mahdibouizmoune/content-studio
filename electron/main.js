@@ -2431,6 +2431,12 @@ const articleSettingsDefaults = {
   watermarkSize: 15,
   watermarkOpacity: 80,
   recipeCardEnabled: true,
+  readerRetentionEnabled: true,
+  readerRetentionAllArticles: false,
+  saveRecipeCtaText: 'Bookmark this page so the ingredients, instructions, and cooking notes are easy to find when you are ready to cook.',
+  newsletterCtaEnabled: false,
+  newsletterCtaUrl: '',
+  newsletterCtaText: 'Get practical recipe ideas and seasonal cooking inspiration.',
   smartQualityPass: true,
   costBudgetWarning: 1,
   strictSpendingLimitEnabled: false,
@@ -2745,6 +2751,12 @@ ipcMain.handle('save-settings', (event, settings) => {
   toStore.costBudgetWarning = Math.max(0, Math.min(10000, Number(toStore.costBudgetWarning ?? 1)));
   toStore.strictSpendingLimit = Math.max(0.01, Math.min(10000, Number(toStore.strictSpendingLimit ?? 5)));
   toStore.strictSpendingLimitEnabled = toStore.strictSpendingLimitEnabled === true;
+  toStore.readerRetentionEnabled = toStore.readerRetentionEnabled !== false;
+  toStore.readerRetentionAllArticles = toStore.readerRetentionAllArticles === true;
+  toStore.newsletterCtaEnabled = toStore.newsletterCtaEnabled === true;
+  toStore.saveRecipeCtaText = String(toStore.saveRecipeCtaText || articleSettingsDefaults.saveRecipeCtaText).trim().slice(0, 500);
+  toStore.newsletterCtaUrl = String(toStore.newsletterCtaUrl || '').trim().slice(0, 1000);
+  toStore.newsletterCtaText = String(toStore.newsletterCtaText || articleSettingsDefaults.newsletterCtaText).trim().slice(0, 300);
   toStore.affiliateDisclosure = String(toStore.affiliateDisclosure || articleSettingsDefaults.affiliateDisclosure).trim().slice(0, 500);
   toStore.affiliateLinks = (Array.isArray(toStore.affiliateLinks) ? toStore.affiliateLinks : [])
     .slice(0, 200)

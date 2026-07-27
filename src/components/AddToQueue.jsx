@@ -6,6 +6,7 @@ import { electronAPI } from "@/lib/electron";
 import { detectCannibalization } from "@/lib/contentPlanning";
 import { buildSmartArticleDefaults, inferSmartIntent } from "@/lib/smartContentEngine";
 import { resolveArticleGenerationSettings } from "@/lib/articleGenerationSettings.mjs";
+import { buildArticleBrief } from "@/lib/articleBrief.mjs";
 
 function promptName(mode, category) {
   if (mode === "article") return "Classic article prompt";
@@ -123,6 +124,16 @@ export default function AddToQueue({ mode, settings, articles, refreshArticles, 
         smartRecommendations: smart,
         globalSettings: settings
       });
+      const articleBrief = buildArticleBrief({
+        article: {
+          title,
+          type: mode,
+          category: mode === "listicle" ? (settings.listicleCategory || smart.category) : smart.category,
+          seoBrief: resolved.seoBrief
+        },
+        resolvedSettings: resolved,
+        cannibalizationConflicts: detectCannibalization(title, articles || [], { threshold: 62 })
+      });
       await electronAPI.saveArticle({
         id: `${now}-${index}`,
         title,
@@ -146,6 +157,7 @@ export default function AddToQueue({ mode, settings, articles, refreshArticles, 
         outlineApproved: resolved.outlineApproved,
         outline: "",
         seoBrief: resolved.seoBrief,
+        articleBrief,
         metaTitle: "",
         metaDescription: "",
         slug: "",
