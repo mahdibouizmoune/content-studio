@@ -539,6 +539,28 @@ test('startup recovery changes interrupted items without touching completed work
   assert.equal(result[1].queueStatus, 'completed');
 });
 
+test('article import normalization preserves unknown legacy and custom fields', () => {
+  const legacyArticle = {
+    id: 'legacy-article',
+    title: 'Legacy recipe',
+    queueStatus: 'pending',
+    customEditorialFlag: 'keep-me',
+    customIntegration: {
+      provider: 'private-provider',
+      options: { preserve: true }
+    }
+  };
+
+  const [normalized] = normalizeImportedArticles([legacyArticle], {
+    now: '2026-07-27T10:00:00.000Z'
+  });
+
+  assert.equal(normalized.customEditorialFlag, 'keep-me');
+  assert.deepEqual(normalized.customIntegration, legacyArticle.customIntegration);
+  assert.equal(normalized.createdAt, '2026-07-27T10:00:00.000Z');
+  assert.equal(normalized.updatedAt, '2026-07-27T10:00:00.000Z');
+});
+
 test('pin batch updates preserve pins queued during generation', async () => {
   const { markPinFailure, mergePinResult } = await import('../src/lib/pinBatch.mjs');
   const current = [
