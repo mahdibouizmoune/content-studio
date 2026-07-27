@@ -668,6 +668,18 @@ export default function Settings({ settings, saveSettings, refreshArticles, init
               <div className="mb-2 text-sm font-black text-slate-700">AI Content Generation Model</div>
               <RadioCards value={draft.aiModel} onChange={(aiModel) => update({ aiModel })} items={textModels} />
             </div>
+            <div className="grid gap-4 md:grid-cols-3">
+              <Field label="Batch budget warning" hint="Ask before starting when the approximate batch cost exceeds this amount.">
+                <input type="number" min="0" step="0.25" className={inputClass} value={draft.costBudgetWarning ?? 1} onChange={(event) => update({ costBudgetWarning: Math.max(0, Number(event.target.value || 0)) })} />
+              </Field>
+              <Field label="Strict spending limit" hint="Generation is blocked when the estimate exceeds this amount.">
+                <input type="number" min="0.01" step="0.25" className={inputClass} value={draft.strictSpendingLimit ?? 5} onChange={(event) => update({ strictSpendingLimit: Math.max(0.01, Number(event.target.value || 0.01)) })} />
+              </Field>
+              <label className="flex items-center justify-between gap-4 rounded-md bg-slate-50 p-4 font-bold text-slate-800 ring-1 ring-slate-100">
+                <span><span className="block">Strict Limit</span><span className="text-sm font-medium text-slate-500">Block batches above the limit</span></span>
+                <input type="checkbox" className="h-5 w-5" checked={draft.strictSpendingLimitEnabled === true} onChange={(event) => update({ strictSpendingLimitEnabled: event.target.checked })} />
+              </label>
+            </div>
           </div>
         </SettingPanel>
 

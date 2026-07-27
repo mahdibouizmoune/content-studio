@@ -209,10 +209,27 @@ function makeMockApi() {
     async openWorkspaceBackups() {
       return { success: true };
     },
-    async estimateCost({ articleCount, settings }) {
+    async estimateCost({ articleCount, settings, extraTextCalls = 0, outlineCalls = 0 }) {
       const images = settings.enableIntextImages ? Number(settings.intextImageCount ?? 1) : 0;
       const perArticle = 0.006 + images * 0.005;
-      return { perArticle, total: Number((perArticle * articleCount).toFixed(4)), currency: "USD", breakdown: { textCalls: 3 + images, imgCalls: 1 + images } };
+      const estimatedTextCost = Number((((3 + images) * articleCount + extraTextCalls + outlineCalls) * 0.001).toFixed(4));
+      const estimatedImageCost = Number(((1 + images) * articleCount * 0.003).toFixed(4));
+      const estimatedCost = Number((estimatedTextCost + estimatedImageCost).toFixed(4));
+      return {
+        perArticle,
+        total: estimatedCost,
+        estimatedCost,
+        estimatedTextCost,
+        estimatedImageCost,
+        actualKnownCost: null,
+        costCurrency: "USD",
+        currency: "USD",
+        costCalculationVersion: 2,
+        approximate: true,
+        models: { text: settings.aiModel || "gpt5nano", image: settings.imageModel || "z-image-turbo" },
+        expectedImages: (1 + images) * articleCount,
+        breakdown: { textCalls: (3 + images) * articleCount + extraTextCalls + outlineCalls, imageCalls: (1 + images) * articleCount }
+      };
     },
     async generateArticle({ title }) {
       await new Promise((resolve) => setTimeout(resolve, 700));

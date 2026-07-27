@@ -72,6 +72,7 @@ const {
 } = require('../electron/article-outline');
 const { migrateSettings } = require('../electron/settings-migrations');
 const { ratioToDimensions, resolveImageRatio } = require('../electron/image-ratios');
+const { calculateEstimatedCost } = require('../electron/cost-estimation');
 
 test('transient retry policy retries recoverable network failures only', async () => {
   let calls = 0;
@@ -706,6 +707,35 @@ test('image ratio selection keeps supported purposes and reports closest substit
   assert.equal(resolveImageRatio('imagen-4-fast', '9:16').adjusted, false);
   assert.deepEqual(ratioToDimensions('4:3'), { width: 1024, height: 768 });
   assert.deepEqual(ratioToDimensions('2:3'), { width: 688, height: 1024 });
+});
+
+test('cost estimation separates text and image estimates and identifies models', () => {
+  const estimate = calculateEstimatedCost({
+    articleCount: 2,
+    settings: {
+      aiModel: 'gpt5nano',
+      imageModel: 'z-image-turbo',
+      enableIntextImages: true,
+      intextImageCount: 1,
+      smartQualityPass: true,
+      keepOriginalTitles: false,
+      affiliateEnabled: false
+    },
+    extraTextCalls: 2,
+    outlineCalls: 1
+  });
+
+  assert.equal(estimate.models.text, 'gpt5nano');
+  assert.equal(estimate.models.image, 'z-image-turbo');
+  assert.equal(estimate.expectedImages, 4);
+  assert.equal(estimate.breakdown.textCalls, 13);
+  assert.equal(estimate.estimatedTextCost, 0.013);
+  assert.equal(estimate.estimatedImageCost, 0.012);
+  assert.equal(estimate.estimatedCost, 0.025);
+  assert.equal(estimate.actualKnownCost, null);
+  assert.equal(estimate.costCurrency, 'USD');
+  assert.equal(estimate.costCalculationVersion, 2);
+  assert.equal(estimate.approximate, true);
 });
 
 test('article import normalization preserves unknown legacy and custom fields', () => {

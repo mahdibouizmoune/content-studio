@@ -35,6 +35,7 @@ const { normalizeArticleOutline, outlineSectionCount } = require('./article-outl
 const { normalizeArticleMediaRecord } = require('./article-media');
 const { ratioToDimensions, resolveImageRatio } = require('./image-ratios');
 const { migrateSettings } = require('./settings-migrations');
+const { calculateEstimatedCost } = require('./cost-estimation');
 const { assertSafeRemoteRedirect, isPathInsideRoots, isSafeRemoteMediaUrl } = require('./media-security');
 const { escapeXmlText } = require('./xml-safety');
 const { mergePinStyles, migratePinStyles } = require('./pin-style-settings');
@@ -312,13 +313,6 @@ function getAIModelUrl(aiModel) {
   if (aiModel === 'llama4scout') return 'https://api.replicate.com/v1/models/meta/meta-llama-4-scout-instruct/predictions';
   return 'https://api.replicate.com/v1/models/openai/gpt-5/predictions';
 }
-
-// Rough cost-per-prediction estimates (USD), used for the cost preview in the UI
-// Update these as Replicate pricing changes. Used by ipc 'estimate-cost'.
-const COST_ESTIMATES = {
-  text: { gpt5nano: 0.001, gpt5mini: 0.004, gpt41mini: 0.003, chatgpt: 0.015, claude: 0.018, gemini: 0.005, deepseek: 0.003, qwen3: 0.002, llama4scout: 0.002 },
-  image: { 'z-image-turbo': 0.003, 'flux-schnell': 0.003, 'seedream-4.5': 0.03, 'qwen-image': 0.02, 'flux-pro-2': 0.04, 'recraft-v4': 0.04, 'gpt-image-2': 0.04, 'imagen-4-fast': 0.02, 'imagen-4-ultra': 0.06 }
-};
 
 // ============================================================================
 // HARDENED HTTP CLIENT â€” short-circuits on auth/permission errors
@@ -2438,6 +2432,9 @@ const articleSettingsDefaults = {
   watermarkOpacity: 80,
   recipeCardEnabled: true,
   smartQualityPass: true,
+  costBudgetWarning: 1,
+  strictSpendingLimitEnabled: false,
+  strictSpendingLimit: 5,
   interPredictionDelayMs: 250,
   publishStatus: 'publish',
   ghlApiToken: '',
@@ -2745,6 +2742,9 @@ ipcMain.handle('save-settings', (event, settings) => {
     toStore.internalLinkMaxPosts = Math.max(25, Math.min(500, Number(toStore.internalLinkMaxPosts || 500)));
   }
   toStore.affiliateMaxLinks = Math.max(0, Math.min(8, Number(toStore.affiliateMaxLinks ?? 3)));
+  toStore.costBudgetWarning = Math.max(0, Math.min(10000, Number(toStore.costBudgetWarning ?? 1)));
+  toStore.strictSpendingLimit = Math.max(0.01, Math.min(10000, Number(toStore.strictSpendingLimit ?? 5)));
+  toStore.strictSpendingLimitEnabled = toStore.strictSpendingLimitEnabled === true;
   toStore.affiliateDisclosure = String(toStore.affiliateDisclosure || articleSettingsDefaults.affiliateDisclosure).trim().slice(0, 500);
   toStore.affiliateLinks = (Array.isArray(toStore.affiliateLinks) ? toStore.affiliateLinks : [])
     .slice(0, 200)
@@ -4307,37 +4307,8 @@ ipcMain.handle('cancel-jobs-by-prefix', (e, prefixes = []) => {
 // ============================================================================
 // IPC: COST ESTIMATION
 // ============================================================================
-ipcMain.handle('estimate-cost', (e, { articleCount, settings, extraTextCalls = 0 }) => {
-  const textCost = COST_ESTIMATES.text[settings.aiModel] || 0.005;
-  const imgCost = COST_ESTIMATES.image[settings.imageModel] || 0.02;
-  // Per article: 1 text call (article) + 1 (viral title, unless keepOriginalTitles) + 1 (featured img prompt)
-  //            + 1 (featured image) + N text-prompts + N images
-  const N = settings.enableIntextImages ? Number(settings.intextImageCount ?? 1) : 0;
-  const affiliatePlanningCalls = settings.affiliateEnabled !== false
-    && settings.affiliateAutoDiscover !== false
-    && settings.impactAccountSid
-    ? 1
-    : 0;
-  const textCalls = 2
-    + (settings.smartQualityPass === false ? 0 : 1)
-    + (settings.keepOriginalTitles ? 0 : 1)
-    + N
-    + affiliatePlanningCalls; // article + editorial pass + featured prompt + title + image prompts + optional affiliate planning
-  const imgCalls = 1 + N;
-  const perArticle = textCalls * textCost + imgCalls * imgCost;
-  const extraTextCost = Math.max(0, Number(extraTextCalls || 0)) * textCost;
-  return {
-    perArticle: Number(perArticle.toFixed(4)),
-    total: Number((perArticle * articleCount + extraTextCost).toFixed(4)),
-    currency: 'USD',
-    breakdown: {
-      textCalls,
-      imgCalls,
-      extraTextCalls: Math.max(0, Number(extraTextCalls || 0)),
-      textCost,
-      imgCost
-    }
-  };
+ipcMain.handle('estimate-cost', (e, params) => {
+  return calculateEstimatedCost(params);
 });
 
 // ============================================================================

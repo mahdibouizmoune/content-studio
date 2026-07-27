@@ -34,6 +34,15 @@ async function saveStatus(article, patch) {
   return electronAPI.saveArticle({ ...article, ...patch, updatedAt: new Date().toISOString() });
 }
 
+function formatUsd(value) {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 4
+  }).format(Number(value || 0));
+}
+
 function OutlineReviewCard({ article, busy, onSave, onApprove, onRegenerate, onCancel }) {
   const [outline, setOutline] = useState(article.outline || "");
 
@@ -89,6 +98,8 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
     unitsTotal: 1
   });
   const [estimate, setEstimate] = useState(null);
+  const [estimateLoading, setEstimateLoading] = useState(false);
+  const [estimateError, setEstimateError] = useState("");
   const [outlineWorkingId, setOutlineWorkingId] = useState("");
   const pending = useMemo(() => articles.filter((article) => article.queueStatus === "pending"), [articles]);
   const extraCollectionTextCalls = useMemo(() => pending.reduce((total, article) => {
@@ -98,6 +109,10 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
       ? total + Math.ceil(count / 5)
       : total;
   }, 0), [pending, settings]);
+  const outlineCalls = useMemo(() => pending.filter((article) => {
+    const resolved = articleSettings(article);
+    return articleGenerationEntryAction(article, resolved) === "generate-outline";
+  }).length, [pending, settings]);
   const completed = articles.filter((article) => article.queueStatus === "completed");
   const failed = articles.filter((article) => article.queueStatus === "error");
   const activeRowsAll = articles.filter((article) => ["pending", "generating", "outline-review", "error", "completed", "cancelled"].includes(article.queueStatus));
@@ -114,10 +129,50 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
   useEffect(() => {
     if (!pending.length) {
       setEstimate(null);
+      setEstimateError("");
+      setEstimateLoading(false);
       return;
     }
-    electronAPI.estimateCost({ articleCount: pending.length, settings, extraTextCalls: extraCollectionTextCalls }).then(setEstimate).catch(() => setEstimate(null));
-  }, [pending.length, extraCollectionTextCalls, settings]);
+    let active = true;
+    setEstimateLoading(true);
+    setEstimateError("");
+    electronAPI.estimateCost({
+      articleCount: pending.length,
+      settings,
+      extraTextCalls: extraCollectionTextCalls,
+      outlineCalls
+    }).then((result) => {
+      if (active) setEstimate(result);
+    }).catch((error) => {
+      if (!active) return;
+      setEstimate(null);
+      setEstimateError(error.message || "Could not calculate the approximate cost.");
+    }).finally(() => {
+      if (active) setEstimateLoading(false);
+    });
+    return () => {
+      active = false;
+    };
+  }, [pending.length, extraCollectionTextCalls, outlineCalls, settings]);
+
+  async function retryCostEstimate() {
+    setEstimateLoading(true);
+    setEstimateError("");
+    try {
+      const result = await electronAPI.estimateCost({
+        articleCount: pending.length,
+        settings,
+        extraTextCalls: extraCollectionTextCalls,
+        outlineCalls
+      });
+      setEstimate(result);
+    } catch (error) {
+      setEstimate(null);
+      setEstimateError(error.message || "Could not calculate the approximate cost.");
+    } finally {
+      setEstimateLoading(false);
+    }
+  }
 
   useEffect(() => {
     const unsubscribe = electronAPI.onImageProgress((event) => {
@@ -147,9 +202,14 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
     }));
   }
 
-  async function waitWhilePaused() {
+  async function waitWhilePaused(savePauseCheckpoint) {
+    let checkpointSaved = false;
     while (pausedRef.current) {
-      setProgress("Article generation paused. Click Resume to continue.");
+      if (!checkpointSaved && savePauseCheckpoint) {
+        await savePauseCheckpoint();
+        checkpointSaved = true;
+      }
+      setProgress("Paused at a safe checkpoint. Click Resume to continue.");
       await new Promise((resolve) => setTimeout(resolve, 350));
     }
   }
@@ -157,7 +217,9 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
   function togglePause() {
     pausedRef.current = !pausedRef.current;
     setPaused(pausedRef.current);
-    setProgress(pausedRef.current ? "Article generation paused. Click Resume to continue." : "Resuming article generation...");
+    setProgress(pausedRef.current
+      ? "Pause requested. The current request will finish, then processing will stop before the next step."
+      : "Resuming article generation...");
   }
 
   function articleSettings(article) {
@@ -194,7 +256,11 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
         ...(article.generationCheckpoint || {}),
         stage: "outline",
         updatedAt: new Date().toISOString()
-      }
+      },
+      estimatedCost: estimate?.perArticle ?? article.estimatedCost ?? null,
+      actualKnownCost: article.actualKnownCost ?? null,
+      costCurrency: estimate?.costCurrency || article.costCurrency || "USD",
+      costCalculationVersion: estimate?.costCalculationVersion || article.costCalculationVersion || null
     });
     try {
       const outline = await electronAPI.generateArticleOutline({
@@ -279,7 +345,11 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
         stage: "outline-approved",
         outline,
         outlineApprovedAt: new Date().toISOString()
-      }
+      },
+      estimatedCost: estimate?.perArticle ?? article.estimatedCost ?? null,
+      actualKnownCost: article.actualKnownCost ?? null,
+      costCurrency: estimate?.costCurrency || article.costCurrency || "USD",
+      costCalculationVersion: estimate?.costCalculationVersion || article.costCalculationVersion || null
     });
     try {
       setProgress(`Outline approved. Generating article: ${article.title}`);
@@ -357,7 +427,7 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
       let baseContent = checkpoint.content || "";
       if (!baseContent) {
         setGenerationStage(`Generating article: ${article.title} (1/${totalStages})`, 1, totalStages);
-        await waitWhilePaused();
+        await waitWhilePaused(() => saveCheckpoint("paused-before-article"));
         const generated = await electronAPI.generateArticle({ title: article.title, settings: settingsForGen, jobKey });
         baseContent = finalizeArticleContent(generated.content, article.title, settingsForGen);
         await saveCheckpoint("article", {
@@ -644,8 +714,37 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
       setProgress("Open the Electron app to run real Replicate generation. Browser preview mode will not generate articles or images.");
       return;
     }
-    const cost = estimate || (await electronAPI.estimateCost({ articleCount: pending.length, settings, extraTextCalls: extraCollectionTextCalls }));
-    if (cost.total > 1 && !window.confirm(`Estimated cost is $${cost.total.toFixed(2)}. Continue?`)) return;
+    let cost = estimate;
+    if (!cost) {
+      try {
+        cost = await electronAPI.estimateCost({
+          articleCount: pending.length,
+          settings,
+          extraTextCalls: extraCollectionTextCalls,
+          outlineCalls
+        });
+        setEstimate(cost);
+        setEstimateError("");
+      } catch (error) {
+        setEstimateError(error.message || "Could not calculate the approximate cost.");
+        if (settings.strictSpendingLimitEnabled === true) {
+          setProgress("Generation is blocked because strict budget protection is on and the cost estimate failed.");
+          return;
+        }
+      }
+    }
+    const strictLimit = Math.max(0.01, Number(settings.strictSpendingLimit || 5));
+    if (cost && settings.strictSpendingLimitEnabled === true && cost.estimatedCost > strictLimit) {
+      setProgress(`Batch blocked. Approximate cost ${formatUsd(cost.estimatedCost)} exceeds the strict ${formatUsd(strictLimit)} limit.`);
+      return;
+    }
+    const warningLimit = Math.max(0, Number(settings.costBudgetWarning ?? 1));
+    if (
+      cost
+      && warningLimit > 0
+      && cost.estimatedCost > warningLimit
+      && !window.confirm(`Approximate batch cost is ${formatUsd(cost.estimatedCost)}. Continue?`)
+    ) return;
     runningRef.current = true;
     cancelRequestedRef.current = false;
     setRunning(true);
@@ -682,7 +781,15 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
           }
           continue;
         }
-        const started = await saveStatus(article, { queueStatus: "generating", workflowStatus: "generating-content", errorMessage: "" });
+        const started = await saveStatus(article, {
+          queueStatus: "generating",
+          workflowStatus: "generating-content",
+          errorMessage: "",
+          estimatedCost: cost?.perArticle ?? article.estimatedCost ?? null,
+          actualKnownCost: article.actualKnownCost ?? null,
+          costCurrency: cost?.costCurrency || article.costCurrency || "USD",
+          costCalculationVersion: cost?.costCalculationVersion || article.costCalculationVersion || null
+        });
         await refreshArticles();
         if (cancelRequestedRef.current) {
           await saveStatus(started, { queueStatus: "pending", workflowStatus: "queued", errorMessage: "" });
@@ -766,8 +873,8 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
           <div className="flex flex-wrap gap-2">
             {running ? (
               <>
-                <Button variant="secondary" onClick={togglePause}>{paused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}{paused ? "Resume" : "Pause"}</Button>
-                <Button variant="warning" onClick={cancel}><Ban className="h-4 w-4" />Cancel</Button>
+                <Button variant="secondary" onClick={togglePause}>{paused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}{paused ? "Resume" : "Pause after current step"}</Button>
+                <Button variant="warning" onClick={cancel}><Ban className="h-4 w-4" />Cancel remaining</Button>
               </>
             ) : (
               <Button onClick={generateAll} disabled={!pending.length || !isElectronApp}><Play className="h-4 w-4" />Generate All</Button>
@@ -781,12 +888,25 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
         {pending.length} pending / {completed.length} completed / {failed.length} errors
       </SectionHeader>
 
-      {!embedded ? <div className="mb-5 grid gap-3 md:grid-cols-4">
+      <div className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
         <div className="soft-card rounded-lg p-4"><div className="text-2xl font-black text-slate-900">{pending.length}</div><div className="text-sm font-semibold text-slate-500">Pending</div></div>
-        <div className="soft-card rounded-lg p-4"><div className="text-2xl font-black text-slate-900">{completed.length}</div><div className="text-sm font-semibold text-slate-500">Completed</div></div>
-        <div className="soft-card rounded-lg p-4"><div className="text-2xl font-black text-slate-900">{estimate ? `$${estimate.total.toFixed(4)}` : "$0.0000"}</div><div className="text-sm font-semibold text-slate-500">Estimated cost</div></div>
-        <div className="soft-card rounded-lg p-4"><div className="text-2xl font-black text-slate-900">{settings.enableIntextImages ? settings.intextImageCount : 0}</div><div className="text-sm font-semibold text-slate-500">Images each</div></div>
-      </div> : null}
+        <div className="soft-card rounded-lg p-4"><div className="text-xl font-black text-slate-900">{estimateLoading ? "Calculating..." : estimate ? formatUsd(estimate.estimatedTextCost) : "Unavailable"}</div><div className="text-sm font-semibold text-slate-500">Approx. text</div></div>
+        <div className="soft-card rounded-lg p-4"><div className="text-xl font-black text-slate-900">{estimateLoading ? "Calculating..." : estimate ? formatUsd(estimate.estimatedImageCost) : "Unavailable"}</div><div className="text-sm font-semibold text-slate-500">Approx. images</div></div>
+        <div className="soft-card rounded-lg p-4"><div className="text-xl font-black text-slate-900">{estimateLoading ? "Calculating..." : estimate ? formatUsd(estimate.estimatedCost) : "Unavailable"}</div><div className="text-sm font-semibold text-slate-500">Approx. total</div></div>
+        <div className="soft-card rounded-lg p-4"><div className="text-2xl font-black text-slate-900">{estimate?.expectedImages ?? (settings.enableIntextImages ? pending.length * (1 + Number(settings.intextImageCount ?? 1)) : pending.length)}</div><div className="text-sm font-semibold text-slate-500">Expected images</div></div>
+        <div className="soft-card rounded-lg p-4"><div className="truncate text-sm font-black text-slate-900">{estimate?.models?.text || settings.aiModel}</div><div className="mt-1 truncate text-sm font-black text-slate-700">{estimate?.models?.image || settings.imageModel}</div><div className="mt-1 text-xs font-semibold text-slate-500">Models</div></div>
+      </div>
+
+      {estimateError ? (
+        <div className="mb-4 flex flex-col gap-3 rounded-md border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-bold text-rose-700 sm:flex-row sm:items-center sm:justify-between">
+          <span>{estimateError}</span>
+          <Button variant="secondary" onClick={retryCostEstimate} disabled={estimateLoading}><RefreshCw className="h-4 w-4" />Retry estimate</Button>
+        </div>
+      ) : pending.length ? (
+        <div className="mb-4 text-xs font-semibold text-slate-500">
+          Cost is approximate and may differ from the provider invoice. No exact cost is stored unless a provider reports it.
+        </div>
+      ) : null}
 
       {!isElectronApp ? (
         <div className="mb-4 rounded-md border border-violet-200 bg-violet-50 px-4 py-3 text-sm font-bold text-violet-700">
@@ -804,6 +924,7 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
               <div>
                 <div className="text-lg font-black text-indigo-950">{running ? "Bulk Generation in Progress" : "Queue Status"}</div>
                 <div className="text-sm font-semibold text-indigo-700">{progress || "Ready to generate."}</div>
+                {running ? <div className="mt-1 text-xs font-semibold text-indigo-600">Pause lets the current request finish and stops before the next step.</div> : null}
               </div>
             </div>
             <div className="rounded-md bg-white/70 px-4 py-3 text-center text-sm font-black text-indigo-700 ring-1 ring-indigo-100">{progressPercent}% done</div>
@@ -818,7 +939,7 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
         <EmptyState title={allowedStatuses?.includes("error") ? "No errors" : "Nothing in this stage"}>Add article titles, then they will move through this workflow.</EmptyState>
       ) : (
         <div className="soft-card overflow-hidden rounded-lg">
-          <div className="hidden grid-cols-[1fr_140px_150px_150px] border-b border-slate-200 bg-slate-50 px-5 py-4 text-sm font-black text-slate-900 md:grid">
+          <div className="hidden grid-cols-[1fr_140px_130px_240px] border-b border-slate-200 bg-slate-50 px-5 py-4 text-sm font-black text-slate-900 md:grid">
             <div>Title</div>
             <div>Status</div>
             <div>Created</div>
@@ -826,7 +947,7 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
           </div>
           {activeRows.map((article) => (
             <div key={article.id}>
-              <div className="grid gap-3 border-b border-slate-100 px-5 py-4 md:grid-cols-[1fr_140px_150px_150px] md:items-center">
+              <div className="grid gap-3 border-b border-slate-100 px-5 py-4 md:grid-cols-[1fr_140px_130px_240px] md:items-center">
                 <div className="min-w-0">
                   <div className="text-base font-black text-slate-900 md:truncate">{article.generatedTitle || article.title}</div>
                   <div className="mt-1 flex flex-wrap gap-2 text-xs font-bold text-slate-500">
@@ -835,6 +956,7 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
                     {article.seoBrief?.targetKeyword ? <span>/ keyword: {article.seoBrief.targetKeyword}</span> : null}
                     {article.workflowStatus ? <span>/ {article.workflowStatus}</span> : null}
                     {article.seoScore != null ? <span>/ SEO {article.seoScore}/100</span> : null}
+                    {article.queueStatus === "error" && article.generationCheckpoint?.stage ? <span>/ saved step: {article.generationCheckpoint.stage}</span> : null}
                     {article.errorMessage ? <span className="text-slate-700">/ {article.errorMessage}</span> : null}
                   </div>
                 </div>
@@ -848,9 +970,12 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
                   }`}>{article.queueStatus}</span>
                 </div>
                 <div className="text-sm font-medium text-slate-500">{article.createdAt ? new Date(article.createdAt).toLocaleDateString() : "-"}</div>
-                <div className="flex justify-end gap-2">
+                <div className="flex flex-wrap justify-end gap-2">
                   {article.queueStatus === "error" ? (
-                    <Button variant="secondary" onClick={() => electronAPI.saveArticle({ ...article, queueStatus: "pending", workflowStatus: "queued", errorMessage: "" }).then(refreshArticles)}>Retry</Button>
+                    <>
+                      <Button variant="secondary" onClick={() => electronAPI.saveArticle({ ...article, queueStatus: "pending", workflowStatus: "queued", errorMessage: "" }).then(refreshArticles)}>Retry Saved Step</Button>
+                      <Button variant="secondary" onClick={() => electronAPI.saveArticle({ ...article, queueStatus: "pending", workflowStatus: "queued", generationCheckpoint: null, generationStep: "", errorMessage: "" }).then(refreshArticles)}>Restart Article</Button>
+                    </>
                   ) : article.queueStatus === "cancelled" ? (
                     <Button variant="secondary" onClick={() => electronAPI.saveArticle({ ...article, queueStatus: "pending", workflowStatus: "queued", errorMessage: "" }).then(refreshArticles)}>Return to Queue</Button>
                   ) : article.queueStatus === "completed" ? (
