@@ -106,7 +106,13 @@ test('transient retry policy does not retry authentication failures', async () =
 test('article publication status requires a confirmed public publish', async () => {
   const { isArticlePublished } = await import('../src/lib/articlePublication.mjs');
   assert.equal(isArticlePublished({ wordpressPostId: 42, wordpressPostUrl: 'https://example.com/?p=42', workflowStatus: 'draft' }), false);
-  assert.equal(isArticlePublished({ workflowStatus: 'published' }), true);
+  assert.equal(isArticlePublished({ workflowStatus: 'published' }), false);
+  assert.equal(isArticlePublished({
+    workflowStatus: 'published',
+    wordpressPostId: 42,
+    wordpressPostUrl: 'https://example.com/recipe/',
+    wordpressPublishStatus: 'publish'
+  }), true);
   assert.equal(isArticlePublished({ publishHistory: [{ status: 'publish', postUrl: 'https://example.com/post/' }] }), true);
   assert.equal(isArticlePublished({ publishHistory: [{ status: 'draft', postUrl: 'https://example.com/?p=42' }] }), false);
 });
@@ -526,8 +532,8 @@ test('startup recovery changes interrupted items without touching completed work
   const { recoverInterruptedArticles } = await import('../src/lib/articleWorkflow.mjs');
   const saved = [];
   const result = await recoverInterruptedArticles([
-    { id: 'active', queueStatus: 'generating' },
-    { id: 'done', queueStatus: 'completed' }
+    { id: 'active', queueStatus: 'generating', workflowStatus: 'generating-content' },
+    { id: 'done', queueStatus: 'completed', workflowStatus: 'needs-review', content: '<p>Done</p>', workflowSchemaVersion: 1 }
   ], async (article) => {
     saved.push(article);
     return article;
@@ -537,6 +543,90 @@ test('startup recovery changes interrupted items without touching completed work
   assert.equal(result[0].queueStatus, 'pending');
   assert.equal(result[0].recoveredAt, '2026-07-19T12:00:00.000Z');
   assert.equal(result[1].queueStatus, 'completed');
+});
+
+test('workflow normalization migrates legacy labels without losing custom fields', async () => {
+  const { normalizeArticleWorkflow } = await import('../src/lib/articleWorkflow.mjs');
+  const normalized = normalizeArticleWorkflow({
+    id: 'legacy',
+    queueStatus: 'pending',
+    workflowStatus: 'draft-generated',
+    content: '',
+    customField: { keep: true }
+  });
+
+  assert.equal(normalized.workflowStatus, 'queued');
+  assert.equal(normalized.queueStatus, 'pending');
+  assert.equal(normalized.workflowSchemaVersion, 1);
+  assert.deepEqual(normalized.customField, { keep: true });
+});
+
+test('workflow normalization derives published only from confirmed public WordPress data', async () => {
+  const { normalizeArticleWorkflow } = await import('../src/lib/articleWorkflow.mjs');
+  const invalidPublished = normalizeArticleWorkflow({
+    workflowStatus: 'published',
+    queueStatus: 'completed',
+    content: '<p>Draft content</p>'
+  });
+  const confirmedPublished = normalizeArticleWorkflow({
+    workflowStatus: 'published',
+    queueStatus: 'completed',
+    content: '<p>Published content</p>',
+    wordpressPostId: 42,
+    wordpressPostUrl: 'https://example.com/recipe/',
+    wordpressPublishStatus: 'publish'
+  });
+
+  assert.equal(invalidPublished.workflowStatus, 'needs-review');
+  assert.equal(confirmedPublished.workflowStatus, 'published');
+});
+
+test('restart keeps an article awaiting outline approval instead of generating content', async () => {
+  const { recoverInterruptedArticles } = await import('../src/lib/articleWorkflow.mjs');
+  const saved = [];
+  const [recovered] = await recoverInterruptedArticles([{
+    id: 'outline-review',
+    queueStatus: 'outline-review',
+    workflowStatus: 'awaiting-outline-approval',
+    requireOutlineApproval: true,
+    outlineApproved: false,
+    outline: '## Ingredients\n## Method'
+  }], async (article) => {
+    saved.push(article);
+    return article;
+  });
+
+  assert.equal(recovered.workflowStatus, 'awaiting-outline-approval');
+  assert.equal(recovered.queueStatus, 'outline-review');
+  assert.equal(recovered.outlineApproved, false);
+  assert.equal(saved.length, 1);
+});
+
+test('outline generation recovery preserves approval requirements and the saved outline', async () => {
+  const { recoverInterruptedArticles } = await import('../src/lib/articleWorkflow.mjs');
+  const [recovered] = await recoverInterruptedArticles([{
+    id: 'outline-generating',
+    queueStatus: 'generating',
+    workflowStatus: 'generating-outline',
+    requireOutlineApproval: true,
+    outlineApproved: false,
+    outline: '## Ingredients\n## Method',
+    generationCheckpoint: { stage: 'outline' }
+  }], async (article) => article, () => '2026-07-27T12:00:00.000Z');
+
+  assert.equal(recovered.workflowStatus, 'awaiting-outline-approval');
+  assert.equal(recovered.queueStatus, 'outline-review');
+  assert.equal(recovered.outlineApproved, false);
+  assert.equal(recovered.outline, '## Ingredients\n## Method');
+  assert.deepEqual(recovered.generationCheckpoint, { stage: 'outline' });
+});
+
+test('article workflow transition rules reject unsafe shortcuts', async () => {
+  const { canTransitionArticleWorkflow } = await import('../src/lib/articleWorkflow.mjs');
+  assert.equal(canTransitionArticleWorkflow('queued', 'generating-outline'), true);
+  assert.equal(canTransitionArticleWorkflow('awaiting-outline-approval', 'generating-content'), true);
+  assert.equal(canTransitionArticleWorkflow('queued', 'published'), false);
+  assert.equal(canTransitionArticleWorkflow('published', 'generating-content'), false);
 });
 
 test('article import normalization preserves unknown legacy and custom fields', () => {

@@ -400,7 +400,7 @@ export default function App() {
   }
 
   const counts = useMemo(() => {
-    const pending = articles.filter((article) => article.queueStatus === "pending").length;
+    const pending = articles.filter((article) => ["pending", "outline-review"].includes(article.queueStatus)).length;
     const completed = articles.filter((article) => article.queueStatus === "completed").length;
     const failed = articles.filter((article) => article.queueStatus === "error").length;
     return { pending, completed, failed, totalArticles: articles.length };

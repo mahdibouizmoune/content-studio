@@ -25,7 +25,7 @@ export default function ArticlesWorkflow(props) {
     setArticlesWorkflowStage?.(nextStage);
   };
   const counts = useMemo(() => {
-    const queued = articles.filter((article) => article.queueStatus === "pending").length;
+    const queued = articles.filter((article) => ["pending", "outline-review"].includes(article.queueStatus)).length;
     const generating = articles.filter((article) => article.queueStatus === "generating").length;
     const published = articles.filter((article) => article.queueStatus === "completed" && isArticlePublished(article)).length;
     const completed = articles.filter((article) => article.queueStatus === "completed" && !isArticlePublished(article)).length;
@@ -34,10 +34,10 @@ export default function ArticlesWorkflow(props) {
   }, [articles]);
 
   const queueFilter = stage === "queued"
-    ? ["pending"]
+    ? ["pending", "generating", "outline-review", "cancelled"]
     : stage === "errors"
     ? ["error"]
-    : ["pending", "generating", "error"];
+    : ["pending", "generating", "outline-review", "error", "cancelled"];
 
   const summaryCards = [
     { label: "Queued", value: counts.queued, icon: Clock3, tone: "bg-indigo-50 text-indigo-700 ring-indigo-100" },
