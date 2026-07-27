@@ -1,4 +1,4 @@
-import { Ban, Clock3, Pause, Play, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
+import { Ban, Check, Clock3, Pause, Play, Plus, RefreshCw, RotateCcw, Save, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import SectionHeader from "@/components/SectionHeader";
 import { Button, EmptyState } from "@/components/ui";
@@ -10,6 +10,7 @@ import {
   buildRankMathMeta,
   buildRecipeSchema,
   finalizeArticleContent,
+  buildOutlinePrompt,
   insertArticleImages,
   preparePrompt,
   qaArticleImages,
@@ -19,7 +20,8 @@ import {
 import { applyInternalLinksToHtml, buildInternalLinkSuggestions, resolveArticleSite } from "@/lib/internalLinks";
 import { buildSmartGenerationSettings } from "@/lib/smartContentEngine";
 import { resolveArticleGenerationSettings } from "@/lib/articleGenerationSettings.mjs";
-import { deriveLegacyQueueStatus, workflowStatusForGenerationStep } from "@/lib/articleWorkflow.mjs";
+import { articleGenerationEntryAction, deriveLegacyQueueStatus, workflowStatusForGenerationStep } from "@/lib/articleWorkflow.mjs";
+import { appendOutlineSection, outlineSectionCount, removeLastOutlineSection } from "@/lib/articleOutline.mjs";
 import { usesCompactRecipeCollection } from "@/lib/recipeTitle.mjs";
 import { applyAffiliateLinksToArticle } from "@/lib/affiliateLinks.mjs";
 import { buildListiclePrompt, parseItemCountFromTitle, parsePromisedRecipeCount } from "@/prompts";
@@ -30,6 +32,45 @@ function isAuthError(error) {
 
 async function saveStatus(article, patch) {
   return electronAPI.saveArticle({ ...article, ...patch, updatedAt: new Date().toISOString() });
+}
+
+function OutlineReviewCard({ article, busy, onSave, onApprove, onRegenerate, onCancel }) {
+  const [outline, setOutline] = useState(article.outline || "");
+
+  useEffect(() => {
+    setOutline(article.outline || "");
+  }, [article.id, article.outline]);
+
+  return (
+    <div className="border-b border-amber-200 bg-amber-50/70 px-5 py-5">
+      <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <div className="text-sm font-black text-amber-950">Outline approval required</div>
+          <div className="mt-1 text-sm font-semibold text-amber-800">
+            Review and edit this outline. The full article will not generate until you approve it.
+          </div>
+        </div>
+        <span className="rounded-full bg-white px-3 py-1 text-xs font-black text-amber-800 ring-1 ring-amber-200">
+          {outlineSectionCount(outline)} sections
+        </span>
+      </div>
+      <textarea
+        value={outline}
+        onChange={(event) => setOutline(event.target.value)}
+        rows={12}
+        className="w-full resize-y rounded-md border border-amber-200 bg-white px-3 py-3 text-sm font-medium leading-6 text-slate-800 outline-none focus:border-violet-500 focus:ring-2 focus:ring-violet-100"
+        aria-label={`Outline for ${article.title}`}
+      />
+      <div className="mt-3 flex flex-wrap gap-2">
+        <Button variant="secondary" disabled={busy} onClick={() => setOutline(appendOutlineSection(outline))}><Plus className="h-4 w-4" />Add Section</Button>
+        <Button variant="secondary" disabled={busy || outlineSectionCount(outline) === 0} onClick={() => setOutline(removeLastOutlineSection(outline))}>Remove Last</Button>
+        <Button variant="secondary" disabled={busy} onClick={() => onSave(article, outline)}><Save className="h-4 w-4" />Save Outline</Button>
+        <Button variant="secondary" disabled={busy} onClick={() => onRegenerate(article)}><RefreshCw className="h-4 w-4" />Regenerate</Button>
+        <Button disabled={busy || outlineSectionCount(outline) < 3} onClick={() => onApprove(article, outline)}><Check className="h-4 w-4" />Approve and Continue</Button>
+        <Button variant="danger" disabled={busy} onClick={() => onCancel(article)}><Ban className="h-4 w-4" />Cancel Article</Button>
+      </div>
+    </div>
+  );
 }
 
 export default function Queue({ articles, settings, saveSettings, refreshArticles, setActiveScreen, setArticlesWorkflowStage, embedded = false, rowStatusFilter = "all" }) {
@@ -48,6 +89,7 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
     unitsTotal: 1
   });
   const [estimate, setEstimate] = useState(null);
+  const [outlineWorkingId, setOutlineWorkingId] = useState("");
   const pending = useMemo(() => articles.filter((article) => article.queueStatus === "pending"), [articles]);
   const extraCollectionTextCalls = useMemo(() => pending.reduce((total, article) => {
     const count = parsePromisedRecipeCount(article.title);
@@ -134,6 +176,127 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
       brandVoice,
       outline: article.outlineApproved ? article.outline : ""
     };
+  }
+
+  async function requestOutline(article) {
+    const settingsForGen = articleSettings(article);
+    const jobKey = `article:${article.id}:outline`;
+    setOutlineWorkingId(article.id);
+    setProgress(`Generating outline: ${article.title}`);
+    const started = await saveStatus(article, {
+      queueStatus: "generating",
+      workflowStatus: "generating-outline",
+      requireOutlineApproval: true,
+      outlineApproved: false,
+      errorMessage: "",
+      generationStep: "outline",
+      generationCheckpoint: {
+        ...(article.generationCheckpoint || {}),
+        stage: "outline",
+        updatedAt: new Date().toISOString()
+      }
+    });
+    try {
+      const outline = await electronAPI.generateArticleOutline({
+        prompt: buildOutlinePrompt({ ...started, articleLength: settingsForGen.articleLength }, settingsForGen),
+        settings: settingsForGen,
+        jobKey
+      });
+      return await saveStatus(started, {
+        outline,
+        queueStatus: "outline-review",
+        workflowStatus: "awaiting-outline-approval",
+        requireOutlineApproval: true,
+        outlineApproved: false,
+        generationStep: "",
+        generationCheckpoint: {
+          ...(started.generationCheckpoint || {}),
+          stage: "outline-ready",
+          outline,
+          updatedAt: new Date().toISOString()
+        }
+      });
+    } catch (error) {
+      await saveStatus(started, {
+        queueStatus: "error",
+        workflowStatus: "failed",
+        errorMessage: isAuthError(error) ? `${error.message}. Check your Replicate API token in Settings.` : error.message
+      });
+      throw error;
+    } finally {
+      setOutlineWorkingId("");
+      await refreshArticles();
+    }
+  }
+
+  async function saveOutline(article, outline) {
+    if (outlineSectionCount(outline) < 3) {
+      setProgress("Keep at least three outline sections before saving.");
+      return;
+    }
+    await saveStatus(article, {
+      outline,
+      queueStatus: "outline-review",
+      workflowStatus: "awaiting-outline-approval",
+      requireOutlineApproval: true,
+      outlineApproved: false,
+      generationCheckpoint: {
+        ...(article.generationCheckpoint || {}),
+        stage: "outline-ready",
+        outline,
+        updatedAt: new Date().toISOString()
+      }
+    });
+    setProgress(`Outline saved: ${article.title}`);
+    await refreshArticles();
+  }
+
+  async function cancelOutline(article) {
+    await saveStatus(article, {
+      queueStatus: "cancelled",
+      workflowStatus: "cancelled",
+      outlineApproved: false,
+      errorMessage: ""
+    });
+    setProgress(`Cancelled: ${article.title}`);
+    await refreshArticles();
+  }
+
+  async function approveOutlineAndContinue(article, outline) {
+    if (runningRef.current || outlineSectionCount(outline) < 3) return;
+    runningRef.current = true;
+    setRunning(true);
+    setOutlineWorkingId(article.id);
+    const approved = await saveStatus(article, {
+      outline,
+      queueStatus: "generating",
+      workflowStatus: "generating-content",
+      requireOutlineApproval: true,
+      outlineApproved: true,
+      errorMessage: "",
+      generationCheckpoint: {
+        ...(article.generationCheckpoint || {}),
+        stage: "outline-approved",
+        outline,
+        outlineApprovedAt: new Date().toISOString()
+      }
+    });
+    try {
+      setProgress(`Outline approved. Generating article: ${article.title}`);
+      await generateOne(approved);
+    } catch (error) {
+      const recoveryArticle = error.recoveryArticle || approved;
+      await saveStatus(recoveryArticle, {
+        queueStatus: "error",
+        workflowStatus: "failed",
+        errorMessage: isAuthError(error) ? `${error.message}. Check your Replicate API token in Settings.` : error.message
+      });
+    } finally {
+      runningRef.current = false;
+      setRunning(false);
+      setOutlineWorkingId("");
+      await refreshArticles();
+    }
   }
 
   async function generateOne(article) {
@@ -483,15 +646,36 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
       for (const article of pending) {
         await waitWhilePaused();
         if (cancelRequestedRef.current) break;
-        await saveStatus(article, { queueStatus: "generating", workflowStatus: "generating-content", errorMessage: "" });
+        const settingsForArticle = articleSettings(article);
+        const entryAction = articleGenerationEntryAction(article, settingsForArticle);
+        if (entryAction !== "generate-content") {
+          try {
+            if (entryAction === "await-outline-approval") {
+              await saveStatus(article, {
+                queueStatus: "outline-review",
+                workflowStatus: "awaiting-outline-approval",
+                requireOutlineApproval: true,
+                outlineApproved: false,
+                errorMessage: ""
+              });
+            } else {
+              await requestOutline(article);
+            }
+            setProgress(`Outline ready for review: ${article.title}`);
+          } catch (error) {
+            setProgress(`Outline generation failed: ${error.message}`);
+          }
+          continue;
+        }
+        const started = await saveStatus(article, { queueStatus: "generating", workflowStatus: "generating-content", errorMessage: "" });
         await refreshArticles();
         if (cancelRequestedRef.current) {
-          await saveStatus(article, { queueStatus: "pending", workflowStatus: "queued", errorMessage: "" });
+          await saveStatus(started, { queueStatus: "pending", workflowStatus: "queued", errorMessage: "" });
           break;
         }
         let cancelled = false;
         try {
-          await generateOne(article);
+          await generateOne(started);
         } catch (error) {
           const recoveryArticle = error.recoveryArticle || article;
           if ((error.message || "").includes("Cancelled by user")) {
@@ -626,35 +810,49 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
             <div className="text-right">Actions</div>
           </div>
           {activeRows.map((article) => (
-            <div key={article.id} className="grid gap-3 border-b border-slate-100 px-5 py-4 last:border-b-0 md:grid-cols-[1fr_140px_150px_150px] md:items-center">
-              <div className="min-w-0">
-                <div className="text-base font-black text-slate-900 md:truncate">{article.generatedTitle || article.title}</div>
-                <div className="mt-1 flex flex-wrap gap-2 text-xs font-bold text-slate-500">
-                  <span>{article.type}</span>
-                  {article.category ? <span>/ {article.category}</span> : null}
-                  {article.seoBrief?.targetKeyword ? <span>/ keyword: {article.seoBrief.targetKeyword}</span> : null}
-                  {article.workflowStatus ? <span>/ {article.workflowStatus}</span> : null}
-                  {article.seoScore != null ? <span>/ SEO {article.seoScore}/100</span> : null}
-                  {article.errorMessage ? <span className="text-slate-700">/ {article.errorMessage}</span> : null}
+            <div key={article.id}>
+              <div className="grid gap-3 border-b border-slate-100 px-5 py-4 md:grid-cols-[1fr_140px_150px_150px] md:items-center">
+                <div className="min-w-0">
+                  <div className="text-base font-black text-slate-900 md:truncate">{article.generatedTitle || article.title}</div>
+                  <div className="mt-1 flex flex-wrap gap-2 text-xs font-bold text-slate-500">
+                    <span>{article.type}</span>
+                    {article.category ? <span>/ {article.category}</span> : null}
+                    {article.seoBrief?.targetKeyword ? <span>/ keyword: {article.seoBrief.targetKeyword}</span> : null}
+                    {article.workflowStatus ? <span>/ {article.workflowStatus}</span> : null}
+                    {article.seoScore != null ? <span>/ SEO {article.seoScore}/100</span> : null}
+                    {article.errorMessage ? <span className="text-slate-700">/ {article.errorMessage}</span> : null}
+                  </div>
+                </div>
+                <div>
+                  <span className={`inline-flex rounded-full px-3 py-1 text-xs font-black capitalize ${
+                    article.queueStatus === "completed" ? "bg-violet-100 text-violet-700" :
+                    article.queueStatus === "error" ? "bg-slate-200 text-slate-700" :
+                    article.queueStatus === "generating" ? "bg-indigo-100 text-indigo-700" :
+                    article.queueStatus === "outline-review" ? "bg-amber-100 text-amber-800" :
+                    "bg-slate-100 text-slate-600"
+                  }`}>{article.queueStatus}</span>
+                </div>
+                <div className="text-sm font-medium text-slate-500">{article.createdAt ? new Date(article.createdAt).toLocaleDateString() : "-"}</div>
+                <div className="flex justify-end gap-2">
+                  {article.queueStatus === "error" ? (
+                    <Button variant="secondary" onClick={() => electronAPI.saveArticle({ ...article, queueStatus: "pending", workflowStatus: "queued", errorMessage: "" }).then(refreshArticles)}>Retry</Button>
+                  ) : article.queueStatus === "cancelled" ? (
+                    <Button variant="secondary" onClick={() => electronAPI.saveArticle({ ...article, queueStatus: "pending", workflowStatus: "queued", errorMessage: "" }).then(refreshArticles)}>Return to Queue</Button>
+                  ) : article.queueStatus === "completed" ? (
+                    <Button variant="danger" onClick={() => electronAPI.deleteArticle(article.id).then(refreshArticles)}><Trash2 className="h-4 w-4" /></Button>
+                  ) : null}
                 </div>
               </div>
-              <div>
-                <span className={`inline-flex rounded-full px-3 py-1 text-xs font-black capitalize ${
-                  article.queueStatus === "completed" ? "bg-violet-100 text-violet-700" :
-                  article.queueStatus === "error" ? "bg-slate-200 text-slate-700" :
-                  article.queueStatus === "generating" ? "bg-indigo-100 text-indigo-700" :
-                  article.queueStatus === "outline-review" ? "bg-amber-100 text-amber-800" :
-                  "bg-slate-100 text-slate-600"
-                }`}>{article.queueStatus}</span>
-              </div>
-              <div className="text-sm font-medium text-slate-500">{article.createdAt ? new Date(article.createdAt).toLocaleDateString() : "-"}</div>
-              <div className="flex justify-end gap-2">
-                {article.queueStatus === "error" ? (
-                  <Button variant="secondary" onClick={() => electronAPI.saveArticle({ ...article, queueStatus: "pending", errorMessage: "" }).then(refreshArticles)}>Retry</Button>
-                ) : article.queueStatus === "completed" ? (
-                  <Button variant="danger" onClick={() => electronAPI.deleteArticle(article.id).then(refreshArticles)}><Trash2 className="h-4 w-4" /></Button>
-                ) : null}
-              </div>
+              {article.queueStatus === "outline-review" ? (
+                <OutlineReviewCard
+                  article={article}
+                  busy={outlineWorkingId === article.id || running}
+                  onSave={saveOutline}
+                  onApprove={approveOutlineAndContinue}
+                  onRegenerate={requestOutline}
+                  onCancel={cancelOutline}
+                />
+              ) : null}
             </div>
           ))}
         </div>

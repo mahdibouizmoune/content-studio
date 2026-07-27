@@ -31,6 +31,7 @@ const { cancelJobsByPrefixes } = require('./job-control');
 const { enhancePinterestImagePrompt } = require('./pinterest-image-prompt');
 const { extractCleanPinPrompt, fallbackPinPrompt } = require('./pin-prompt-quality');
 const { normalizeArticleIdentity, normalizeImportedArticles } = require('./article-storage');
+const { normalizeArticleOutline, outlineSectionCount } = require('./article-outline');
 const { normalizeArticleMediaRecord } = require('./article-media');
 const { assertSafeRemoteRedirect, isPathInsideRoots, isSafeRemoteMediaUrl } = require('./media-security');
 const { escapeXmlText } = require('./xml-safety');
@@ -4326,6 +4327,39 @@ ipcMain.handle('estimate-cost', (e, { articleCount, settings, extraTextCalls = 0
 // ============================================================================
 // IPC: ARTICLE GENERATION (with abort + smart retry)
 // ============================================================================
+ipcMain.handle('generate-article-outline', async (e, { prompt, settings, jobKey }) => {
+  const apiToken = settings?.replicateApiToken;
+  if (!apiToken) throw new Error('Replicate API token is missing');
+  const safePrompt = String(prompt || '').trim().slice(0, 30000);
+  if (safePrompt.length < 40) throw new Error('The outline brief is incomplete.');
+  const controller = new AbortController();
+  if (jobKey) activeJobs.set(jobKey, controller);
+
+  try {
+    const url = getAIModelUrl(settings.aiModel || 'chatgpt');
+    const response = await replicateRequest(url, {
+      stream: false,
+      input: {
+        prompt: safePrompt,
+        max_tokens: 2200,
+        temperature: 0.35,
+        top_p: 1
+      }
+    }, apiToken, { signal: controller.signal, timeout: 90000 });
+    const outline = normalizeArticleOutline(await pollReplicate(response.data.id, apiToken, {
+      maxAttempts: 30,
+      intervalMs: 2000,
+      signal: controller.signal
+    }));
+    if (outlineSectionCount(outline) < 3) {
+      throw new Error('The generated outline was incomplete. Regenerate it before continuing.');
+    }
+    return outline;
+  } finally {
+    if (jobKey) activeJobs.delete(jobKey);
+  }
+});
+
 ipcMain.handle('generate-article', async (e, { title, settings, jobKey }) => {
   const apiToken = settings.replicateApiToken;
   if (!apiToken) throw new Error('Replicate API token is missing');

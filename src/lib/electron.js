@@ -220,6 +220,25 @@ function makeMockApi() {
         content: `<h1>${title}</h1><p>This is local preview content. Add a Replicate token in the Electron app to generate real articles.</p><h2>Why It Matters</h2><p>The production flow uses Replicate for text, title, featured image, and in-text image generation.</p><h2>Useful Details</h2><p>Queue, editing, WordPress publishing, backups, and Pinterest pins are all wired through Electron IPC.</p>`
       };
     },
+    async generateArticleOutline() {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      return [
+        "## Reader promise",
+        "- Answer the main question early and explain who the recipe helps.",
+        "",
+        "## Ingredients and substitutions",
+        "- Explain ingredient roles, quantities, and realistic swaps.",
+        "",
+        "## Step-by-step method",
+        "- Include timing, temperature, texture, and doneness cues.",
+        "",
+        "## Troubleshooting and serving",
+        "- Cover common mistakes, storage, reheating, and serving ideas.",
+        "",
+        "## Recipe card",
+        "- Keep times, yield, ingredients, and instructions consistent."
+      ].join("\n");
+    },
     async generateArticleTitle({ title }) {
       return `${title} Worth Reading Today`;
     },

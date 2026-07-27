@@ -595,7 +595,7 @@ export default function Settings({ settings, saveSettings, refreshArticles, init
               </select>
             </Field>
           </div>
-          <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
             <label className="flex items-center justify-between gap-4 rounded-md bg-slate-50 p-4 font-bold text-slate-800 ring-1 ring-slate-100">
               <span><span className="block">Keep Original Titles</span><span className="text-sm font-medium text-slate-500">Skip viral title rewrite</span></span>
               <input type="checkbox" className="h-5 w-5" checked={!!draft.keepOriginalTitles} onChange={(event) => update({ keepOriginalTitles: event.target.checked })} />
@@ -611,6 +611,10 @@ export default function Settings({ settings, saveSettings, refreshArticles, init
             <label className="flex items-center justify-between gap-4 rounded-md bg-slate-50 p-4 font-bold text-slate-800 ring-1 ring-slate-100">
               <span><span className="block">Editorial Quality Pass</span><span className="text-sm font-medium text-slate-500">Consistency and usefulness review</span></span>
               <input type="checkbox" className="h-5 w-5" checked={draft.smartQualityPass !== false} onChange={(event) => update({ smartQualityPass: event.target.checked })} />
+            </label>
+            <label className="flex items-center justify-between gap-4 rounded-md bg-slate-50 p-4 font-bold text-slate-800 ring-1 ring-slate-100">
+              <span><span className="block">Approve Outlines</span><span className="text-sm font-medium text-slate-500">Review before full generation</span></span>
+              <input type="checkbox" className="h-5 w-5" checked={draft.requireOutlineApproval === true} onChange={(event) => update({ requireOutlineApproval: event.target.checked })} />
             </label>
           </div>
         </SettingPanel>
@@ -825,13 +829,14 @@ export default function Settings({ settings, saveSettings, refreshArticles, init
                     <textarea className={`${inputClass} min-h-24 resize-y`} value={preset.competitorNotes || ""} onChange={(event) => updatePreset(index, { competitorNotes: event.target.value })} />
                   </Field>
                 </div>
-                <div className="mt-3 grid gap-3 md:grid-cols-2">
+                <div className="mt-3 grid gap-3 md:grid-cols-3">
                   <label className="flex items-center gap-2 rounded-md bg-slate-50 px-3 py-2 text-sm font-bold text-slate-700 ring-1 ring-slate-100"><input type="checkbox" checked={!!preset.recipeCardEnabled} onChange={(event) => updatePreset(index, { recipeCardEnabled: event.target.checked })} />Recipe card</label>
+                  <label className="flex items-center gap-2 rounded-md bg-slate-50 px-3 py-2 text-sm font-bold text-slate-700 ring-1 ring-slate-100"><input type="checkbox" checked={preset.requireOutlineApproval === true} onChange={(event) => updatePreset(index, { requireOutlineApproval: event.target.checked })} />Approve outline first</label>
                   <div className="flex justify-end"><Button variant="danger" onClick={() => update({ projectPresets: draft.projectPresets.filter((_, i) => i !== index) })}><Trash2 className="h-4 w-4" />Remove</Button></div>
                 </div>
               </div>
             ))}
-            <Button variant="secondary" onClick={() => update({ projectPresets: [...(draft.projectPresets || []), { id: String(Date.now()), name: "New Preset", searchIntent: "informational" }] })}><Plus className="h-4 w-4" />Add Project Preset</Button>
+            <Button variant="secondary" onClick={() => update({ projectPresets: [...(draft.projectPresets || []), { id: String(Date.now()), name: "New Preset", searchIntent: "informational", requireOutlineApproval: false }] })}><Plus className="h-4 w-4" />Add Project Preset</Button>
           </div>
         </SettingPanel>
 

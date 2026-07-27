@@ -64,6 +64,12 @@ const {
   retryAfterMs,
   withTransientRetries
 } = require('../electron/retry-policy');
+const {
+  appendOutlineSection,
+  normalizeArticleOutline,
+  outlineSectionCount,
+  removeLastOutlineSection
+} = require('../electron/article-outline');
 
 test('transient retry policy retries recoverable network failures only', async () => {
   let calls = 0;
@@ -622,11 +628,44 @@ test('outline generation recovery preserves approval requirements and the saved 
 });
 
 test('article workflow transition rules reject unsafe shortcuts', async () => {
-  const { canTransitionArticleWorkflow } = await import('../src/lib/articleWorkflow.mjs');
+  const {
+    articleGenerationEntryAction,
+    canTransitionArticleWorkflow
+  } = await import('../src/lib/articleWorkflow.mjs');
   assert.equal(canTransitionArticleWorkflow('queued', 'generating-outline'), true);
   assert.equal(canTransitionArticleWorkflow('awaiting-outline-approval', 'generating-content'), true);
   assert.equal(canTransitionArticleWorkflow('queued', 'published'), false);
   assert.equal(canTransitionArticleWorkflow('published', 'generating-content'), false);
+  assert.equal(articleGenerationEntryAction({}, { requireOutlineApproval: false }), 'generate-content');
+  assert.equal(articleGenerationEntryAction({ outlineApproved: false }, { requireOutlineApproval: true }), 'generate-outline');
+  assert.equal(articleGenerationEntryAction({
+    outlineApproved: false,
+    outline: '## Ingredients\n- Notes'
+  }, { requireOutlineApproval: true }), 'await-outline-approval');
+  assert.equal(articleGenerationEntryAction({
+    outlineApproved: true,
+    outline: '## Ingredients\n- Notes'
+  }, { requireOutlineApproval: true }), 'generate-content');
+});
+
+test('outline helpers normalize model output and support section editing', () => {
+  const normalized = normalizeArticleOutline(`
+    \`\`\`html
+    <h1>Garlic Shrimp</h1>
+    <h2>Why this recipe works</h2>
+    <ul><li>Fast cooking cues</li></ul>
+    <h2>Ingredients</h2>
+    <ul><li>Ingredient roles</li></ul>
+    \`\`\`
+  `);
+  const withSection = appendOutlineSection(normalized, 'Storage and reheating');
+  const removed = removeLastOutlineSection(withSection);
+
+  assert.equal(outlineSectionCount(normalized), 2);
+  assert.match(normalized, /^## Why this recipe works/m);
+  assert.doesNotMatch(normalized, /<h1>|```/);
+  assert.equal(outlineSectionCount(withSection), 3);
+  assert.equal(removed, normalized);
 });
 
 test('article import normalization preserves unknown legacy and custom fields', () => {
