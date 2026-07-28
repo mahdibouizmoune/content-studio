@@ -1,8 +1,9 @@
-const PINTEREST_FOOD_GUARDRAIL_MARKER = 'PINTEREST CREATIVE REQUIREMENTS V4';
+const PINTEREST_FOOD_GUARDRAIL_MARKER = 'PINTEREST CREATIVE REQUIREMENTS V5';
 const LEGACY_MARKERS = [
   'PINTEREST FOOD PHOTO REQUIREMENTS',
   'PINTEREST CREATIVE REQUIREMENTS V2',
-  'PINTEREST CREATIVE REQUIREMENTS V3'
+  'PINTEREST CREATIVE REQUIREMENTS V3',
+  'PINTEREST CREATIVE REQUIREMENTS V4'
 ];
 
 function removePreviousRequirements(prompt = '') {
@@ -24,7 +25,7 @@ function enhancePinterestImagePrompt(prompt = '') {
   if (original.includes(PINTEREST_FOOD_GUARDRAIL_MARKER)) return original;
   const base = removePreviousRequirements(original);
   const subjectRules = isLikelyFoodPrompt(base)
-    ? `- Use premium photorealistic editorial food photography of the exact finished recipe, not illustration or CGI. Make the finished dish or one irresistible hero serving the clear focal point, filling about 65-80% of the frame while keeping enough plate or bowl edge visible for instant recognition.
+    ? `- Use ultra-realistic premium photorealistic editorial food photography of the exact finished recipe, not illustration or CGI. Make the finished dish or one irresistible hero serving the clear focal point, filling about 70-82% of the frame while keeping enough plate or bowl edge visible for instant recognition.
 - Choose a tight 30-45 degree view or tight overhead view that best reveals this specific dish. Keep the hero food sharply focused with controlled shallow depth of field and show its most desirable truthful texture, such as browned edges, glossy sauce, tender interior, creamy layers, crisp crumbs, or melted cheese.
 - Use bright diffused side-window light, natural shadows, true ingredient colors, realistic portions, and subtle home-cooked imperfections. The result should look freshly photographed by a skilled food photographer, not glossy plastic, overprocessed, or like generic stock imagery.
 - Show only ingredients, garnishes, cookware, and textures supported by the source. No invented toppings, raw-looking cooked food, duplicated food, distorted plates or utensils, excessive steam, or impossible cheese pulls.`
@@ -36,7 +37,8 @@ function enhancePinterestImagePrompt(prompt = '') {
 ${PINTEREST_FOOD_GUARDRAIL_MARKER}:
 - Use a high-resolution vertical 2:3 Pinterest composition designed to remain clear at mobile thumbnail size.
 ${subjectRules}
-- Render only the one quoted headline requested in the prompt. Keep it to 3-7 words in an easy-to-read bold typeface, with high contrast and generous safe margins. Do not add a subtitle, badge, logo, watermark, URL, or extra lettering.
+- Render only the one quoted headline requested in the prompt. Keep it to 3-7 words in a premium bold geometric sans-serif with clean kerning, balanced line breaks, high contrast, and generous safe margins. Spell every word exactly as quoted. Do not add a subtitle, badge, logo, watermark, URL, or extra lettering.
+- For a middle placement, use a full-width frosted-glass ribbon centered both horizontally and vertically. Make it translucent enough that the recipe remains clearly visible beneath it, with a soft edge fade, restrained shadow, and no opaque box. Use white or warm-cream lettering over smoky charcoal glass, or deep charcoal lettering over soft-cream glass, whichever gives stronger contrast.
 - Keep the result premium, appetite-first, source-accurate, and visually specific. Preserve clean negative space behind the requested text panel without covering the most desirable food detail. Do not use clickbait, misleading transformations, dark muddy lighting, heavy filters, or a crowded template.`;
 }
 

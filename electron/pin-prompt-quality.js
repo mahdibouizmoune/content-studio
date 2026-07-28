@@ -41,7 +41,10 @@ function fallbackPinPrompt(context = {}, placement = 'middle') {
     .slice(0, 120);
   const overlay = topic.replace(/^\d+\s+/, '').slice(0, 60) || 'Easy Recipe Idea';
   const position = ['top', 'bottom'].includes(placement) ? placement : 'middle';
-  return `Premium photorealistic vertical 2:3 editorial food photograph of ${topic}. Show a tight appetite-first hero serving from a natural 30-45 degree angle, filling about 65-80% of the frame with sharply focused truthful texture, bright diffused side-window light, true ingredient colors, and subtle homemade imperfections. Reserve clean space in the ${position} for the exact headline "${overlay}" in bold high-contrast type with generous mobile-safe margins. No extra text, logos, packaging, unrelated ingredients, plastic texture, or generic stock-photo styling.`;
+  const panel = position === 'middle'
+    ? 'a full-width translucent frosted-glass center ribbon that keeps the recipe visible beneath it'
+    : `a translucent frosted-glass ${position} ribbon`;
+  return `Ultra-realistic premium vertical 2:3 editorial food photograph of ${topic}. Show an appetite-first close-up hero serving from a natural 30-45 degree angle, filling about 70-82% of the frame with tack-sharp truthful texture, bright diffused side-window light, true ingredient colors, and subtle homemade imperfections. Place the exact headline "${overlay}" in ${panel}, using a bold premium geometric sans-serif, clean kerning, balanced line breaks, and generous mobile-safe margins. No extra text, opaque box, logos, packaging, unrelated ingredients, plastic texture, or generic stock-photo styling.`;
 }
 
 module.exports = { extractCleanPinPrompt, fallbackPinPrompt, hasReasoningLeak };

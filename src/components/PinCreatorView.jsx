@@ -149,9 +149,7 @@ function seoKeywords(pin, board) {
     ...phrases.slice(0, 5),
     ...smart.keywords,
     ...profileKeywords,
-    "easy recipe ideas",
-    "recipe inspiration",
-    "save this recipe"
+    "recipe inspiration"
   ]).slice(0, 24).join(", ");
 }
 
@@ -241,12 +239,12 @@ function slotTimeOptions(value = "") {
 
 function placementImageInstruction(placement = "middle") {
   if (placement === "top") {
-    return "CRITICAL TEXT PLACEMENT: Put all readable text in the top third only, centered horizontally inside a clean top-third panel. Do not place any text in the middle or bottom.";
+    return "CRITICAL TEXT PLACEMENT: Put the exact quoted headline in the top third only, centered inside a refined translucent frosted-glass ribbon. Use a premium bold geometric sans-serif with clean kerning, balanced line breaks, high contrast, and generous padding. Keep the food visible through the ribbon. No opaque box and no other text.";
   }
   if (placement === "bottom") {
-    return "CRITICAL TEXT PLACEMENT: Put all readable text in the bottom third only, centered horizontally inside a clean bottom-third panel. Do not place any text in the top or middle.";
+    return "CRITICAL TEXT PLACEMENT: Put the exact quoted headline in the bottom third only, centered inside a refined translucent frosted-glass ribbon. Use a premium bold geometric sans-serif with clean kerning, balanced line breaks, high contrast, and generous padding. Keep the food visible through the ribbon. No opaque box and no other text.";
   }
-  return "CRITICAL TEXT PLACEMENT: Put all readable text in the exact center middle of the pin, centered horizontally and vertically inside a clean centered panel. Do not place any text near the top edge, bottom edge, or corners.";
+  return "CRITICAL TEXT PLACEMENT: Put the exact quoted headline in the exact center middle of the pin inside a full-width translucent frosted-glass ribbon, centered horizontally and vertically. Use a premium bold geometric sans-serif with clean kerning, balanced 2-3 line wrapping, high contrast, a restrained shadow, and generous padding. Keep the recipe clearly visible through the ribbon. No opaque box, no edge text, and no other lettering.";
 }
 
 function scheduleSlots(count, settings) {
@@ -404,8 +402,8 @@ function pinQuality(pin = {}, allPins = [], boardNames = []) {
   const board = pin.csvBoard || chooseBoard(pin, boardNames);
   const checks = [
     { label: "Image", ok: Boolean(displayImage(pin)), weight: 22 },
-    { label: "Title length", ok: title.length >= 25 && title.length <= 100, weight: 14 },
-    { label: "Description depth", ok: description.length >= 150 && description.length <= 800, weight: 14 },
+    { label: "Title length", ok: title.length >= 45 && title.length <= 95, weight: 14 },
+    { label: "Description depth", ok: description.length >= 250 && description.length <= 500, weight: 14 },
     { label: "Source relevance", ok: relevance >= 0.2, weight: 18 },
     { label: "Board match", ok: Boolean(board) && (!boardNames.length || boardNames.includes(board)), weight: 12 },
     { label: "Creative prompt", ok: String(pin.prompt || "").length >= 80, weight: 12 },

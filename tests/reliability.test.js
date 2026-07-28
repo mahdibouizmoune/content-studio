@@ -668,17 +668,20 @@ test('affiliate product ranking rejects weak and unavailable catalog results', (
   assert.ok(ranked[0].matchTerms.includes('skillet'));
 });
 
-test('Pinterest image prompts preserve premium close-up food photography', () => {
+test('Pinterest image prompts preserve ultra-realistic close-up food photography and polished overlay text', () => {
   const original = 'Garlic butter shrimp with the exact headline "Easy Shrimp Dinner" in a centered panel.';
   const enhanced = enhancePinterestImagePrompt(original);
 
   assert.match(enhanced, new RegExp(PINTEREST_FOOD_GUARDRAIL_MARKER));
-  assert.match(enhanced, /premium photorealistic editorial food photography/i);
-  assert.match(enhanced, /65-80%/);
+  assert.match(enhanced, /ultra-realistic premium photorealistic editorial food photography/i);
+  assert.match(enhanced, /70-82%/);
   assert.match(enhanced, /30-45 degree view or tight overhead view/i);
   assert.match(enhanced, /bright diffused side-window light/i);
   assert.match(enhanced, /vertical 2:3 Pinterest composition/i);
   assert.match(enhanced, /only the one quoted headline/i);
+  assert.match(enhanced, /premium bold geometric sans-serif/i);
+  assert.match(enhanced, /full-width frosted-glass ribbon/i);
+  assert.match(enhanced, /recipe remains clearly visible beneath it/i);
   assert.ok(enhanced.startsWith(original));
   assert.equal(enhancePinterestImagePrompt(enhanced), enhanced);
 });
@@ -709,7 +712,7 @@ test('pin prompt quality allows normal titles containing actually and removes re
 
   const reasoned = `Let's craft the image prompt.\n\nFinal image prompt: Photorealistic close-up of cottage cheese toast with centered readable text.`;
   assert.match(extractCleanPinPrompt(reasoned), /^Photorealistic close-up/);
-  assert.match(fallbackPinPrompt({ sourceTitle: 'Cottage Cheese Breakfast Ideas' }, 'middle'), /space in the middle/i);
+  assert.match(fallbackPinPrompt({ sourceTitle: 'Cottage Cheese Breakfast Ideas' }, 'middle'), /frosted-glass center ribbon/i);
 });
 
 test('Pinterest image generation uses Ideogram enhancement and standard 2:3 default', () => {
@@ -721,6 +724,19 @@ test('Pinterest image generation uses Ideogram enhancement and standard 2:3 defa
   assert.match(mainSource, /magic_prompt_option: 'Auto'/);
   assert.match(legacyRendererSource, /2:3 - Standard Pinterest \(Recommended\)/);
   assert.doesNotMatch(legacyRendererSource, /9:16 - Standard Pinterest \(Recommended\)/);
+});
+
+test('Pinterest SEO generation prioritizes visible keywords and verified trend evidence', () => {
+  const mainSource = fs.readFileSync(path.join(__dirname, '..', 'electron', 'main.js'), 'utf8');
+  const pinViewSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'PinCreatorView.jsx'), 'utf8');
+
+  assert.match(mainSource, /first 40 characters useful and keyword-specific/i);
+  assert.match(mainSource, /relevantSavedPinterestResearch/);
+  assert.match(mainSource, /Pinterest Predicts 2026: Cabbage Crush/);
+  assert.match(mainSource, /Never force a trend, year, health promise, time claim, or ingredient/i);
+  assert.match(mainSource, /description at 450 characters or fewer/i);
+  assert.match(pinViewSource, /Title length", ok: title\.length >= 45 && title\.length <= 95/);
+  assert.match(pinViewSource, /Description depth", ok: description\.length >= 250 && description\.length <= 500/);
 });
 
 test('article imports receive stable unique IDs when IDs are missing or duplicated', () => {
