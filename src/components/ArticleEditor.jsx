@@ -690,7 +690,13 @@ export default function ArticleEditor({ article, settings, saveSettings, onClose
       const titleResult = await electronAPI.generateTitleDescription(url, interests, "closeup", jobKey);
       if (!titleResult.success) throw new Error(titleResult.error || "Pin title and description failed.");
       setStatus("Creating one-pin pack: image...");
-      const imageResult = await electronAPI.generateImage(promptResult.prompt, "9:16", "ideogram", url, jobKey);
+      const imageResult = await electronAPI.generateImage(
+        promptResult.prompt,
+        settings.pinterestPinRatio || "2:3",
+        "ideogram",
+        url,
+        jobKey
+      );
       if (!imageResult.success) throw new Error(imageResult.error || "Pin image failed.");
       const pinPack = {
         createdAt: new Date().toISOString(),

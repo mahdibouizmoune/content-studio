@@ -610,8 +610,8 @@ imageModel.addEventListener('change', () => {
   } else {
     // All other models support all ratios
     aspectRatio.innerHTML = `
-      <option value="9:16" ${currentRatio === '9:16' ? 'selected' : ''}>9:16 - Standard Pinterest (Recommended)</option>
-      <option value="2:3" ${currentRatio === '2:3' ? 'selected' : ''}>2:3 - Classic Portrait</option>
+      <option value="2:3" ${currentRatio !== '9:16' && currentRatio !== '1:2' ? 'selected' : ''}>2:3 - Standard Pinterest (Recommended)</option>
+      <option value="9:16" ${currentRatio === '9:16' ? 'selected' : ''}>9:16 - Tall Portrait</option>
       <option value="1:2" ${currentRatio === '1:2' ? 'selected' : ''}>1:2 - Tall Pin</option>
     `;
   }

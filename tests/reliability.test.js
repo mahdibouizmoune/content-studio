@@ -10,7 +10,12 @@ const {
   ensurePinQueueIds
 } = require('../electron/pin-queue');
 const { addUtmParams, isUtmEligibleDestination } = require('../electron/utm');
-const { enhancePinterestImagePrompt } = require('../electron/pinterest-image-prompt');
+const {
+  PINTEREST_FOOD_GUARDRAIL_MARKER,
+  enhancePinterestImagePrompt,
+  isLikelyFoodPrompt,
+  removePreviousRequirements
+} = require('../electron/pinterest-image-prompt');
 const { extractCleanPinPrompt, fallbackPinPrompt, hasReasoningLeak } = require('../electron/pin-prompt-quality');
 const { normalizeImportedArticles } = require('../electron/article-storage');
 const { assertSafeRemoteRedirect, isPathInsideRoots, isSafeRemoteMediaUrl } = require('../electron/media-security');
@@ -663,17 +668,37 @@ test('affiliate product ranking rejects weak and unavailable catalog results', (
   assert.ok(ranked[0].matchTerms.includes('skillet'));
 });
 
-test('Pinterest image prompts enforce realistic close-up food photography', () => {
-  const original = 'Garlic butter shrimp with the text in a centered panel.';
+test('Pinterest image prompts stay source-accurate and mobile-ready', () => {
+  const original = 'Garlic butter shrimp with the exact headline "Easy Shrimp Dinner" in a centered panel.';
   const enhanced = enhancePinterestImagePrompt(original);
 
-  assert.match(enhanced, /photorealistic editorial food photography/i);
-  assert.match(enhanced, /65-80%/);
-  assert.match(enhanced, /sharply focused/i);
-  assert.match(enhanced, /vertical 2:3 mobile crop/i);
-  assert.match(enhanced, /only ingredients and garnishes supported/i);
+  assert.match(enhanced, new RegExp(PINTEREST_FOOD_GUARDRAIL_MARKER));
+  assert.match(enhanced, /complete, recognizable serving/i);
+  assert.match(enhanced, /55-70%/);
+  assert.match(enhanced, /vertical 2:3 Pinterest composition/i);
+  assert.match(enhanced, /only the one quoted headline/i);
+  assert.doesNotMatch(enhanced, /65-80%/);
   assert.ok(enhanced.startsWith(original));
   assert.equal(enhancePinterestImagePrompt(enhanced), enhanced);
+});
+
+test('Pinterest prompt enhancement replaces legacy rules without duplicating them', () => {
+  const original = 'Chocolate cake with the exact headline "Easy Chocolate Cake".';
+  const legacy = `${original}\n\nPINTEREST FOOD PHOTO REQUIREMENTS:\n- Old extreme macro instructions.`;
+  const enhanced = enhancePinterestImagePrompt(legacy);
+
+  assert.equal(removePreviousRequirements(legacy), original);
+  assert.doesNotMatch(enhanced, /PINTEREST FOOD PHOTO REQUIREMENTS/);
+  assert.equal(enhanced.split(PINTEREST_FOOD_GUARDRAIL_MARKER).length - 1, 1);
+});
+
+test('Pinterest prompt enhancement does not force recipe styling onto non-food subjects', () => {
+  const enhanced = enhancePinterestImagePrompt('Bright modern kitchen organization with the exact headline "Calm Kitchen Ideas".');
+
+  assert.equal(isLikelyFoodPrompt('Garlic butter shrimp recipe'), true);
+  assert.equal(isLikelyFoodPrompt('Modern entryway storage ideas'), false);
+  assert.match(enhanced, /polished, believable editorial photograph/i);
+  assert.doesNotMatch(enhanced, /exact finished recipe/i);
 });
 
 test('pin prompt quality allows normal titles containing actually and removes reasoning', () => {
@@ -683,7 +708,18 @@ test('pin prompt quality allows normal titles containing actually and removes re
 
   const reasoned = `Let's craft the image prompt.\n\nFinal image prompt: Photorealistic close-up of cottage cheese toast with centered readable text.`;
   assert.match(extractCleanPinPrompt(reasoned), /^Photorealistic close-up/);
-  assert.match(fallbackPinPrompt({ sourceTitle: 'Cottage Cheese Breakfast Ideas' }, 'middle'), /Text overlay in the middle/i);
+  assert.match(fallbackPinPrompt({ sourceTitle: 'Cottage Cheese Breakfast Ideas' }, 'middle'), /clear space in the middle/i);
+});
+
+test('Pinterest image generation keeps the curated prompt and standard 2:3 default', () => {
+  const mainSource = fs.readFileSync(path.join(__dirname, '..', 'electron', 'main.js'), 'utf8');
+  const legacyRendererSource = fs.readFileSync(path.join(__dirname, '..', 'electron', 'pin-creator', 'renderer.js'), 'utf8');
+
+  assert.match(mainSource, /generatePinImage\(prompt, aspectRatio = '2:3'/);
+  assert.match(mainSource, /pinAspectRatio = '2:3'/);
+  assert.match(mainSource, /magic_prompt_option: 'Off'/);
+  assert.match(legacyRendererSource, /2:3 - Standard Pinterest \(Recommended\)/);
+  assert.doesNotMatch(legacyRendererSource, /9:16 - Standard Pinterest \(Recommended\)/);
 });
 
 test('article imports receive stable unique IDs when IDs are missing or duplicated', () => {
