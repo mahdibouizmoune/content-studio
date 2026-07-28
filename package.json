@@ -1,6 +1,6 @@
 {
   "name": "content-studio",
-  "version": "1.2.15",
+  "version": "1.2.16",
   "description": "Content Studio - AI article generation, images, recipes, and WordPress publishing",
   "main": "electron/main.js",
   "author": "Mahdi Bouizmoune",

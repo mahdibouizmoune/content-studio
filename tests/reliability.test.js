@@ -668,16 +668,17 @@ test('affiliate product ranking rejects weak and unavailable catalog results', (
   assert.ok(ranked[0].matchTerms.includes('skillet'));
 });
 
-test('Pinterest image prompts stay source-accurate and mobile-ready', () => {
+test('Pinterest image prompts preserve premium close-up food photography', () => {
   const original = 'Garlic butter shrimp with the exact headline "Easy Shrimp Dinner" in a centered panel.';
   const enhanced = enhancePinterestImagePrompt(original);
 
   assert.match(enhanced, new RegExp(PINTEREST_FOOD_GUARDRAIL_MARKER));
-  assert.match(enhanced, /complete, recognizable serving/i);
-  assert.match(enhanced, /55-70%/);
+  assert.match(enhanced, /premium photorealistic editorial food photography/i);
+  assert.match(enhanced, /65-80%/);
+  assert.match(enhanced, /30-45 degree view or tight overhead view/i);
+  assert.match(enhanced, /bright diffused side-window light/i);
   assert.match(enhanced, /vertical 2:3 Pinterest composition/i);
   assert.match(enhanced, /only the one quoted headline/i);
-  assert.doesNotMatch(enhanced, /65-80%/);
   assert.ok(enhanced.startsWith(original));
   assert.equal(enhancePinterestImagePrompt(enhanced), enhanced);
 });
@@ -708,16 +709,16 @@ test('pin prompt quality allows normal titles containing actually and removes re
 
   const reasoned = `Let's craft the image prompt.\n\nFinal image prompt: Photorealistic close-up of cottage cheese toast with centered readable text.`;
   assert.match(extractCleanPinPrompt(reasoned), /^Photorealistic close-up/);
-  assert.match(fallbackPinPrompt({ sourceTitle: 'Cottage Cheese Breakfast Ideas' }, 'middle'), /clear space in the middle/i);
+  assert.match(fallbackPinPrompt({ sourceTitle: 'Cottage Cheese Breakfast Ideas' }, 'middle'), /space in the middle/i);
 });
 
-test('Pinterest image generation keeps the curated prompt and standard 2:3 default', () => {
+test('Pinterest image generation uses Ideogram enhancement and standard 2:3 default', () => {
   const mainSource = fs.readFileSync(path.join(__dirname, '..', 'electron', 'main.js'), 'utf8');
   const legacyRendererSource = fs.readFileSync(path.join(__dirname, '..', 'electron', 'pin-creator', 'renderer.js'), 'utf8');
 
   assert.match(mainSource, /generatePinImage\(prompt, aspectRatio = '2:3'/);
   assert.match(mainSource, /pinAspectRatio = '2:3'/);
-  assert.match(mainSource, /magic_prompt_option: 'Off'/);
+  assert.match(mainSource, /magic_prompt_option: 'Auto'/);
   assert.match(legacyRendererSource, /2:3 - Standard Pinterest \(Recommended\)/);
   assert.doesNotMatch(legacyRendererSource, /9:16 - Standard Pinterest \(Recommended\)/);
 });
