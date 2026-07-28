@@ -169,7 +169,7 @@ export default function Settings({ settings, saveSettings, refreshArticles, setA
     updatePinCreator({
       customStyles: DEFAULT_PIN_CUSTOM_STYLES,
       titleDescPrompt: DEFAULT_PIN_TITLE_DESC_PROMPT,
-      promptDefaultsVersion: 3
+      promptDefaultsVersion: 4
     });
   }
 
