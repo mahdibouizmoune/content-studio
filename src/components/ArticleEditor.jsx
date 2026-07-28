@@ -1,6 +1,7 @@
 import { BadgeDollarSign, ExternalLink, Image, Link2, PackageCheck, Plus, RefreshCw, RotateCcw, Save, Search, Send, Sparkles, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useConfirmDialog } from "@/components/ConfirmDialog";
 import { Button, Field, inputClass } from "@/components/ui";
 import { electronAPI } from "@/lib/electron";
 import { buildMetadata, buildRankMathMeta, buildRecipeSchema, buildSeoImageAlt, buildSeoImageFilename, insertArticleImages, qaArticleImages, scoreArticle } from "@/lib/articlePostProcess.mjs";
@@ -15,6 +16,7 @@ import { applyReaderRetentionElements } from "@/lib/readerRetention.mjs";
 import { listArticleSections, recordArticleRevision, replaceArticleSection, restoreArticleRevision } from "@/lib/articleRevisions.mjs";
 
 export default function ArticleEditor({ article, settings, saveSettings, onClose, refreshArticles }) {
+  const confirmAction = useConfirmDialog();
   const [draft, setDraft] = useState(article);
   const [status, setStatus] = useState("");
   const [assetWorking, setAssetWorking] = useState(false);
@@ -531,7 +533,12 @@ export default function ArticleEditor({ article, settings, saveSettings, onClose
   }
 
   async function remove() {
-    if (!window.confirm("Delete this article?")) return;
+    if (!await confirmAction({
+      title: "Delete article",
+      message: "This article will be removed from local storage.",
+      confirmLabel: "Delete",
+      tone: "danger"
+    })) return;
     await electronAPI.deleteArticle(article.id);
     await refreshArticles();
     onClose();
@@ -603,12 +610,20 @@ export default function ArticleEditor({ article, settings, saveSettings, onClose
         }
       };
     }
-    if ((readyDraft.seoScore || 0) < 80 && !window.confirm(`SEO score is ${readyDraft.seoScore}/100. Publish anyway?`)) {
+    if ((readyDraft.seoScore || 0) < 80 && !await confirmAction({
+      title: "Publish with a low SEO score",
+      message: `SEO score is ${readyDraft.seoScore}/100. Publish anyway?`,
+      confirmLabel: "Publish Anyway"
+    })) {
       setDraft(readyDraft);
       setStatus("Publishing paused. Fix SEO checks or publish again to confirm.");
       return;
     }
-    if (readyDraft.imageQa?.criticalIssues && !window.confirm("Image QA found missing required images. Publish anyway?")) {
+    if (readyDraft.imageQa?.criticalIssues && !await confirmAction({
+      title: "Publish with image issues",
+      message: "Image QA found missing required images. Publish anyway?",
+      confirmLabel: "Publish Anyway"
+    })) {
       setDraft(readyDraft);
       setStatus("Publishing paused. Fix image QA issues or publish again to confirm.");
       return;

@@ -2659,31 +2659,6 @@ ipcMain.handle('get-settings', async (event) => {
     log.info(`Settings migration applied: ${settingsMigration.applied.join(', ') || 'schema normalization'}`);
     s = settingsMigration.settings;
   }
-  if (!s.internalLinkDefaultsV3 || s.youtubeArticlePrompt !== undefined || Number(s.internalLinkMaxPosts) > 500) {
-    const migrated = { ...s, internalLinkDefaultsV2: true, internalLinkDefaultsV3: true };
-    delete migrated.youtubeArticlePrompt;
-    if (migrated.internalLinkCount === undefined || Number(migrated.internalLinkCount) === 4) migrated.internalLinkCount = 3;
-    if (migrated.internalLinkMaxPosts === undefined || [150, 300].includes(Number(migrated.internalLinkMaxPosts)) || Number(migrated.internalLinkMaxPosts) > 500) migrated.internalLinkMaxPosts = 500;
-    store.set('settings', migrated);
-    s = migrated;
-  }
-  if (!s.publishStatusDefaultsV2) {
-    const migrated = { ...s, publishStatusDefaultsV2: true };
-    if (!migrated.publishStatus || migrated.publishStatus === 'draft') migrated.publishStatus = 'publish';
-    store.set('settings', migrated);
-    s = migrated;
-  }
-  if (!s.affiliateAutoGenerationV2) {
-    const migrated = {
-      ...s,
-      affiliateEnabled: true,
-      affiliateAutoInsert: true,
-      affiliateAutoDiscover: true,
-      affiliateAutoGenerationV2: true
-    };
-    store.set('settings', migrated);
-    s = migrated;
-  }
   if (Number(s.pinCreator?.promptDefaultsVersion || 0) < pinCreatorDefaults.promptDefaultsVersion) {
     const migrated = {
       ...s,
@@ -2762,8 +2737,6 @@ ipcMain.handle('save-settings', (event, settings) => {
   const toStore = { ...previous, ...settings };
   const senderIsPinCreator = isPinCreatorSender(event);
   delete toStore.youtubeArticlePrompt;
-  toStore.publishStatusDefaultsV2 = true;
-  toStore.affiliateAutoGenerationV2 = true;
   if (toStore.internalLinkMaxPosts !== undefined) {
     toStore.internalLinkMaxPosts = Math.max(25, Math.min(500, Number(toStore.internalLinkMaxPosts || 500)));
   }

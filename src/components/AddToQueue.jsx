@@ -1,6 +1,7 @@
 import { AlertTriangle, Download, FileUp, Plus } from "lucide-react";
 import { useMemo, useState } from "react";
 import BatchImportPreview from "@/components/BatchImportPreview";
+import { useConfirmDialog } from "@/components/ConfirmDialog";
 import SectionHeader from "@/components/SectionHeader";
 import { Button, Field, inputClass } from "@/components/ui";
 import { electronAPI } from "@/lib/electron";
@@ -37,6 +38,7 @@ function cleanTitleFromInput(input) {
 }
 
 export default function AddToQueue({ mode, settings, articles, refreshArticles, setActiveScreen, setArticlesWorkflowStage }) {
+  const confirmAction = useConfirmDialog();
   const [titles, setTitles] = useState("");
   const [message, setMessage] = useState("");
   const [targetKeyword, setTargetKeyword] = useState("");
@@ -106,7 +108,11 @@ export default function AddToQueue({ mode, settings, articles, refreshArticles, 
       return;
     }
     const warningCount = rowsToAdd.filter((row) => duplicateIds.has(row.id) || detectCannibalization(row.title, articles || [], { threshold: 62 }).length).length;
-    if (warningCount && !window.confirm(`${warningCount} selected row${warningCount === 1 ? "" : "s"} may duplicate or cannibalize content. Add anyway?`)) return;
+    if (warningCount && !await confirmAction({
+      title: "Possible duplicate content",
+      message: `${warningCount} selected row${warningCount === 1 ? "" : "s"} may duplicate or cannibalize content.`,
+      confirmLabel: "Add Anyway"
+    })) return;
     setSubmitting(true);
     const now = Date.now();
     try {

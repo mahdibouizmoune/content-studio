@@ -1,4 +1,4 @@
-const SETTINGS_SCHEMA_VERSION = 1;
+const SETTINGS_SCHEMA_VERSION = 2;
 
 const imageRatioDefaults = Object.freeze({
   featuredImageRatio: '3:2',
@@ -33,13 +33,48 @@ function migrateSettings(input = {}) {
     applied.push('image-ratios-v1');
   }
 
-  return {
-    settings: {
+  if (version < 2) {
+    settings = {
       ...settings,
-      settingsSchemaVersion: Math.max(version, SETTINGS_SCHEMA_VERSION)
-    },
+      internalLinkCount: settings.internalLinkCount === undefined || Number(settings.internalLinkCount) === 4
+        ? 3
+        : settings.internalLinkCount,
+      internalLinkMaxPosts: settings.internalLinkMaxPosts === undefined
+        || [150, 300].includes(Number(settings.internalLinkMaxPosts))
+        || Number(settings.internalLinkMaxPosts) > 500
+        ? 500
+        : settings.internalLinkMaxPosts,
+      publishStatus: !settings.publishStatus || settings.publishStatus === 'draft'
+        ? 'publish'
+        : settings.publishStatus,
+      affiliateEnabled: true,
+      affiliateAutoInsert: true,
+      affiliateAutoDiscover: true,
+      featureFlags: {
+        contentCalendar: false,
+        campaignRecords: false,
+        contentUpdateQueue: false,
+        revenueAttribution: false,
+        runHistory: false,
+        modelRegistry: false,
+        ...(settings.featureFlags && typeof settings.featureFlags === 'object' ? settings.featureFlags : {})
+      },
+      settingsSchemaVersion: 2
+    };
+    delete settings.youtubeArticlePrompt;
+    version = 2;
+    applied.push('workflow-defaults-v2');
+  }
+
+  const migrated = {
+    ...settings,
+    settingsSchemaVersion: Math.max(version, SETTINGS_SCHEMA_VERSION)
+  };
+
+  return {
+    settings: migrated,
     applied,
-    changed: JSON.stringify(settings) !== JSON.stringify(original)
+    changed: JSON.stringify(migrated) !== JSON.stringify(original)
   };
 }
 
