@@ -1,6 +1,7 @@
 import { BarChart3, Download, FilePlus2, Search, SlidersHorizontal, Trash2, Upload } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import SectionHeader from "@/components/SectionHeader";
+import { useConfirmDialog } from "@/components/ConfirmDialog";
 import { Button, EmptyState, Field, inputClass } from "@/components/ui";
 import { electronAPI } from "@/lib/electron";
 import { buildSmartArticleDefaults } from "@/lib/smartContentEngine";
@@ -36,6 +37,7 @@ function normalizedTitle(value = "") {
 }
 
 export default function TrendsResearch({ settings, articles, refreshArticles, setActiveScreen, setArticlesWorkflowStage }) {
+  const confirmAction = useConfirmDialog();
   const [seed, setSeed] = useState("");
   const [geo, setGeo] = useState("US");
   const [goal, setGoal] = useState("traffic");
@@ -104,7 +106,12 @@ export default function TrendsResearch({ settings, articles, refreshArticles, se
   }
 
   async function clearPinterestData() {
-    if (!analytics || !window.confirm("Remove the imported Pinterest Analytics data? Saved keyword research will stay available.")) return;
+    if (!analytics || !await confirmAction({
+      title: "Remove Pinterest Analytics data",
+      message: "Imported Pinterest Analytics data will be removed. Saved keyword research will stay available.",
+      confirmLabel: "Remove",
+      tone: "danger"
+    })) return;
     await electronAPI.clearPinterestAnalytics?.();
     setAnalytics(null);
     setStatus("Pinterest Analytics data removed.");
@@ -186,7 +193,11 @@ export default function TrendsResearch({ settings, articles, refreshArticles, se
       return;
     }
     const conflicts = selectedKeywords.filter((item) => item.cannibalization?.title);
-    if (conflicts.length && !window.confirm(`${conflicts.length} selected idea${conflicts.length === 1 ? "" : "s"} may overlap an existing article. Queue them anyway?`)) return;
+    if (conflicts.length && !await confirmAction({
+      title: "Possible content overlap",
+      message: `${conflicts.length} selected idea${conflicts.length === 1 ? "" : "s"} may overlap an existing article.`,
+      confirmLabel: "Queue Anyway"
+    })) return;
     setWorking("queue");
     try {
       const existing = new Set(articles.map((article) => normalizedTitle(article.generatedTitle || article.title)));

@@ -1,6 +1,7 @@
 import { ExternalLink, Film, Play, RefreshCw, Sparkles, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import SectionHeader from "@/components/SectionHeader";
+import { useConfirmDialog } from "@/components/ConfirmDialog";
 import { Button, EmptyState, Field, inputClass } from "@/components/ui";
 import { electronAPI } from "@/lib/electron";
 import { VIDEO_MODEL_OPTIONS } from "@/lib/modelRegistry.mjs";
@@ -32,6 +33,7 @@ function formatDate(value) {
 }
 
 export default function VideoStudio({ settings }) {
+  const confirmAction = useConfirmDialog();
   const [model, setModel] = useState("pruna-p-video");
   const [prompt, setPrompt] = useState(promptPresets[0].prompt);
   const [image, setImage] = useState("");
@@ -121,7 +123,12 @@ export default function VideoStudio({ settings }) {
   }
 
   async function deleteVideo(videoId) {
-    if (!window.confirm("Delete this generated video from local storage?")) return;
+    if (!await confirmAction({
+      title: "Delete generated video",
+      message: "This generated video will be removed from local storage.",
+      confirmLabel: "Delete",
+      tone: "danger"
+    })) return;
     const result = await electronAPI.deleteGeneratedVideo?.(videoId);
     if (result?.success) {
       setVideos(result.videos || []);

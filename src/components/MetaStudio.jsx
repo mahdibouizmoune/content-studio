@@ -1,6 +1,7 @@
 import { AlertCircle, BarChart3, CheckCircle2, Download, Facebook, Image as ImageIcon, Instagram, RefreshCw, Save, Search, Sparkles, Trash2, UploadCloud } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import SectionHeader from "@/components/SectionHeader";
+import { useConfirmDialog } from "@/components/ConfirmDialog";
 import { Button, EmptyState, Field, inputClass } from "@/components/ui";
 import { electronAPI } from "@/lib/electron";
 import { scoreMetaContent } from "@/lib/metaQuality.mjs";
@@ -102,6 +103,7 @@ function projectPack({ projectId, article, goal, content, imageAssets }) {
 }
 
 export default function MetaStudio({ articles, settings }) {
+  const confirmAction = useConfirmDialog();
   const completedArticles = useMemo(() => articles.filter((article) => article.queueStatus === "completed"), [articles]);
   const [query, setQuery] = useState("");
   const [articleId, setArticleId] = useState("");
@@ -287,7 +289,12 @@ export default function MetaStudio({ articles, settings }) {
   }
 
   async function deleteProject(id) {
-    if (!window.confirm("Delete this saved Meta campaign?")) return;
+    if (!await confirmAction({
+      title: "Delete Meta campaign",
+      message: "This saved Meta campaign will be removed from local storage.",
+      confirmLabel: "Delete",
+      tone: "danger"
+    })) return;
     const result = await electronAPI.deleteMetaProject?.(id);
     if (result?.success) {
       setProjects(result.projects || []);
@@ -298,7 +305,11 @@ export default function MetaStudio({ articles, settings }) {
 
   async function prepareGhl() {
     if (!article || !content) return setStatus("Generate content before preparing GHL.");
-    if (quality.score < 70 && !window.confirm(`Meta quality is ${quality.score}/100. Prepare the GHL rows anyway?`)) return;
+    if (quality.score < 70 && !await confirmAction({
+      title: "Prepare lower-quality content",
+      message: `Meta quality is ${quality.score}/100. Prepare the GHL rows anyway?`,
+      confirmLabel: "Prepare Anyway"
+    })) return;
     setWorking(true);
     setStatus("Preparing dedicated Facebook and Instagram GHL rows...");
     try {

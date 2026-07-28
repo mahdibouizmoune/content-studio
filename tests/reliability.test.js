@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const path = require('node:path');
 
 const { cancelJobsByPrefixes } = require('../electron/job-control');
 const {
@@ -879,11 +880,48 @@ test('settings migration adds purpose-specific image ratios and preserves unknow
   assert.equal(first.settings.instagramStoryRatio, '9:16');
   assert.equal(first.settings.facebookFeedRatio, '1.91:1');
   assert.equal(first.settings.squareSocialRatio, '1:1');
+  assert.equal(first.settings.settingsSchemaVersion, 2);
+  assert.equal(first.settings.internalLinkCount, 3);
+  assert.equal(first.settings.internalLinkMaxPosts, 500);
+  assert.equal(first.settings.publishStatus, 'publish');
+  assert.equal(first.settings.affiliateAutoDiscover, true);
+  assert.equal(first.settings.featureFlags.contentCalendar, false);
   assert.deepEqual(first.settings.customIntegration, { keep: true });
   assert.equal(first.settings.pinCreator.customField, 'keep');
   assert.equal(first.changed, true);
   assert.equal(second.changed, false);
   assert.deepEqual(second.settings, first.settings);
+});
+
+test('settings schema migration preserves explicit and future feature values', () => {
+  const result = migrateSettings({
+    settingsSchemaVersion: 1,
+    internalLinkCount: 2,
+    internalLinkMaxPosts: 425,
+    publishStatus: 'future',
+    futureIntegration: { mode: 'keep-me' },
+    featureFlags: { contentCalendar: true, futureFlag: true }
+  });
+
+  assert.equal(result.settings.internalLinkCount, 2);
+  assert.equal(result.settings.internalLinkMaxPosts, 425);
+  assert.equal(result.settings.publishStatus, 'future');
+  assert.deepEqual(result.settings.futureIntegration, { mode: 'keep-me' });
+  assert.equal(result.settings.featureFlags.contentCalendar, true);
+  assert.equal(result.settings.featureFlags.futureFlag, true);
+  assert.equal(migrateSettings(result.settings).changed, false);
+});
+
+test('renderer uses accessible app confirmation dialogs instead of native prompts', () => {
+  const sourceFiles = fs.readdirSync(path.join(__dirname, '..', 'src', 'components'))
+    .filter((name) => name.endsWith('.jsx'))
+    .map((name) => fs.readFileSync(path.join(__dirname, '..', 'src', 'components', name), 'utf8'));
+  const dialogSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'ConfirmDialog.jsx'), 'utf8');
+
+  assert.equal(sourceFiles.some((source) => source.includes('window.confirm')), false);
+  assert.match(dialogSource, /role="alertdialog"/);
+  assert.match(dialogSource, /aria-modal="true"/);
+  assert.match(dialogSource, /event\.key === "Escape"/);
 });
 
 test('image ratio selection keeps supported purposes and reports closest substitutions', () => {

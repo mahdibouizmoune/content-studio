@@ -1,6 +1,7 @@
 import { Ban, Check, Clock3, Pause, Play, Plus, RefreshCw, RotateCcw, Save, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import SectionHeader from "@/components/SectionHeader";
+import { useConfirmDialog } from "@/components/ConfirmDialog";
 import { Button, EmptyState } from "@/components/ui";
 import { electronAPI, isElectronApp } from "@/lib/electron";
 import {
@@ -87,6 +88,7 @@ function OutlineReviewCard({ article, busy, onSave, onApprove, onRegenerate, onC
 }
 
 export default function Queue({ articles, settings, saveSettings, refreshArticles, setActiveScreen, setArticlesWorkflowStage, embedded = false, rowStatusFilter = "all" }) {
+  const confirmAction = useConfirmDialog();
   const [running, setRunning] = useState(false);
   const [paused, setPaused] = useState(false);
   const [progress, setProgress] = useState("");
@@ -776,7 +778,11 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
       cost
       && warningLimit > 0
       && cost.estimatedCost > warningLimit
-      && !window.confirm(`Approximate batch cost is ${formatUsd(cost.estimatedCost)}. Continue?`)
+      && !await confirmAction({
+        title: "Batch cost warning",
+        message: `Approximate batch cost is ${formatUsd(cost.estimatedCost)}. Continue?`,
+        confirmLabel: "Continue"
+      })
     ) return;
     runningRef.current = true;
     cancelRequestedRef.current = false;
@@ -877,7 +883,12 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
   }
 
   async function clearErrors() {
-    if (!failed.length || !window.confirm(`Delete ${failed.length} errored article${failed.length === 1 ? "" : "s"} from local storage?`)) return;
+    if (!failed.length || !await confirmAction({
+      title: "Clear errored articles",
+      message: `Delete ${failed.length} errored article${failed.length === 1 ? "" : "s"} from local storage?`,
+      confirmLabel: "Delete",
+      tone: "danger"
+    })) return;
     for (const article of failed) {
       await electronAPI.deleteArticle(article.id);
     }

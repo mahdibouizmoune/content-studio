@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Clipboard, FolderOpen, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui";
+import { useConfirmDialog } from "@/components/ConfirmDialog";
 import { electronAPI } from "@/lib/electron";
 import { sanitizeErrorDetails } from "@/lib/sanitizeError.mjs";
 
@@ -16,6 +17,7 @@ const connectionLabels = {
 };
 
 export default function Diagnostics() {
+  const confirmAction = useConfirmDialog();
   const [diagnostics, setDiagnostics] = useState(null);
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState("");
@@ -48,7 +50,12 @@ export default function Diagnostics() {
   }
 
   async function restoreBackup() {
-    if (!window.confirm("Restore the latest valid workspace backup? The current workspace will be backed up first.")) return;
+    if (!await confirmAction({
+      title: "Restore latest backup",
+      message: "The current workspace will be backed up first, then replaced with the latest valid backup.",
+      confirmLabel: "Restore Backup",
+      tone: "danger"
+    })) return;
     setBusy("restore");
     const result = await electronAPI.restoreLatestWorkspaceBackup();
     if (result?.success) window.location.reload();

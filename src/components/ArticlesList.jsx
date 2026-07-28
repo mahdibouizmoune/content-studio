@@ -1,6 +1,7 @@
 import { Calendar, Filter, Grid3X3, Image as ImageIcon, Link2, List, Send, Search, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
 import ArticleEditor from "@/components/ArticleEditor";
+import { useConfirmDialog } from "@/components/ConfirmDialog";
 import SectionHeader from "@/components/SectionHeader";
 import { Button, EmptyState, inputClass } from "@/components/ui";
 import { electronAPI } from "@/lib/electron";
@@ -56,6 +57,7 @@ function articleImageSrc(article) {
 }
 
 export default function ArticlesList({ articles, settings, saveSettings, refreshArticles, embedded = false, publicationFilter = "all" }) {
+  const confirmAction = useConfirmDialog();
   const [query, setQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState("all");
   const [view, setView] = useState("list");
@@ -81,7 +83,12 @@ export default function ArticlesList({ articles, settings, saveSettings, refresh
   }, [completed, query, typeFilter, publicationFilter]);
 
   async function remove(article) {
-    if (!window.confirm(`Delete "${article.generatedTitle || article.title}"?`)) return;
+    if (!await confirmAction({
+      title: "Delete article",
+      message: `Delete "${article.generatedTitle || article.title}" from local storage?`,
+      confirmLabel: "Delete",
+      tone: "danger"
+    })) return;
     await electronAPI.deleteArticle(article.id);
     setSelectedIds((current) => current.filter((id) => id !== article.id));
     if (selected?.id === article.id) setSelected(null);
@@ -111,7 +118,11 @@ export default function ArticlesList({ articles, settings, saveSettings, refresh
       setBulkStatus("Select at least one completed article.");
       return;
     }
-    if (!window.confirm(`Publish ${selectedArticles.length} article${selectedArticles.length === 1 ? "" : "s"} to ${bulkSite.name || bulkSite.url}?`)) return;
+    if (!await confirmAction({
+      title: "Publish selected articles",
+      message: `Publish ${selectedArticles.length} article${selectedArticles.length === 1 ? "" : "s"} to ${bulkSite.name || bulkSite.url}?`,
+      confirmLabel: "Publish"
+    })) return;
     setBulkWorking("publish");
     setBulkProgress({ active: true, current: 0, total: selectedArticles.length, label: "Starting WordPress publishing..." });
 
@@ -222,7 +233,12 @@ export default function ArticlesList({ articles, settings, saveSettings, refresh
       setBulkStatus("Select at least one completed article.");
       return;
     }
-    if (!window.confirm(`Delete ${selectedArticles.length} selected article${selectedArticles.length === 1 ? "" : "s"}?`)) return;
+    if (!await confirmAction({
+      title: "Delete selected articles",
+      message: `Delete ${selectedArticles.length} selected article${selectedArticles.length === 1 ? "" : "s"} from local storage?`,
+      confirmLabel: "Delete",
+      tone: "danger"
+    })) return;
     for (const article of selectedArticles) {
       await electronAPI.deleteArticle(article.id);
     }
@@ -238,7 +254,12 @@ export default function ArticlesList({ articles, settings, saveSettings, refresh
       setBulkStatus("No published articles to clear.");
       return;
     }
-    if (!window.confirm(`Clear ${published.length} published article${published.length === 1 ? "" : "s"} from the local completed list? This does not delete them from WordPress.`)) return;
+    if (!await confirmAction({
+      title: "Clear published articles",
+      message: `Clear ${published.length} published article${published.length === 1 ? "" : "s"} from the local completed list? This does not delete them from WordPress.`,
+      confirmLabel: "Clear",
+      tone: "danger"
+    })) return;
     for (const article of published) {
       await electronAPI.deleteArticle(article.id);
     }

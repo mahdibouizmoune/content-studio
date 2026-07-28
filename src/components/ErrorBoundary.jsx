@@ -1,8 +1,29 @@
 import { Component } from "react";
 import { Clipboard, FileText, RotateCcw, Undo2 } from "lucide-react";
 import { Button } from "@/components/ui";
+import { useConfirmDialog } from "@/components/ConfirmDialog";
 import { electronAPI } from "@/lib/electron";
 import { buildSanitizedErrorReport } from "@/lib/sanitizeError.mjs";
+
+function RestoreWorkspaceButton({ onRestore }) {
+  const confirmAction = useConfirmDialog();
+
+  async function confirmRestore() {
+    const confirmed = await confirmAction({
+      title: "Restore latest backup",
+      message: "A safety backup of the current workspace will be created first.",
+      confirmLabel: "Restore Backup",
+      tone: "danger"
+    });
+    if (confirmed) onRestore();
+  }
+
+  return (
+    <Button variant="danger" onClick={confirmRestore}>
+      <RotateCcw className="h-4 w-4" />Restore Latest Backup
+    </Button>
+  );
+}
 
 export default class ErrorBoundary extends Component {
   constructor(props) {
@@ -51,7 +72,6 @@ export default class ErrorBoundary extends Component {
   };
 
   restoreBackup = async () => {
-    if (!window.confirm("Restore the latest valid workspace backup? A safety backup of the current workspace will be created first.")) return;
     const result = await electronAPI.restoreLatestWorkspaceBackup?.();
     if (!result?.success) {
       this.setState({ status: result?.error || "Could not restore the workspace backup." });
@@ -76,7 +96,7 @@ export default class ErrorBoundary extends Component {
             <Button variant="secondary" onClick={this.copyReport}><Clipboard className="h-4 w-4" />Copy Error Details</Button>
             <Button variant="secondary" onClick={() => electronAPI.openLogsFolder?.()}><FileText className="h-4 w-4" />Open Logs Folder</Button>
             {this.state.backupAvailable ? (
-              <Button variant="danger" onClick={this.restoreBackup}><RotateCcw className="h-4 w-4" />Restore Latest Backup</Button>
+              <RestoreWorkspaceButton onRestore={this.restoreBackup} />
             ) : null}
           </div>
           {this.state.status ? <div className="mt-4 rounded-md bg-slate-100 px-3 py-2 text-sm font-bold text-slate-700">{this.state.status}</div> : null}

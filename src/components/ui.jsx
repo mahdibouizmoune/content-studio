@@ -1,4 +1,6 @@
-export function Button({ variant = "primary", className = "", ...props }) {
+import { forwardRef } from "react";
+
+export const Button = forwardRef(function Button({ variant = "primary", className = "", ...props }, ref) {
   const variants = {
     primary: "bg-gradient-to-r from-indigo-600 via-violet-600 to-purple-600 text-white shadow-sm shadow-violet-500/20 hover:from-indigo-500 hover:via-violet-500 hover:to-purple-500",
     secondary: "bg-white text-slate-700 ring-1 ring-slate-200 shadow-sm hover:bg-slate-50 hover:ring-slate-300",
@@ -8,12 +10,13 @@ export function Button({ variant = "primary", className = "", ...props }) {
   };
   return (
     <button
+      ref={ref}
       type="button"
       className={`inline-flex min-h-[42px] items-center justify-center gap-2 rounded-md px-4 py-2.5 text-sm font-bold transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${variants[variant]} ${className}`}
       {...props}
     />
   );
-}
+});
 
 export function Field({ label, hint, children }) {
   return (

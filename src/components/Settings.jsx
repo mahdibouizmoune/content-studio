@@ -25,6 +25,7 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import SectionHeader from "@/components/SectionHeader";
+import { useConfirmDialog } from "@/components/ConfirmDialog";
 import Diagnostics from "@/components/Diagnostics";
 import { Button, Field, inputClass } from "@/components/ui";
 import { electronAPI } from "@/lib/electron";
@@ -104,6 +105,7 @@ function RadioCards({ value, onChange, items }) {
 }
 
 export default function Settings({ settings, saveSettings, refreshArticles, setActiveScreen, initialOpenSection = "general" }) {
+  const confirmAction = useConfirmDialog();
   const [draft, setDraft] = useState(settings);
   const [open, setOpen] = useState(initialOpenSection || "general");
   const [status, setStatus] = useState("");
@@ -500,7 +502,12 @@ export default function Settings({ settings, saveSettings, refreshArticles, setA
   }
 
   async function importArticles() {
-    if (!window.confirm("Importing replaces the current saved article list. Continue?")) return;
+    if (!await confirmAction({
+      title: "Replace saved articles",
+      message: "Importing replaces the current saved article list. A recovery backup is recommended first.",
+      confirmLabel: "Import and Replace",
+      tone: "danger"
+    })) return;
     const result = await electronAPI.importArticles();
     if (result?.success) {
       setStatus(`Imported ${result.count} articles.`);

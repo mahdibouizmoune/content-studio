@@ -1,6 +1,7 @@
 import { AlertTriangle, Link2, Plus, Search, Sparkles } from "lucide-react";
 import { useMemo, useState } from "react";
 import SectionHeader from "@/components/SectionHeader";
+import { useConfirmDialog } from "@/components/ConfirmDialog";
 import { Button, EmptyState, Field, inputClass } from "@/components/ui";
 import { electronAPI } from "@/lib/electron";
 import { buildClusterPlan, detectCannibalization } from "@/lib/contentPlanning";
@@ -8,6 +9,7 @@ import { buildSmartArticleDefaults } from "@/lib/smartContentEngine";
 import { resolveArticleGenerationSettings } from "@/lib/articleGenerationSettings.mjs";
 
 export default function ClusterPlanner({ articles, settings, refreshArticles, setActiveScreen, setArticlesWorkflowStage }) {
+  const confirmAction = useConfirmDialog();
   const [seedTopic, setSeedTopic] = useState("");
   const [count, setCount] = useState(10);
   const [plan, setPlan] = useState([]);
@@ -30,7 +32,11 @@ export default function ClusterPlanner({ articles, settings, refreshArticles, se
 
   async function addClusterToQueue() {
     if (!plan.length) return;
-    if (warnings.length && !window.confirm(`${warnings.length} article idea${warnings.length === 1 ? "" : "s"} may overlap existing content. Add anyway?`)) return;
+    if (warnings.length && !await confirmAction({
+      title: "Possible content overlap",
+      message: `${warnings.length} article idea${warnings.length === 1 ? "" : "s"} may overlap existing content.`,
+      confirmLabel: "Add Anyway"
+    })) return;
     setWorking(true);
     try {
       const now = Date.now();

@@ -1,6 +1,7 @@
 import { Clipboard, Download, Image as ImageIcon, Link2, Pause, Play, RefreshCw, Save, Send, Sparkles, Trash2, Upload, UploadCloud } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import SectionHeader from "@/components/SectionHeader";
+import { useConfirmDialog } from "@/components/ConfirmDialog";
 import { Button, EmptyState, Field, inputClass } from "@/components/ui";
 import { electronAPI } from "@/lib/electron";
 import { scoreSmartBoard, smartPinSignals } from "@/lib/smartContentEngine";
@@ -415,6 +416,7 @@ function pinQuality(pin = {}, allPins = [], boardNames = []) {
 }
 
 export default function PinCreatorView({ settings }) {
+  const confirmAction = useConfirmDialog();
   const [urlText, setUrlText] = useState("");
   const [pins, setPins] = useState([]);
   const [selectedStyle, setSelectedStyle] = useState("custom-ingredient-closeup");
@@ -771,8 +773,13 @@ export default function PinCreatorView({ settings }) {
     savePins(next, { debounce: true });
   }
 
-  function clearPins() {
-    if (!window.confirm("Clear all Pin Creator items?")) return;
+  async function clearPins() {
+    if (!await confirmAction({
+      title: "Clear Pin Creator",
+      message: "All saved Pin Creator items will be removed from local storage.",
+      confirmLabel: "Clear All",
+      tone: "danger"
+    })) return;
     savePins([]);
     setCsvOpen(false);
     setStatus("Pin Creator cleared.");
