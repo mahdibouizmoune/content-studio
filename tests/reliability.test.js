@@ -75,6 +75,7 @@ const { ratioToDimensions, resolveImageRatio } = require('../electron/image-rati
 const { calculateEstimatedCost } = require('../electron/cost-estimation');
 const { buildWordPressPostPayload } = require('../electron/wordpress-payload');
 const { connectionStatus, sanitizeDiagnosticReport } = require('../electron/diagnostics');
+const { normalizeBatchImportRows } = require('../electron/article-import');
 
 test('transient retry policy retries recoverable network failures only', async () => {
   let calls = 0;
@@ -112,6 +113,79 @@ test('transient retry policy does not retry authentication failures', async () =
     /Unauthorized/
   );
   assert.equal(calls, 1);
+});
+
+test('batch article CSV rows normalize aliases and report missing titles', () => {
+  const result = normalizeBatchImportRows([
+    {
+      'Article Title': 'Easy Lemon Chicken',
+      'Focus Keyword': 'lemon chicken recipe',
+      'Related Keywords': 'weeknight chicken, one pan dinner',
+      Intent: 'Commercial',
+      Type: 'Listicle',
+      'Project Preset': 'Recipe Traffic - Weeknight SEO',
+      Length: '1400-1800',
+      'Brand Voice': 'Friendly Recipe Blogger',
+      'WordPress Site': 'Gourmet Gather',
+      'WordPress Category': 'Dinner',
+      Status: 'scheduled',
+      Date: '2026-08-10T12:00'
+    },
+    { Title: '' }
+  ]);
+
+  assert.equal(result.rows[0].title, 'Easy Lemon Chicken');
+  assert.equal(result.rows[0].primaryKeyword, 'lemon chicken recipe');
+  assert.equal(result.rows[0].contentType, 'listicle');
+  assert.equal(result.rows[0].publicationPreference, 'future');
+  assert.equal(result.rows[0].selected, true);
+  assert.equal(result.rows[1].selected, false);
+  assert.deepEqual(result.errors, [{ row: 3, message: 'Title is required.' }]);
+});
+
+test('batch import resolves row-specific presets, sites, categories, and schedules', async () => {
+  const {
+    duplicateImportIds,
+    resolveImportRow,
+    validateImportRow
+  } = await import('../src/lib/batchArticleImport.mjs');
+  const settings = {
+    projectPresets: [{ id: 'recipe-preset', name: 'Recipe SEO', wordpressSiteId: 'site-1', wordpressCategoryId: '7' }],
+    brandVoices: [{ id: 'voice-1', name: 'Recipe Expert' }],
+    wordpressSites: [{
+      id: 'site-1',
+      name: 'Gourmet Gather',
+      url: 'https://gourmetgather.com',
+      categories: [{ id: 7, name: 'Dinner', slug: 'dinner' }]
+    }]
+  };
+  const scheduled = resolveImportRow({
+    title: 'Lemon Chicken',
+    preset: 'Recipe SEO',
+    brandVoice: 'Recipe Expert',
+    site: 'Gourmet Gather',
+    category: 'dinner',
+    publicationPreference: 'future',
+    schedule: '2099-08-10T12:00'
+  }, settings);
+
+  assert.equal(scheduled.projectPresetId, 'recipe-preset');
+  assert.equal(scheduled.wordpressSiteId, 'site-1');
+  assert.equal(scheduled.wordpressCategoryId, 7);
+  assert.equal(scheduled.brandVoiceId, 'voice-1');
+  assert.match(scheduled.scheduledAt, /^2099-08-10T/);
+  assert.deepEqual(validateImportRow({ title: '', publicationPreference: 'future', schedule: '' }), [
+    'Title is required.',
+    'A valid schedule is required.'
+  ]);
+  assert.deepEqual(
+    [...duplicateImportIds([
+      { id: 'a', title: 'Lemon Chicken' },
+      { id: 'b', title: ' lemon chicken ' },
+      { id: 'c', title: 'Meal Prep Bowls' }
+    ])].sort(),
+    ['a', 'b']
+  );
 });
 
 test('article publication status requires a confirmed public publish', async () => {

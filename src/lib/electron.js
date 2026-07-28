@@ -482,7 +482,49 @@ function makeMockApi() {
       return { success: true };
     },
     async importTitlesCsv() {
-      return { success: false };
+      return {
+        success: true,
+        fileName: "article-import-preview.csv",
+        errors: [],
+        titles: ["Easy Lemon Chicken Recipe", "Healthy Meal Prep Bowls"],
+        rows: [
+          {
+            id: "import-1",
+            selected: true,
+            title: "Easy Lemon Chicken Recipe",
+            primaryKeyword: "easy lemon chicken",
+            secondaryKeywords: "one pan chicken, weeknight dinner",
+            searchIntent: "informational",
+            contentType: "article",
+            preset: "preset-weeknight-recipe-seo",
+            articleLength: "1400-1800",
+            brandVoice: "voice-recipe-friendly",
+            site: "",
+            category: "",
+            publicationPreference: "draft",
+            schedule: ""
+          },
+          {
+            id: "import-2",
+            selected: true,
+            title: "Healthy Meal Prep Bowls",
+            primaryKeyword: "healthy meal prep bowls",
+            secondaryKeywords: "lunch prep, high protein meals",
+            searchIntent: "commercial",
+            contentType: "listicle",
+            preset: "",
+            articleLength: "900-1200",
+            brandVoice: "",
+            site: "",
+            category: "",
+            publicationPreference: "publish",
+            schedule: ""
+          }
+        ]
+      };
+    },
+    async downloadSampleArticleCsv() {
+      return { success: true, filePath: "content-studio-article-import-sample.csv" };
     },
     async selectWatermarkImage() {
       return null;

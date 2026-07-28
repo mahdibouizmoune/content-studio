@@ -88,6 +88,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   selectWatermarkImage: () => ipcRenderer.invoke('select-watermark-image'),
   selectArticleImage: () => ipcRenderer.invoke('select-article-image'),
   importTitlesCsv: () => ipcRenderer.invoke('import-titles-csv'),
+  downloadSampleArticleCsv: () => ipcRenderer.invoke('download-sample-article-csv'),
   createPinterestPin: (params) => ipcRenderer.invoke('create-pinterest-pin', params),
   exportRepurposePacks: (params) => ipcRenderer.invoke('export-repurpose-packs', params),
   prepareRepurposeGhlRows: (params) => ipcRenderer.invoke('prepare-repurpose-ghl-rows', params),
