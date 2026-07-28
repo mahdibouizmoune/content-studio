@@ -126,7 +126,7 @@ function RadioCards({ value, onChange, items }) {
   );
 }
 
-export default function Settings({ settings, saveSettings, refreshArticles, initialOpenSection = "general" }) {
+export default function Settings({ settings, saveSettings, refreshArticles, setActiveScreen, initialOpenSection = "general" }) {
   const [draft, setDraft] = useState(settings);
   const [open, setOpen] = useState(initialOpenSection || "general");
   const [status, setStatus] = useState("");
@@ -1328,6 +1328,7 @@ export default function Settings({ settings, saveSettings, refreshArticles, init
             <Button variant="secondary" onClick={createRecoveryBackup}><Save className="h-4 w-4" />Create Recovery Backup</Button>
             <Button variant="secondary" onClick={() => electronAPI.openWorkspaceBackups?.()}><FolderOpen className="h-4 w-4" />Open Backup Folder</Button>
             <Button variant="secondary" onClick={() => electronAPI.openLogFile()}><FolderOpen className="h-4 w-4" />Open Log File</Button>
+            <Button variant="secondary" onClick={() => setActiveScreen("onboarding")}><Sparkles className="h-4 w-4" />Open Setup Checklist</Button>
           </div>
         </SettingPanel>
 

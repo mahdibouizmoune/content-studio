@@ -1,5 +1,6 @@
-import { AlertTriangle, FileUp, Plus } from "lucide-react";
+import { AlertTriangle, Download, FileUp, Plus } from "lucide-react";
 import { useMemo, useState } from "react";
+import BatchImportPreview from "@/components/BatchImportPreview";
 import SectionHeader from "@/components/SectionHeader";
 import { Button, Field, inputClass } from "@/components/ui";
 import { electronAPI } from "@/lib/electron";
@@ -7,6 +8,7 @@ import { detectCannibalization } from "@/lib/contentPlanning";
 import { buildSmartArticleDefaults, inferSmartIntent } from "@/lib/smartContentEngine";
 import { resolveArticleGenerationSettings } from "@/lib/articleGenerationSettings.mjs";
 import { buildArticleBrief } from "@/lib/articleBrief.mjs";
+import { duplicateImportIds, resolveImportRow, validateImportRow } from "@/lib/batchArticleImport.mjs";
 
 function promptName(mode, category) {
   if (mode === "article") return "Classic article prompt";
@@ -44,6 +46,9 @@ export default function AddToQueue({ mode, settings, articles, refreshArticles, 
   const [competitorNotes, setCompetitorNotes] = useState("");
   const [brandVoiceId, setBrandVoiceId] = useState("");
   const [projectPresetId, setProjectPresetId] = useState(settings.projectPresets?.[0]?.id || "preset-default-old-way");
+  const [importRows, setImportRows] = useState([]);
+  const [importErrors, setImportErrors] = useState([]);
+  const [submitting, setSubmitting] = useState(false);
   const lines = useMemo(() => titles.split(/\r?\n/).map((line) => line.trim()).filter(Boolean), [titles]);
   const duplicateWarnings = useMemo(() => {
     return lines.map((line) => {
@@ -80,106 +85,151 @@ export default function AddToQueue({ mode, settings, articles, refreshArticles, 
 
   async function importCsv() {
     const result = await electronAPI.importTitlesCsv();
-    if (result?.success && result.titles?.length) {
-      setTitles((current) => [result.titles.join("\n"), current].filter(Boolean).join("\n"));
-      setMessage(`Imported ${result.titles.length} title${result.titles.length === 1 ? "" : "s"}.`);
+    if (result?.success && result.rows?.length) {
+      setImportRows(result.rows);
+      setImportErrors(result.errors || []);
+      setMessage(`Loaded ${result.rows.length} row${result.rows.length === 1 ? "" : "s"} from ${result.fileName || "the import file"}.`);
+    }
+  }
+
+  async function downloadSample() {
+    const result = await electronAPI.downloadSampleArticleCsv();
+    if (result?.success) setMessage(`Saved sample CSV to ${result.filePath}.`);
+  }
+
+  async function addRowsToQueue(rowsToAdd) {
+    if (!rowsToAdd.length || submitting) return;
+    const duplicateIds = duplicateImportIds(rowsToAdd);
+    const invalidRows = rowsToAdd.filter((row) => validateImportRow(row).length);
+    if (invalidRows.length) {
+      setMessage(`Fix ${invalidRows.length} invalid row${invalidRows.length === 1 ? "" : "s"} before adding this batch.`);
+      return;
+    }
+    const warningCount = rowsToAdd.filter((row) => duplicateIds.has(row.id) || detectCannibalization(row.title, articles || [], { threshold: 62 }).length).length;
+    if (warningCount && !window.confirm(`${warningCount} selected row${warningCount === 1 ? "" : "s"} may duplicate or cannibalize content. Add anyway?`)) return;
+    setSubmitting(true);
+    const now = Date.now();
+    try {
+      for (const [index, row] of rowsToAdd.entries()) {
+        const { title, sourceUrl } = cleanTitleFromInput(row.title);
+        const rowSettings = resolveImportRow(row, settings, { projectPresetId, brandVoiceId });
+        const rowMode = row.contentType || mode;
+        const rowBrief = {
+          targetKeyword: row.primaryKeyword || targetKeyword,
+          primaryKeyword: row.primaryKeyword || targetKeyword,
+          secondaryKeywords: row.secondaryKeywords || secondaryKeywords,
+          searchIntent: row.searchIntent || searchIntent,
+          audience,
+          competitorNotes
+        };
+        const articleOverrides = {
+          title,
+          type: rowMode,
+          projectPresetId: rowSettings.projectPresetId,
+          brandVoiceId: rowSettings.brandVoiceId,
+          wordpressSiteId: rowSettings.wordpressSiteId,
+          wordpressCategoryId: rowSettings.wordpressCategoryId,
+          publishStatus: rowSettings.publishStatusOverride,
+          publicationPreference: rowSettings.publishStatusOverride,
+          seoBrief: rowBrief,
+          ...(rowSettings.articleLength ? { articleLength: rowSettings.articleLength, articleLengthSource: "custom" } : {})
+        };
+        const smart = buildSmartArticleDefaults({
+          title,
+          mode: rowMode,
+          settings,
+          preset: rowSettings.preset,
+          manual: {
+            ...rowBrief,
+            brandVoiceId: rowSettings.brandVoiceId
+          }
+        });
+        const resolved = resolveArticleGenerationSettings({
+          article: articleOverrides,
+          preset: rowSettings.preset,
+          smartRecommendations: smart,
+          globalSettings: settings
+        });
+        const category = rowMode === "listicle" ? (settings.listicleCategory || smart.category) : smart.category;
+        const conflicts = detectCannibalization(title, articles || [], { threshold: 62 });
+        const articleBrief = buildArticleBrief({
+          article: { title, type: rowMode, category, seoBrief: resolved.seoBrief },
+          resolvedSettings: resolved,
+          cannibalizationConflicts: conflicts
+        });
+        await electronAPI.saveArticle({
+          id: `${now}-${index}`,
+          title,
+          sourceUrl,
+          generatedTitle: null,
+          content: "",
+          type: rowMode,
+          category,
+          workflowStatus: "queued",
+          projectPresetId: rowSettings.projectPresetId,
+          wordpressSiteId: rowSettings.wordpressSiteId || resolved.wordpressSiteId || "",
+          wordpressCategoryId: rowSettings.wordpressCategoryId || resolved.wordpressCategoryId || "",
+          brandVoiceId: resolved.brandVoiceId,
+          articleLength: resolved.articleLength,
+          articleLengthSource: resolved.articleLengthSource,
+          publishStatusOverride: rowSettings.publishStatusOverride,
+          scheduledAt: rowSettings.scheduledAt,
+          recipeCardEnabled: resolved.recipeCardEnabled,
+          smartIntentId: smart.smartIntentId,
+          smartIntentLabel: smart.smartIntentLabel,
+          smartPinStyle: smart.smartPinStyle,
+          requireOutlineApproval: resolved.requireOutlineApproval,
+          outlineApproved: resolved.outlineApproved,
+          outline: "",
+          seoBrief: resolved.seoBrief,
+          articleBrief,
+          metaTitle: "",
+          metaDescription: "",
+          slug: "",
+          excerpt: "",
+          tags: [],
+          seoScore: null,
+          seoChecks: [],
+          publishHistory: [],
+          featuredImageAlt: "",
+          featuredImage: "",
+          featuredImageLocalPath: "",
+          featuredImagePrompt: "",
+          images: [],
+          queueStatus: "pending",
+          errorMessage: ""
+        });
+      }
+      setTitles("");
+      setImportRows([]);
+      setImportErrors([]);
+      setMessage(`Added ${rowsToAdd.length} item${rowsToAdd.length === 1 ? "" : "s"} to the queue.`);
+      await refreshArticles();
+      setArticlesWorkflowStage?.("queued");
+      setActiveScreen("articles");
+    } finally {
+      setSubmitting(false);
     }
   }
 
   async function addToQueue() {
-    if (!lines.length) return;
-    if (duplicateWarnings.length && !window.confirm(`${duplicateWarnings.length} title${duplicateWarnings.length === 1 ? "" : "s"} may duplicate or cannibalize existing content. Add anyway?`)) return;
-    const now = Date.now();
-    const selectedPreset = settings.projectPresets?.find((item) => item.id === projectPresetId);
-    for (const [index, rawTitle] of lines.entries()) {
-      const { title, sourceUrl } = cleanTitleFromInput(rawTitle);
-      const smart = buildSmartArticleDefaults({
-        title,
-        mode,
-        settings,
-        preset: selectedPreset || {},
-        manual: {
-          targetKeyword,
-          secondaryKeywords,
-          searchIntent,
-          audience,
-          competitorNotes,
-          brandVoiceId
-        }
-      });
-      const resolved = resolveArticleGenerationSettings({
-        article: {
-          type: mode,
-          projectPresetId,
-          brandVoiceId,
-          seoBrief: {
-            targetKeyword,
-            secondaryKeywords,
-            searchIntent,
-            audience,
-            competitorNotes
-          }
-        },
-        preset: selectedPreset || {},
-        smartRecommendations: smart,
-        globalSettings: settings
-      });
-      const articleBrief = buildArticleBrief({
-        article: {
-          title,
-          type: mode,
-          category: mode === "listicle" ? (settings.listicleCategory || smart.category) : smart.category,
-          seoBrief: resolved.seoBrief
-        },
-        resolvedSettings: resolved,
-        cannibalizationConflicts: detectCannibalization(title, articles || [], { threshold: 62 })
-      });
-      await electronAPI.saveArticle({
-        id: `${now}-${index}`,
-        title,
-        sourceUrl,
-        generatedTitle: null,
-        content: "",
-        type: mode,
-        category: mode === "listicle" ? (settings.listicleCategory || smart.category) : smart.category,
-        workflowStatus: "queued",
-        projectPresetId,
-        wordpressSiteId: resolved.wordpressSiteId || "",
-        wordpressCategoryId: resolved.wordpressCategoryId || "",
-        brandVoiceId: resolved.brandVoiceId,
-        articleLength: resolved.articleLength,
-        articleLengthSource: resolved.articleLengthSource,
-        recipeCardEnabled: resolved.recipeCardEnabled,
-        smartIntentId: smart.smartIntentId,
-        smartIntentLabel: smart.smartIntentLabel,
-        smartPinStyle: smart.smartPinStyle,
-        requireOutlineApproval: resolved.requireOutlineApproval,
-        outlineApproved: resolved.outlineApproved,
-        outline: "",
-        seoBrief: resolved.seoBrief,
-        articleBrief,
-        metaTitle: "",
-        metaDescription: "",
-        slug: "",
-        excerpt: "",
-        tags: [],
-        seoScore: null,
-        seoChecks: [],
-        publishHistory: [],
-        featuredImageAlt: "",
-        featuredImage: "",
-        featuredImageLocalPath: "",
-        featuredImagePrompt: "",
-        images: [],
-        queueStatus: "pending",
-        errorMessage: ""
-      });
-    }
-    setTitles("");
-    setMessage(`Added ${lines.length} ${mode === "listicle" ? "listicle" : "article"}${lines.length === 1 ? "" : "s"} to the queue.`);
-    await refreshArticles();
-    setArticlesWorkflowStage?.("queued");
-    setActiveScreen("articles");
+    const manualRows = lines.map((rawTitle, index) => ({
+      id: `manual-${index}`,
+      selected: true,
+      title: rawTitle,
+      primaryKeyword: targetKeyword,
+      secondaryKeywords,
+      searchIntent,
+      contentType: mode,
+      preset: projectPresetId,
+      articleLength: "",
+      brandVoice: brandVoiceId,
+      site: "",
+      category: "",
+      publicationPreference: settings.publishStatus || "publish",
+      schedule: ""
+    }));
+    await addRowsToQueue(manualRows);
   }
 
   return (
@@ -210,8 +260,9 @@ export default function AddToQueue({ mode, settings, articles, refreshArticles, 
         <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <p className="text-sm font-medium text-ink/60">{lines.length} title{lines.length === 1 ? "" : "s"} ready</p>
           <div className="flex flex-wrap gap-2">
-            <Button variant="secondary" onClick={importCsv}><FileUp className="h-4 w-4" />Import CSV</Button>
-            <Button onClick={addToQueue} disabled={!lines.length}><Plus className="h-4 w-4" />Add to Queue</Button>
+            <Button variant="secondary" onClick={downloadSample} disabled={submitting}><Download className="h-4 w-4" />Sample CSV</Button>
+            <Button variant="secondary" onClick={importCsv} disabled={submitting}><FileUp className="h-4 w-4" />Import CSV</Button>
+            <Button onClick={addToQueue} disabled={!lines.length || submitting}><Plus className="h-4 w-4" />{submitting ? "Adding..." : "Add to Queue"}</Button>
           </div>
         </div>
         {message ? <div className="mt-4 rounded-md bg-violet-50 px-3 py-2 text-sm font-bold text-violet-700">{message}</div> : null}
@@ -272,6 +323,18 @@ export default function AddToQueue({ mode, settings, articles, refreshArticles, 
         </div>
       </div>
       </div>
+      {importRows.length ? (
+        <BatchImportPreview
+          rows={importRows}
+          settings={settings}
+          articles={articles}
+          errors={importErrors}
+          busy={submitting}
+          onRowsChange={setImportRows}
+          onSubmit={() => addRowsToQueue(importRows.filter((row) => row.selected))}
+          onDownloadSample={downloadSample}
+        />
+      ) : null}
     </section>
   );
 }

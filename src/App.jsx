@@ -25,6 +25,8 @@ const TrendsResearch = lazy(() => import("@/components/TrendsResearch"));
 const ClusterPlanner = lazy(() => import("@/components/ClusterPlanner"));
 const ImageLibrary = lazy(() => import("@/components/ImageLibrary"));
 const PerformanceIntelligence = lazy(() => import("@/components/PerformanceIntelligence"));
+const Connections = lazy(() => import("@/components/Connections"));
+const OnboardingChecklist = lazy(() => import("@/components/OnboardingChecklist"));
 
 const promptDefaults = {
   articlePrompt: DEFAULT_ARTICLE_PROMPT,
@@ -369,11 +371,16 @@ export default function App() {
 
   async function loadSettings() {
     const stored = await electronAPI.getSettings();
-    const filled = fillPromptDefaults(stored);
+    const isFreshInstall = stored.onboardingCompleted === false || Object.keys(stored || {}).length === 0;
+    const defaults = fillPromptDefaults(stored);
+    const filled = !isFreshInstall && stored.onboardingCompleted === undefined
+      ? { ...defaults, onboardingCompleted: true, onboardingMigratedForExistingWorkspace: true }
+      : defaults;
     if (JSON.stringify(filled) !== JSON.stringify(stored)) {
       await electronAPI.saveSettings(filled);
     }
     setSettings(filled);
+    if (filled.onboardingCompleted !== true) setActiveScreen("onboarding");
   }
 
   useEffect(() => {
@@ -447,7 +454,10 @@ export default function App() {
     "cluster-planner": <ClusterPlanner {...screenProps} />,
     "image-library": <ImageLibrary {...screenProps} />,
     performance: <PerformanceIntelligence {...screenProps} />,
-    settings: <Settings {...screenProps} initialOpenSection={settingsSection} />
+    connections: <Connections {...screenProps} />,
+    onboarding: <OnboardingChecklist {...screenProps} />,
+    settings: <Settings {...screenProps} initialOpenSection={settingsSection} />,
+    diagnostics: <Settings {...screenProps} initialOpenSection="diagnostics" />
   };
 
   const screen = screens[activeScreen];

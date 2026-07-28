@@ -92,6 +92,7 @@ const {
 const { auditRecipeHtml } = require('./recipe-seo-audit');
 const { booleanFeatureFlags, connectionStatus } = require('./diagnostics');
 const { buildWordPressPostPayload } = require('./wordpress-payload');
+const { normalizeBatchImportRows } = require('./article-import');
 
 log.initialize();
 log.transports.file.level = 'info';
@@ -2636,6 +2637,7 @@ function initializePinReplicate() {
 
 ipcMain.handle('get-settings', async (event) => {
   let s = store.get('settings', {});
+  const hadStoredSettings = Object.keys(s || {}).length > 0;
   const settingsMigration = migrateSettings(s);
   if (settingsMigration.changed) {
     store.set('settings', settingsMigration.settings);
@@ -2692,6 +2694,7 @@ ipcMain.handle('get-settings', async (event) => {
   const googleClientSecret = decryptSecret(s.googleClientSecret_encrypted || s.googleClientSecret || '');
   const pinterestAnalyticsAccessToken = decryptSecret(s.pinterestAnalyticsAccessToken_encrypted || s.pinterestAnalyticsAccessToken || '');
   const merged = { ...articleSettingsDefaults, ...s };
+  if (!hadStoredSettings && s.onboardingCompleted === undefined) merged.onboardingCompleted = false;
 
   merged.replicateApiToken = replicateApiToken;
   merged.apiToken = replicateApiToken;
@@ -6854,18 +6857,43 @@ ipcMain.handle('import-titles-csv', async () => {
   if (r.canceled || !r.filePaths.length) return { success: false };
   const stat = fs.statSync(r.filePaths[0]);
   if (stat.size > 10 * 1024 * 1024) throw new Error('The title import file is larger than 10 MB.');
-  const text = fs.readFileSync(r.filePaths[0], 'utf8');
-  // Accept: comma-separated, newline-separated, or one-per-line. Strip quotes and headers.
-  const lines = text.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-  // If first line contains "title" header, skip it
-  const titles = (lines[0]?.toLowerCase().includes('title') && !lines[0].match(/\d/) ? lines.slice(1) : lines)
-    .map(line => {
-      // Take first column if CSV
-      const first = line.split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/)[0];
-      return first.replace(/^["']|["']$/g, '').trim();
-    })
-    .filter(Boolean);
-  return { success: true, titles };
+  const text = fs.readFileSync(r.filePaths[0], 'utf8').replace(/^\uFEFF/, '');
+  const extension = path.extname(r.filePaths[0]).toLowerCase();
+  if (extension === '.csv') {
+    const records = parseCsv(text, {
+      columns: true,
+      skip_empty_lines: true,
+      relax_column_count: true,
+      bom: true,
+      trim: true
+    });
+    const normalized = normalizeBatchImportRows(records);
+    return {
+      success: true,
+      titles: normalized.rows.map((row) => row.title).filter(Boolean),
+      rows: normalized.rows,
+      errors: normalized.errors,
+      fileName: path.basename(r.filePaths[0])
+    };
+  }
+  const titles = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const normalized = normalizeBatchImportRows(titles.map((title) => ({ title })));
+  return { success: true, titles, rows: normalized.rows, errors: normalized.errors, fileName: path.basename(r.filePaths[0]) };
+});
+
+ipcMain.handle('download-sample-article-csv', async () => {
+  const result = await dialog.showSaveDialog({
+    title: 'Save Article Import Sample',
+    defaultPath: 'content-studio-article-import-sample.csv',
+    filters: [{ name: 'CSV', extensions: ['csv'] }]
+  });
+  if (result.canceled || !result.filePath) return { success: false, canceled: true };
+  const sample = [
+    'Title,Primary Keyword,Secondary Keywords,Search Intent,Content Type,Preset,Article Length,Brand Voice,Site,Category,Publication Preference,Schedule',
+    '"Easy Lemon Chicken Recipe","easy lemon chicken","one pan chicken, weeknight dinner",informational,article,"Recipe Traffic - Weeknight SEO",1400-1800,"Friendly Recipe Blogger","Gourmet Gather","Dinner",draft,'
+  ].join('\r\n');
+  await fsp.writeFile(result.filePath, sample, 'utf8');
+  return { success: true, filePath: result.filePath };
 });
 
 // Open the log file (useful for users debugging issues)
