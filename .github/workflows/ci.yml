@@ -11,8 +11,13 @@ permissions:
 
 jobs:
   test-and-build:
-    runs-on: windows-latest
+    name: Validate on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
 
     steps:
       - name: Check out source
@@ -26,6 +31,9 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Run lint
+        run: npm run lint
 
       - name: Run reliability tests
         run: npm test
