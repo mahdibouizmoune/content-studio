@@ -28,7 +28,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   importArticles: () => ipcRenderer.invoke('import-articles'),
   createWorkspaceBackup: () => ipcRenderer.invoke('create-workspace-backup'),
   getWorkspaceBackupStatus: () => ipcRenderer.invoke('get-workspace-backup-status'),
+  restoreLatestWorkspaceBackup: () => ipcRenderer.invoke('restore-latest-workspace-backup'),
   openWorkspaceBackups: () => ipcRenderer.invoke('open-workspace-backups'),
+  getDiagnostics: () => ipcRenderer.invoke('get-diagnostics'),
+  clearTemporaryMediaCache: () => ipcRenderer.invoke('clear-temporary-media-cache'),
+  openLogsFolder: () => ipcRenderer.invoke('open-logs-folder'),
 
   // Generation (each takes optional jobKey for cancellation)
   generateArticleOutline: (params) => ipcRenderer.invoke('generate-article-outline', params),

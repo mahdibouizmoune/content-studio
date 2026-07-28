@@ -73,6 +73,8 @@ const {
 const { migrateSettings } = require('../electron/settings-migrations');
 const { ratioToDimensions, resolveImageRatio } = require('../electron/image-ratios');
 const { calculateEstimatedCost } = require('../electron/cost-estimation');
+const { buildWordPressPostPayload } = require('../electron/wordpress-payload');
+const { connectionStatus, sanitizeDiagnosticReport } = require('../electron/diagnostics');
 
 test('transient retry policy retries recoverable network failures only', async () => {
   let calls = 0;
@@ -1556,4 +1558,186 @@ test('WordPress publishing enforces bounded WebP media and responsive attachment
   assert.match(source, /wp-image-\$\{Number\(attachmentId\)\}/);
   assert.match(source, /loading',\s*'lazy'/);
   assert.match(source, /fetchpriority',\s*'low'/);
+});
+
+test('diagnostics report connection presence without exposing stored secrets', () => {
+  const status = connectionStatus({
+    replicateApiToken_encrypted: 'enc:replicate-private-value',
+    ghlApiToken_encrypted: 'enc:ghl-private-value',
+    ghlLocationId: 'location-1',
+    impactAccountSid: 'account-1',
+    impactAuthToken_encrypted: 'enc:impact-private-value',
+    wordpressSites: [{ url: 'https://example.com', apiKey_encrypted: 'enc:wordpress-private-value' }],
+    pinCreator: { imgbbApiKey_encrypted: 'enc:imgbb-private-value' }
+  });
+  const report = sanitizeDiagnosticReport('Authorization: Bearer private-token api_token=private-value');
+
+  assert.equal(status.replicate, true);
+  assert.equal(status.wordpress, true);
+  assert.equal(status.goHighLevel, true);
+  assert.equal(status.impact, true);
+  assert.equal(status.amazon, false);
+  assert.doesNotMatch(JSON.stringify(status), /private-value/);
+  assert.doesNotMatch(report, /private-token|private-value/);
+});
+
+test('renderer error fallback sanitizes credentials and exposes recovery actions', async () => {
+  const { sanitizeErrorDetails } = await import('../src/lib/sanitizeError.mjs');
+  const sanitized = sanitizeErrorDetails(
+    'Bearer secret-token api_token=private-value https://user:password@example.com/path?token=query-secret'
+  );
+  const source = fs.readFileSync(require.resolve('../src/components/ErrorBoundary.jsx'), 'utf8');
+
+  assert.doesNotMatch(sanitized, /secret-token|private-value|password|query-secret/);
+  assert.match(source, /Reload Screen/);
+  assert.match(source, /Return to Articles/);
+  assert.match(source, /Copy Error Details/);
+  assert.match(source, /Open Logs Folder/);
+  assert.match(source, /Restore Latest Backup/);
+});
+
+test('preload exposes explicit IPC methods without a generic renderer escape hatch', () => {
+  const source = fs.readFileSync(require.resolve('../electron/preload.js'), 'utf8');
+  assert.match(source, /contextBridge\.exposeInMainWorld\('electronAPI'/);
+  assert.match(source, /getDiagnostics:\s*\(\)\s*=>\s*ipcRenderer\.invoke\('get-diagnostics'\)/);
+  assert.match(source, /restoreLatestWorkspaceBackup:\s*\(\)\s*=>\s*ipcRenderer\.invoke\('restore-latest-workspace-backup'\)/);
+  assert.doesNotMatch(source, /electronAPI[^]*ipcRenderer\s*[,}]/);
+  assert.doesNotMatch(source, /nodeIntegration\s*:/);
+});
+
+test('WordPress payload creation supports draft, category, slug, and future scheduling', () => {
+  const draft = buildWordPressPostPayload({
+    article: {
+      title: 'Lemon Chicken',
+      slug: 'lemon-chicken',
+      metaDescription: 'Useful recipe description.',
+      wordpressCategoryId: '12',
+      publishStatusOverride: 'draft'
+    },
+    content: '<p>Prepared recipe.</p>',
+    featuredMediaId: 44
+  });
+  assert.deepEqual(draft.payload.categories, [12]);
+  assert.equal(draft.payload.status, 'draft');
+  assert.equal(draft.payload.slug, 'lemon-chicken');
+  assert.equal(draft.payload.featured_media, 44);
+
+  const scheduled = buildWordPressPostPayload({
+    article: {
+      title: 'Scheduled Recipe',
+      publishStatusOverride: 'future',
+      scheduledAt: '2026-08-10T12:00:00.000Z'
+    },
+    now: new Date('2026-08-01T12:00:00.000Z').getTime()
+  });
+  assert.equal(scheduled.payload.status, 'future');
+  assert.equal(scheduled.payload.date_gmt, '2026-08-10T12:00:00.000Z');
+  assert.throws(() => buildWordPressPostPayload({
+    article: {
+      title: 'Past Recipe',
+      publishStatusOverride: 'future',
+      scheduledAt: '2026-07-01T12:00:00.000Z'
+    },
+    now: new Date('2026-08-01T12:00:00.000Z').getTime()
+  }), /valid future publication date/);
+});
+
+test('mocked article workflow reaches review and prepares a WordPress draft without live calls', async () => {
+  const { resolveArticleGenerationSettings } = await import('../src/lib/articleGenerationSettings.mjs');
+  const { buildArticleBrief } = await import('../src/lib/articleBrief.mjs');
+  const { buildMetadata, buildRecipeSchema } = await import('../src/lib/articlePostProcess.mjs');
+  const { buildArticleQualityReport } = await import('../src/lib/articleQuality.mjs');
+  const { normalizeArticleWorkflow } = await import('../src/lib/articleWorkflow.mjs');
+  let liveCalls = 0;
+
+  const queued = {
+    id: 'mock-flow-1',
+    title: 'Easy Lemon Chicken Recipe',
+    workflowStatus: 'queued',
+    queueStatus: 'pending',
+    projectPresetId: 'recipe-review'
+  };
+  const resolved = resolveArticleGenerationSettings({
+    article: queued,
+    preset: {
+      id: 'recipe-review',
+      articleLength: '1400-1800',
+      requireOutlineApproval: true,
+      recipeCardEnabled: true
+    },
+    globalSettings: {
+      articleLength: '900-1200',
+      aiModel: 'gpt5nano',
+      imageModel: 'z-image-turbo'
+    }
+  });
+  const brief = buildArticleBrief({
+    article: queued,
+    resolvedSettings: {
+      ...resolved,
+      primaryKeyword: 'easy lemon chicken recipe',
+      targetAudience: 'Busy home cooks'
+    }
+  });
+  const outline = normalizeArticleOutline(`
+    <h2>Why This Recipe Works</h2>
+    <h2>Ingredients</h2>
+    <h2>Instructions</h2>
+    <h2>Storage and Reheating</h2>
+  `);
+  const content = `
+    <p>Easy lemon chicken is a practical one-pan dinner with clear cooking cues.</p>
+    <h2>Why This Recipe Works</h2><p>The sauce balances lemon, broth, and gentle heat.</p>
+    <h2>Ingredients</h2><p>Use evenly sized chicken pieces for consistent cooking.</p>
+    <h2>Instructions</h2><p>Cook until the center reaches a safe temperature and the sauce lightly coats a spoon.</p>
+    <h2>Storage and Reheating</h2><p>Cool promptly, refrigerate, and reheat gently.</p>
+    <section id="recipe-card" itemscope itemtype="https://schema.org/Recipe">
+      <h2>Recipe Card</h2><h3 itemprop="name">Easy Lemon Chicken</h3>
+      <ul><li><strong>Prep Time:</strong> 10 minutes</li><li><strong>Cook Time:</strong> 20 minutes</li><li><strong>Total Time:</strong> 30 minutes</li><li><strong>Servings:</strong> 4</li></ul>
+      <h3>Ingredients</h3><ul itemprop="recipeIngredient"><li>1 pound chicken</li><li>1 lemon</li><li>1 tablespoon oil</li><li>1 cup broth</li></ul>
+      <h3>Instructions</h3><ol itemprop="recipeInstructions"><li>Heat the pan for 2 minutes.</li><li>Cook chicken until browned and safely done.</li><li>Simmer sauce for 5 minutes until it coats a spoon.</li></ol>
+    </section>`;
+  const generated = {
+    ...queued,
+    articleBrief: brief,
+    outline,
+    outlineApproved: true,
+    content,
+    featuredImage: 'https://example.com/lemon-chicken.webp',
+    featuredImageAlt: 'Lemon chicken served in a skillet',
+    images: [{ url: 'https://example.com/lemon-step.webp', altText: 'Chicken browning in a skillet' }],
+    articleLength: resolved.articleLength,
+    recipeCardEnabled: true
+  };
+  const metadata = buildMetadata(generated, generated.content);
+  const structuredData = buildRecipeSchema({ ...generated, ...metadata });
+  const qualityReport = buildArticleQualityReport({
+    ...generated,
+    ...metadata,
+    structuredData
+  }, { requireFeaturedImage: true });
+  const reviewed = normalizeArticleWorkflow({
+    ...generated,
+    ...metadata,
+    structuredData,
+    qualityReport,
+    workflowStatus: 'needs-review'
+  });
+  const wordpressDraft = buildWordPressPostPayload({
+    article: { ...reviewed, publishStatusOverride: 'draft' },
+    site: { defaultCategoryId: 9 },
+    content: reviewed.content,
+    featuredMediaId: 22
+  });
+
+  assert.equal(liveCalls, 0);
+  assert.equal(resolved.articleLength, '1400-1800');
+  assert.equal(resolved.articleLengthSource, 'preset');
+  assert.equal(outlineSectionCount(outline), 4);
+  assert.equal(reviewed.workflowStatus, 'needs-review');
+  assert.equal(reviewed.queueStatus, 'completed');
+  assert.equal(wordpressDraft.payload.status, 'draft');
+  assert.deepEqual(wordpressDraft.payload.categories, [9]);
+  assert.equal(wordpressDraft.payload.featured_media, 22);
+  assert.match(wordpressDraft.payload.content, /recipe-card/);
 });

@@ -25,6 +25,7 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import SectionHeader from "@/components/SectionHeader";
+import Diagnostics from "@/components/Diagnostics";
 import { Button, Field, inputClass } from "@/components/ui";
 import { electronAPI } from "@/lib/electron";
 import { ARTICLE_SIZE_OPTIONS } from "@/lib/articlePostProcess.mjs";
@@ -1328,6 +1329,10 @@ export default function Settings({ settings, saveSettings, refreshArticles, init
             <Button variant="secondary" onClick={() => electronAPI.openWorkspaceBackups?.()}><FolderOpen className="h-4 w-4" />Open Backup Folder</Button>
             <Button variant="secondary" onClick={() => electronAPI.openLogFile()}><FolderOpen className="h-4 w-4" />Open Log File</Button>
           </div>
+        </SettingPanel>
+
+        <SettingPanel id="diagnostics" open={open} setOpen={setOpen} icon={ShieldCheck} tone="icon-gradient-purple" title="Diagnostics and Support" subtitle="Health, connections, recovery">
+          <Diagnostics />
         </SettingPanel>
 
         {status ? <div className="rounded-md bg-violet-50 px-4 py-3 text-sm font-black text-violet-700 ring-1 ring-violet-100">{status}</div> : null}

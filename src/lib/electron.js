@@ -206,6 +206,31 @@ function makeMockApi() {
     async getWorkspaceBackupStatus() {
       return { success: true, count: 1, filePath: "browser-preview-workspace-backup.json", createdAt: new Date().toISOString(), size: 0 };
     },
+    async restoreLatestWorkspaceBackup() {
+      return { success: false, error: "Workspace restore is available in the desktop app." };
+    },
+    async getDiagnostics() {
+      return {
+        success: true,
+        appVersion: __APP_VERSION__,
+        electronVersion: "browser preview",
+        operatingSystem: navigator.platform || "browser",
+        userDataPath: "Browser local storage",
+        logsPath: "Desktop app only",
+        settingsStorage: { ok: true, path: "Browser local storage" },
+        latestBackup: { available: false },
+        connections: {},
+        settingsSchemaVersion: 1,
+        featureFlags: {},
+        safeStorageAvailable: false
+      };
+    },
+    async clearTemporaryMediaCache() {
+      return { success: true };
+    },
+    async openLogsFolder() {
+      return { success: false, error: "Logs are available in the desktop app." };
+    },
     async openWorkspaceBackups() {
       return { success: true };
     },

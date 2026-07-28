@@ -90,6 +90,8 @@ const {
   summarizeSearchRows
 } = require('./performance-intelligence');
 const { auditRecipeHtml } = require('./recipe-seo-audit');
+const { booleanFeatureFlags, connectionStatus } = require('./diagnostics');
+const { buildWordPressPostPayload } = require('./wordpress-payload');
 
 log.initialize();
 log.transports.file.level = 'info';
@@ -4305,11 +4307,77 @@ ipcMain.handle('get-workspace-backup-status', () => {
   };
 });
 
+ipcMain.handle('restore-latest-workspace-backup', () => {
+  try {
+    const latest = validWorkspaceBackupsNewestFirst()[0];
+    if (!latest) return { success: false, error: 'No valid workspace backup is available.' };
+    const restored = JSON.parse(fs.readFileSync(latest.filePath, 'utf8').replace(/^\uFEFF/, ''));
+    if (!restored || typeof restored !== 'object' || Array.isArray(restored)) {
+      return { success: false, error: 'The latest backup is not a valid workspace.' };
+    }
+    const safetyBackup = createWorkspaceBackupSync('before-restore');
+    store.store = restored;
+    log.warn(`Workspace restored from ${latest.filePath}. Previous state saved to ${safetyBackup || 'no backup available'}.`);
+    return {
+      success: true,
+      restoredFrom: latest.filePath,
+      safetyBackup,
+      requiresReload: true
+    };
+  } catch (error) {
+    log.error('Workspace restore failed:', error.message);
+    return { success: false, error: error.message || 'Could not restore the workspace backup.' };
+  }
+});
+
 ipcMain.handle('open-workspace-backups', async () => {
   const dir = workspaceBackupDir();
   await fsp.mkdir(dir, { recursive: true });
   const error = await shell.openPath(dir);
   return error ? { success: false, error } : { success: true, folderPath: dir };
+});
+
+ipcMain.handle('get-diagnostics', () => {
+  const rawSettings = store.get('settings', {});
+  const latest = validWorkspaceBackupsNewestFirst()[0];
+  const configPath = path.join(app.getPath('userData'), 'config.json');
+  const logPath = log.transports.file.getFile().path;
+  return {
+    success: true,
+    appVersion: app.getVersion(),
+    electronVersion: process.versions.electron,
+    operatingSystem: `${process.platform} ${process.arch}`,
+    userDataPath: app.getPath('userData'),
+    logsPath: path.dirname(logPath),
+    settingsStorage: {
+      ok: isValidWorkspaceConfig(configPath),
+      path: configPath
+    },
+    latestBackup: latest ? {
+      available: true,
+      createdAt: latest.stat.mtime.toISOString(),
+      size: latest.stat.size
+    } : { available: false },
+    connections: connectionStatus(rawSettings),
+    settingsSchemaVersion: Number(rawSettings.settingsSchemaVersion || 0),
+    featureFlags: booleanFeatureFlags(rawSettings),
+    safeStorageAvailable: safeStorage.isEncryptionAvailable()
+  };
+});
+
+ipcMain.handle('clear-temporary-media-cache', async () => {
+  try {
+    await session.defaultSession.clearCache();
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error.message || 'Could not clear temporary media cache.' };
+  }
+});
+
+ipcMain.handle('open-logs-folder', async () => {
+  const folderPath = path.dirname(log.transports.file.getFile().path);
+  const error = await shell.openPath(folderPath);
+  return error ? { success: false, error } : { success: true, folderPath };
 });
 
 ipcMain.handle('cancel-jobs-by-prefix', (e, prefixes = []) => {
@@ -6592,24 +6660,13 @@ ipcMain.handle('push-to-wordpress', async (e, { article, site }) => {
     structuredDataWithImage(article.structuredData || '', featuredMediaUrl)
   );
 
-  const requestedStatus = article.publishStatusOverride || settings.publishStatus;
-  const status = ['publish', 'draft', 'future'].includes(requestedStatus) ? requestedStatus : 'publish';
-  const scheduledAt = status === 'future' ? new Date(article.scheduledAt || '') : null;
-  if (status === 'future' && (!scheduledAt || Number.isNaN(scheduledAt.getTime()) || scheduledAt.getTime() <= Date.now())) {
-    throw new Error('Choose a valid future publication date and time before scheduling.');
-  }
-
-  const categoryId = Number(article.wordpressCategoryId || article.autoCategory?.id || site.defaultCategoryId || 0);
-  const payload = {
-    title: article.generatedTitle || article.title,
+  const { payload, status, categoryId } = buildWordPressPostPayload({
+    article,
+    site,
     content: updatedContent,
-    status,
-    featured_media: featuredMediaId,
-    excerpt: article.excerpt || article.metaDescription || article.rankMathDescription || ''
-  };
-  if (categoryId) payload.categories = [categoryId];
-  if (article.slug) payload.slug = article.slug;
-  if (status === 'future') payload.date_gmt = scheduledAt.toISOString();
+    featuredMediaId,
+    defaultStatus: settings.publishStatus
+  });
 
   const postEndpoint = article.wordpressPostId
     ? `${url}/wp-json/wp/v2/posts/${encodeURIComponent(article.wordpressPostId)}`
