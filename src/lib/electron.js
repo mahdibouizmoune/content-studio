@@ -225,6 +225,56 @@ function makeMockApi() {
         safeStorageAvailable: false
       };
     },
+    async getGrowthWorkspace() {
+      return readStore().growthWorkspace || {
+        calendarEntries: [],
+        campaigns: [],
+        updateQueue: [],
+        revenueRecords: [],
+        runHistory: []
+      };
+    },
+    async upsertGrowthRecord({ collection, record }) {
+      const store = readStore();
+      const workspace = store.growthWorkspace || {};
+      const records = [...(workspace[collection] || [])];
+      const nextRecord = {
+        ...record,
+        id: record.id || `${collection}-${Date.now()}`,
+        updatedAt: new Date().toISOString()
+      };
+      const index = records.findIndex((item) => item.id === nextRecord.id);
+      if (index >= 0) records[index] = { ...records[index], ...nextRecord };
+      else records.push(nextRecord);
+      writeStore({ ...store, growthWorkspace: { ...workspace, [collection]: records } });
+      return { success: true, records };
+    },
+    async deleteGrowthRecord({ collection, id }) {
+      const store = readStore();
+      const workspace = store.growthWorkspace || {};
+      const records = (workspace[collection] || []).filter((item) => item.id !== id);
+      writeStore({ ...store, growthWorkspace: { ...workspace, [collection]: records } });
+      return { success: true, records };
+    },
+    async importRevenueCsv() {
+      return {
+        success: true,
+        fileName: "revenue-preview.csv",
+        rows: [{
+          id: "revenue-preview-1",
+          articleId: "",
+          campaignId: "",
+          source: "Impact CSV",
+          trafficSource: "pinterest",
+          metric: "commission",
+          amount: 42.5,
+          currency: "USD",
+          clicks: 18,
+          occurredAt: new Date().toISOString(),
+          lastUpdated: new Date().toISOString()
+        }]
+      };
+    },
     async clearTemporaryMediaCache() {
       return { success: true };
     },

@@ -76,6 +76,11 @@ const { calculateEstimatedCost } = require('../electron/cost-estimation');
 const { buildWordPressPostPayload } = require('../electron/wordpress-payload');
 const { connectionStatus, sanitizeDiagnosticReport } = require('../electron/diagnostics');
 const { normalizeBatchImportRows } = require('../electron/article-import');
+const {
+  allowedCollection,
+  normalizeRevenueRows,
+  upsertGrowthRecord
+} = require('../electron/growth-workspace');
 
 test('transient retry policy retries recoverable network failures only', async () => {
   let calls = 0;
@@ -186,6 +191,117 @@ test('batch import resolves row-specific presets, sites, categories, and schedul
     ])].sort(),
     ['a', 'b']
   );
+});
+
+test('growth workspace storage is allowlisted and preserves custom record fields', () => {
+  const records = upsertGrowthRecord([], 'campaigns', {
+    id: 'campaign-1',
+    name: 'Summer recipes',
+    customPortfolioField: 'keep me',
+    publishAutomatically: false,
+    apiToken: 'must-not-be-stored',
+    nested: { credentialSecret: 'must-not-be-stored', source: 'Impact' }
+  });
+  const updated = upsertGrowthRecord(records, 'campaigns', {
+    id: 'campaign-1',
+    name: 'Summer dinner recipes'
+  });
+  assert.equal(updated.length, 1);
+  assert.equal(updated[0].name, 'Summer dinner recipes');
+  assert.equal(updated[0].customPortfolioField, 'keep me');
+  assert.equal(updated[0].publishAutomatically, false);
+  assert.equal(updated[0].apiToken, undefined);
+  assert.equal(updated[0].nested.credentialSecret, undefined);
+  assert.equal(updated[0].nested.source, 'Impact');
+  assert.throws(() => allowedCollection('settings'), /Unsupported/);
+});
+
+test('revenue CSV normalization never invents amounts and retains evidence', () => {
+  const rows = normalizeRevenueRows([
+    { Provider: 'Impact', Revenue: '$24.50', Currency: 'USD', Clicks: '12', 'Article ID': 'article-1' },
+    { Source: 'Amazon', Revenue: '', Date: '2026-07-20' }
+  ], 'partner-report.csv');
+  assert.equal(rows[0].amount, 24.5);
+  assert.equal(rows[0].source, 'Impact');
+  assert.equal(rows[0].sourceFile, 'partner-report.csv');
+  assert.ok(rows[0].lastUpdated);
+  assert.equal(rows[1].amount, null);
+  assert.equal(rows[1].source, 'Amazon');
+});
+
+test('growth intelligence builds evidence-backed updates, calendar dates, and run records', async () => {
+  const {
+    buildCalendarRows,
+    buildContentUpdateRecommendations,
+    deriveRunHistory
+  } = await import('../src/lib/growthIntelligence.mjs');
+  const article = {
+    id: 'article-1',
+    title: 'Easy Lemon Chicken',
+    type: 'article',
+    queueStatus: 'error',
+    workflowStatus: 'failed',
+    createdAt: '2025-01-01T00:00:00.000Z',
+    updatedAt: '2026-07-01T00:00:00.000Z',
+    errorMessage: 'Image generation failed',
+    generationCheckpoint: { stage: 'in-text-images' },
+    featuredImage: 'https://example.com/lemon.webp',
+    featuredImageAlt: '',
+    images: [],
+    internalLinksInserted: 0,
+    content: '<p>Updated in 2022.</p>',
+    estimatedCost: 0.12,
+    actualKnownCost: null
+  };
+  const calendar = buildCalendarRows([article], [{
+    id: 'calendar-article-1',
+    articleId: 'article-1',
+    plannedDate: '2026-08-01T12:00:00.000Z',
+    newsletterDate: '2026-08-02T12:00:00.000Z'
+  }]);
+  assert.equal(calendar[0].plannedDate, '2026-08-01T12:00:00.000Z');
+  assert.equal(calendar[0].newsletterDate, '2026-08-02T12:00:00.000Z');
+
+  const updates = buildContentUpdateRecommendations([article], {
+    google: {
+      pages: [{
+        articleId: 'article-1',
+        clicks: 40,
+        previousClicks: 100,
+        impressions: 2000,
+        ctr: 0.01
+      }]
+    }
+  }, new Date('2026-07-28T00:00:00.000Z'));
+  assert.ok(updates.some((item) => item.type === 'Search-ranking decline' && item.evidence.includes('100')));
+  assert.ok(updates.some((item) => item.type === 'High impressions and low CTR' && item.evidence.includes('2000')));
+  assert.ok(updates.every((item) => item.evidence && item.action));
+
+  const runs = deriveRunHistory([article]);
+  assert.equal(runs[0].safeRetryStep, 'in-text-images');
+  assert.equal(runs[0].estimatedCost, 0.12);
+  assert.equal(runs[0].actualCost, null);
+});
+
+test('model registry has unique complete records and shared selector options', async () => {
+  const {
+    IMAGE_MODEL_OPTIONS,
+    MODEL_REGISTRY,
+    TEXT_MODEL_OPTIONS,
+    VIDEO_MODEL_OPTIONS
+  } = await import('../src/lib/modelRegistry.mjs');
+  assert.equal(new Set(MODEL_REGISTRY.map((model) => model.id)).size, MODEL_REGISTRY.length);
+  assert.equal(MODEL_REGISTRY.length, TEXT_MODEL_OPTIONS.length + IMAGE_MODEL_OPTIONS.length + VIDEO_MODEL_OPTIONS.length);
+  assert.ok(MODEL_REGISTRY.every((model) => (
+    model.id
+    && model.name
+    && model.provider
+    && model.endpoint.startsWith('https://replicate.com/')
+    && model.contentType
+    && model.cost
+    && model.fallback
+    && model.verifiedAt
+  )));
 });
 
 test('article publication status requires a confirmed public publish', async () => {

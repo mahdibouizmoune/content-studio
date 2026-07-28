@@ -1,9 +1,13 @@
 import { useState } from "react";
 import {
   BarChart3,
+  CalendarDays,
   CircleCheck,
+  CircleDollarSign,
   Facebook,
+  FileClock,
   FileText,
+  FolderKanban,
   FolderSearch,
   ImageIcon,
   ImagePlus,
@@ -19,13 +23,15 @@ import {
 } from "lucide-react";
 import appLogo from "@/assets/content-studio-logo.png";
 
-const groups = [
+function navigationGroups(flags = {}) {
+  return [
   {
     id: "plan",
     label: "Plan",
     items: [
       { id: "trends", label: "Trends", icon: TrendingUp },
-      { id: "cluster-planner", label: "Clusters", icon: FolderSearch }
+      { id: "cluster-planner", label: "Clusters", icon: FolderSearch },
+      ...(flags.contentCalendar ? [{ id: "calendar", label: "Calendar", icon: CalendarDays }] : [])
     ]
   },
   {
@@ -43,14 +49,17 @@ const groups = [
     items: [
       { id: "pin-creator", label: "Pinterest", icon: ImagePlus },
       { id: "meta-studio", label: "Facebook and Instagram", icon: Facebook },
-      { id: "repurpose", label: "Repurpose", icon: Repeat2 }
+      { id: "repurpose", label: "Repurpose", icon: Repeat2 },
+      ...(flags.campaignRecords ? [{ id: "campaigns", label: "Campaigns", icon: FolderKanban }] : [])
     ]
   },
   {
     id: "measure",
     label: "Measure",
     items: [
-      { id: "performance", label: "Performance", icon: BarChart3 }
+      { id: "performance", label: "Performance", icon: BarChart3 },
+      ...(flags.contentUpdateQueue ? [{ id: "content-updates", label: "Content Updates", icon: FileClock }] : []),
+      ...(flags.revenueAttribution ? [{ id: "attribution", label: "Attribution", icon: CircleDollarSign }] : [])
     ]
   },
   {
@@ -59,10 +68,13 @@ const groups = [
     items: [
       { id: "connections", label: "Connections", icon: SlidersHorizontal },
       { id: "settings", label: "Settings", icon: Settings },
-      { id: "diagnostics", label: "Diagnostics", icon: ShieldCheck }
+      { id: "diagnostics", label: "Diagnostics", icon: ShieldCheck },
+      ...(flags.runHistory ? [{ id: "run-history", label: "Run History", icon: FileClock }] : []),
+      ...(flags.modelRegistry ? [{ id: "model-registry", label: "Model Registry", icon: SlidersHorizontal }] : [])
     ]
   }
-];
+  ];
+}
 
 const mobileControls = [
   { id: "articles", label: "Articles", icon: FileText, screen: "articles" },
@@ -77,9 +89,10 @@ function screenIsActive(activeScreen, itemId) {
   return activeScreen === itemId;
 }
 
-export default function Sidebar({ activeScreen, setActiveScreen, counts, theme, setTheme }) {
+export default function Sidebar({ activeScreen, setActiveScreen, counts, theme, setTheme, settings }) {
   const isDark = theme === "dark";
   const [mobileMenu, setMobileMenu] = useState("");
+  const groups = navigationGroups(settings?.featureFlags);
 
   function selectScreen(screen) {
     setActiveScreen(screen);

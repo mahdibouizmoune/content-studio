@@ -27,6 +27,7 @@ const ImageLibrary = lazy(() => import("@/components/ImageLibrary"));
 const PerformanceIntelligence = lazy(() => import("@/components/PerformanceIntelligence"));
 const Connections = lazy(() => import("@/components/Connections"));
 const OnboardingChecklist = lazy(() => import("@/components/OnboardingChecklist"));
+const GrowthWorkspace = lazy(() => import("@/components/GrowthWorkspace"));
 
 const promptDefaults = {
   articlePrompt: DEFAULT_ARTICLE_PROMPT,
@@ -276,6 +277,14 @@ function fillPromptDefaults(settings) {
       googleSearchConsoleSites: [],
       googleSearchConsoleConnected: false,
       pinterestAnalyticsAccessToken: "",
+      featureFlags: {
+        contentCalendar: false,
+        campaignRecords: false,
+        contentUpdateQueue: false,
+        revenueAttribution: false,
+        runHistory: false,
+        modelRegistry: false
+      },
       replicateApiToken: "",
       pinCreator: {
         imgbbApiKey: "",
@@ -457,7 +466,13 @@ export default function App() {
     connections: <Connections {...screenProps} />,
     onboarding: <OnboardingChecklist {...screenProps} />,
     settings: <Settings {...screenProps} initialOpenSection={settingsSection} />,
-    diagnostics: <Settings {...screenProps} initialOpenSection="diagnostics" />
+    diagnostics: <Settings {...screenProps} initialOpenSection="diagnostics" />,
+    calendar: <GrowthWorkspace {...screenProps} view="calendar" />,
+    campaigns: <GrowthWorkspace {...screenProps} view="campaigns" />,
+    "content-updates": <GrowthWorkspace {...screenProps} view="updates" />,
+    attribution: <GrowthWorkspace {...screenProps} view="attribution" />,
+    "run-history": <GrowthWorkspace {...screenProps} view="runs" />,
+    "model-registry": <GrowthWorkspace {...screenProps} view="models" />
   };
 
   const screen = screens[activeScreen];
@@ -476,7 +491,7 @@ export default function App() {
 
   return (
     <div className="flex min-h-screen text-ink">
-      <Sidebar activeScreen={activeScreen} setActiveScreen={setActiveScreen} counts={counts} theme={theme} setTheme={setTheme} />
+      <Sidebar activeScreen={activeScreen} setActiveScreen={setActiveScreen} counts={counts} theme={theme} setTheme={setTheme} settings={settings} />
       <main className="min-w-0 flex-1 p-4 pb-24 sm:p-6 md:pb-8 lg:p-8">
         {notice ? (
           <div className="mb-4 rounded-md border border-violet-200 bg-violet-50 px-4 py-3 text-sm font-medium text-violet-700 shadow-sm">

@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import SectionHeader from "@/components/SectionHeader";
 import { Button, EmptyState, Field, inputClass } from "@/components/ui";
 import { electronAPI } from "@/lib/electron";
+import { VIDEO_MODEL_OPTIONS } from "@/lib/modelRegistry.mjs";
 
 const promptPresets = [
   {
@@ -19,74 +20,12 @@ const promptPresets = [
   }
 ];
 
-const videoModels = [
-  {
-    id: "pruna-p-video",
-    name: "Pruna P-Video",
-    badge: "Default",
-    price: "720p $0.02/sec, 1080p $0.04/sec, draft 4x cheaper",
-    bestFor: "Fast recipe/social tests with draft mode",
-    durations: ["5", "8", "10", "15", "20"],
-    resolutions: ["720p", "1080p"],
-    fpsOptions: ["24", "48"],
-    supportsDraft: true,
-    supportsFps: true,
-    supportsAspect: true,
-    supportsSeed: true
-  },
-  {
-    id: "seedance-1-lite",
-    name: "Seedance 1 Lite",
-    price: "est. ~$0.08 5s 480p, ~$0.18 5s 720p",
-    bestFor: "Budget food motion and vertical clips",
-    durations: ["5", "8", "10", "12"],
-    resolutions: ["720p", "480p"],
-    fpsOptions: ["24", "30"],
-    supportsDraft: false,
-    supportsFps: true,
-    supportsAspect: true,
-    supportsSeed: true
-  },
-  {
-    id: "seedance-1-pro-fast",
-    name: "Seedance 1 Pro Fast",
-    price: "faster, ~60% lower compute than Pro",
-    bestFor: "Better quality while staying efficient",
-    durations: ["5", "8", "10", "12"],
-    resolutions: ["480p", "1080p"],
-    fpsOptions: ["24", "30"],
-    supportsDraft: false,
-    supportsFps: true,
-    supportsAspect: true,
-    supportsSeed: true
-  },
-  {
-    id: "seedance-1-pro",
-    name: "Seedance 1 Pro",
-    price: "higher quality, higher cost than Pro Fast",
-    bestFor: "Premium hero clips and polished motion",
-    durations: ["5", "8", "10", "12"],
-    resolutions: ["480p", "1080p"],
-    fpsOptions: ["24", "30"],
-    supportsDraft: false,
-    supportsFps: true,
-    supportsAspect: true,
-    supportsSeed: true
-  },
-  {
-    id: "hailuo-02",
-    name: "MiniMax Hailuo 02",
-    price: "est. ~$0.45/generation",
-    bestFor: "Cinematic 6s or 10s clips",
-    durations: ["6", "10"],
-    resolutions: ["768p", "1080p"],
-    fpsOptions: ["24"],
-    supportsDraft: false,
-    supportsFps: false,
-    supportsAspect: false,
-    supportsSeed: false
-  }
-];
+const videoModels = VIDEO_MODEL_OPTIONS.map((model, index) => ({
+  ...model,
+  badge: index === 0 ? "Default" : "",
+  price: model.cost,
+  bestFor: model.uses
+}));
 
 function formatDate(value) {
   try { return new Date(value).toLocaleString(); } catch { return ""; }
