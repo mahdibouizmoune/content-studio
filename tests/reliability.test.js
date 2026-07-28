@@ -906,6 +906,54 @@ test('article metadata creates natural SEO, Open Graph, Pinterest, and canonical
   assert.equal(metadata.canonicalUrl, 'https://example.com/lemon-chicken/');
 });
 
+test('section regeneration helpers replace only the selected section', async () => {
+  const { listArticleSections, replaceArticleSection } = await import('../src/lib/articleRevisions.mjs');
+  const content = [
+    '<p>Introduction paragraph.</p>',
+    '<h2>Ingredients</h2><p>Ingredient guidance.</p>',
+    '<h2>Instructions</h2><p>Method guidance.</p>',
+    '<h2>Storage</h2><p>Storage guidance.</p>'
+  ].join('');
+  const sections = listArticleSections(content);
+  const instructions = sections.find((section) => section.label === 'Instructions');
+  const replaced = replaceArticleSection(content, instructions.id, '<h2>Instructions</h2><p>Improved method with doneness cues.</p>');
+
+  assert.deepEqual(sections.map((section) => section.label), ['Introduction', 'Ingredients', 'Instructions', 'Storage']);
+  assert.match(replaced, /Ingredient guidance/);
+  assert.match(replaced, /Improved method with doneness cues/);
+  assert.match(replaced, /Storage guidance/);
+  assert.doesNotMatch(replaced, /Method guidance/);
+});
+
+test('revision history records sanitized changes and restores previous content', async () => {
+  const { recordArticleRevision, restoreArticleRevision } = await import('../src/lib/articleRevisions.mjs');
+  const previous = {
+    title: 'Lemon Chicken',
+    content: '<p>Old section.</p>',
+    workflowStatus: 'needs-review',
+    revisions: []
+  };
+  const revised = recordArticleRevision(previous, {
+    ...previous,
+    content: '<p>New section with api_token=private-value.</p>',
+    workflowStatus: 'approved'
+  }, {
+    changedSection: 'Instructions',
+    changeSource: 'ai',
+    modelUsed: 'gpt5nano',
+    action: 'regenerate-section',
+    reason: 'Add doneness cues.'
+  });
+
+  assert.equal(revised.revisions.length, 1);
+  assert.equal(revised.revisions[0].changedSection, 'Instructions');
+  assert.equal(revised.revisions[0].changeSource, 'ai');
+  assert.doesNotMatch(revised.revisions[0].newContent, /private-value/);
+  const restored = restoreArticleRevision(revised, revised.revisions[0]);
+  assert.equal(restored.content, previous.content);
+  assert.equal(restored.workflowStatus, previous.workflowStatus);
+});
+
 test('article import normalization preserves unknown legacy and custom fields', () => {
   const legacyArticle = {
     id: 'legacy-article',

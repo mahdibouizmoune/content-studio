@@ -1,5 +1,5 @@
-import { BadgeDollarSign, ExternalLink, Image, Link2, PackageCheck, Plus, Save, Search, Send, Sparkles, Trash2 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { BadgeDollarSign, ExternalLink, Image, Link2, PackageCheck, Plus, RefreshCw, RotateCcw, Save, Search, Send, Sparkles, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Button, Field, inputClass } from "@/components/ui";
 import { electronAPI } from "@/lib/electron";
@@ -12,6 +12,7 @@ import { applyAffiliateLinksToArticle, findAffiliateOpportunities, removeManaged
 import { buildArticleBrief } from "@/lib/articleBrief.mjs";
 import { buildArticleQualityReport } from "@/lib/articleQuality.mjs";
 import { applyReaderRetentionElements } from "@/lib/readerRetention.mjs";
+import { listArticleSections, recordArticleRevision, replaceArticleSection, restoreArticleRevision } from "@/lib/articleRevisions.mjs";
 
 export default function ArticleEditor({ article, settings, saveSettings, onClose, refreshArticles }) {
   const [draft, setDraft] = useState(article);
@@ -22,6 +23,13 @@ export default function ArticleEditor({ article, settings, saveSettings, onClose
   const [impactQuery, setImpactQuery] = useState("");
   const [impactProducts, setImpactProducts] = useState([]);
   const [impactBusy, setImpactBusy] = useState("");
+  const [sectionId, setSectionId] = useState("");
+  const [sectionInstruction, setSectionInstruction] = useState("");
+  const [sectionProposal, setSectionProposal] = useState(null);
+  const [sectionBusy, setSectionBusy] = useState(false);
+  const [imageBusy, setImageBusy] = useState("");
+  const [scheduleAt, setScheduleAt] = useState("");
+  const lastSavedRef = useRef(article);
 
   const socialPlatformOptions = [
     { id: "instagram", label: "Instagram" },
@@ -40,6 +48,7 @@ export default function ArticleEditor({ article, settings, saveSettings, onClose
   ];
 
   const featuredImageSrc = draft.featuredImageDisplay || draft.featuredImageLocalUrl || draft.featuredImage || "";
+  const articleSections = useMemo(() => listArticleSections(draft.content || ""), [draft.content]);
   const affiliateOpportunities = useMemo(() => findAffiliateOpportunities({
     article: draft,
     content: draft.content || "",
@@ -49,7 +58,7 @@ export default function ArticleEditor({ article, settings, saveSettings, onClose
     }
   }), [draft, settings]);
 
-  function rescore(nextDraft) {
+  function rescore(nextDraft, options = {}) {
     let workingDraft = { ...nextDraft };
     workingDraft.articleBrief = buildArticleBrief({
       article: workingDraft,
@@ -74,7 +83,10 @@ export default function ArticleEditor({ article, settings, saveSettings, onClose
     workingDraft.content = insertArticleImages(workingDraft.content || "", workingDraft.images || []);
     workingDraft = applyReaderRetentionElements(workingDraft, settings);
     const metadata = buildMetadata(workingDraft, workingDraft.content || "");
-    const structuredData = buildRecipeSchema({ ...workingDraft, ...metadata });
+    const generatedStructuredData = buildRecipeSchema({ ...workingDraft, ...metadata });
+    const structuredData = options.rebuildSchema
+      ? generatedStructuredData
+      : (workingDraft.structuredData || generatedStructuredData);
     const enriched = { ...workingDraft, ...metadata, structuredData };
     const seo = scoreArticle(enriched, workingDraft.content || "");
     const imageQa = qaArticleImages(enriched);
@@ -89,13 +101,25 @@ export default function ArticleEditor({ article, settings, saveSettings, onClose
     setDraft((current) => (current.seoChecks?.length && current.imageQa ? current : rescore(current)));
   }, []);
 
-  async function save(next = draft) {
+  async function save(next = draft, revisionMeta = {}) {
     const rescored = rescore(next);
-    await electronAPI.saveArticle(rescored);
-    setDraft(rescored);
+    const revised = recordArticleRevision(lastSavedRef.current, rescored, {
+      changedSection: revisionMeta.changedSection || "Article review",
+      sectionId: revisionMeta.sectionId || "",
+      scope: revisionMeta.scope || "article",
+      previousContent: revisionMeta.previousContent,
+      newContent: revisionMeta.newContent,
+      changeSource: revisionMeta.changeSource || "user",
+      modelUsed: revisionMeta.modelUsed || "",
+      action: revisionMeta.action || "save",
+      reason: revisionMeta.reason || ""
+    });
+    await electronAPI.saveArticle(revised);
+    lastSavedRef.current = revised;
+    setDraft(revised);
     await refreshArticles();
     setStatus("Article saved.");
-    return rescored;
+    return revised;
   }
 
   async function approve() {
@@ -121,6 +145,221 @@ export default function ArticleEditor({ article, settings, saveSettings, onClose
     }
     await save(next);
     setStatus("Article approved for publishing.");
+  }
+
+  async function requestChanges() {
+    const reason = window.prompt("Describe the changes this article needs.");
+    if (!reason?.trim()) return;
+    await save(
+      { ...draft, workflowStatus: "changes-requested", changesRequestedReason: reason.trim().slice(0, 1000) },
+      { changedSection: "Workflow", action: "request-changes", reason: reason.trim() }
+    );
+    setStatus("Changes requested and recorded in revision history.");
+  }
+
+  async function regenerateMetadata() {
+    const next = rescore({
+      ...draft,
+      metaTitle: "",
+      metaDescription: "",
+      rankMathTitle: "",
+      rankMathDescription: "",
+      openGraphTitle: "",
+      openGraphDescription: "",
+      pinterestTitle: "",
+      pinterestDescription: ""
+    });
+    await save(next, {
+      changedSection: "SEO metadata",
+      changeSource: "automated",
+      action: "regenerate-metadata",
+      reason: "Rebuilt metadata from the saved article brief and current article content."
+    });
+    setStatus("SEO, Open Graph, and Pinterest metadata regenerated.");
+  }
+
+  async function repairRecipeSchema() {
+    const next = rescore(draft, { rebuildSchema: true });
+    if (!next.structuredData) {
+      setDraft(next);
+      setStatus("No complete recipe card was found. Add ingredients, instructions, timing, and yield before repairing schema.");
+      return;
+    }
+    await save(next, {
+      changedSection: "Recipe schema",
+      changeSource: "automated",
+      action: "repair-schema",
+      reason: "Rebuilt Recipe JSON-LD from the visible recipe card."
+    });
+    setStatus("Recipe schema rebuilt from the visible recipe card.");
+  }
+
+  async function replaceArticleImage(kind, index = -1) {
+    const result = await electronAPI.selectArticleImage();
+    if (!result?.success) return;
+    const next = { ...draft };
+    if (kind === "featured") {
+      next.featuredImage = result.localImageUrl;
+      next.featuredImageDisplay = result.localImageUrl;
+      next.featuredImageLocalUrl = result.localImageUrl;
+      next.featuredImageLocalPath = result.localPath;
+    } else {
+      const previous = next.images?.[index] || {};
+      const images = [...(next.images || [])];
+      images[index] = {
+        ...previous,
+        url: result.localImageUrl,
+        displayUrl: result.localImageUrl,
+        localUrl: result.localImageUrl,
+        localPath: result.localPath
+      };
+      next.images = images;
+      const previousSources = [previous.url, previous.displayUrl, previous.localUrl].filter(Boolean);
+      next.content = previousSources.reduce(
+        (html, source) => html.split(source).join(result.localImageUrl),
+        next.content || ""
+      );
+    }
+    await save(next, {
+      changedSection: kind === "featured" ? "Featured image" : `In-text image ${index + 1}`,
+      changeSource: "user",
+      action: "replace-image",
+      reason: "Replaced the image with a user-selected local file."
+    });
+    setStatus(`${kind === "featured" ? "Featured image" : `Image ${index + 1}`} replaced.`);
+  }
+
+  async function proposeSectionRegeneration() {
+    const selected = articleSections.find((section) => section.id === sectionId) || articleSections[0];
+    if (!selected) {
+      setStatus("No article section is available to regenerate.");
+      return;
+    }
+    setSectionBusy(true);
+    setStatus(`Preparing a replacement for ${selected.label}...`);
+    const jobKey = `article:${draft.id}:section:${selected.id}`;
+    try {
+      const result = await electronAPI.regenerateArticleSection({
+        title: draft.generatedTitle || draft.title,
+        sectionLabel: selected.label,
+        currentHtml: selected.html,
+        articleBrief: draft.articleBrief,
+        outline: draft.outline,
+        instructions: sectionInstruction,
+        settings,
+        jobKey
+      });
+      setSectionId(selected.id);
+      setSectionProposal({
+        sectionId: selected.id,
+        sectionLabel: selected.label,
+        previousHtml: selected.html,
+        proposedHtml: result.html,
+        model: result.model || settings.aiModel,
+        predictionId: result.predictionId || ""
+      });
+      setStatus("Replacement ready. Compare it with the current section before accepting.");
+    } catch (error) {
+      setStatus(error.message || "Could not regenerate the selected section.");
+    } finally {
+      setSectionBusy(false);
+    }
+  }
+
+  async function acceptSectionProposal() {
+    if (!sectionProposal) return;
+    const next = {
+      ...draft,
+      content: replaceArticleSection(draft.content || "", sectionProposal.sectionId, sectionProposal.proposedHtml)
+    };
+    await save(next, {
+      changedSection: sectionProposal.sectionLabel,
+      sectionId: sectionProposal.sectionId,
+      scope: "section",
+      previousContent: sectionProposal.previousHtml,
+      newContent: sectionProposal.proposedHtml,
+      changeSource: "ai",
+      modelUsed: sectionProposal.model,
+      action: "regenerate-section",
+      reason: sectionInstruction || "Accepted the proposed section replacement."
+    });
+    setSectionProposal(null);
+    setSectionInstruction("");
+    setStatus(`${sectionProposal.sectionLabel} replaced and revision saved.`);
+  }
+
+  async function restoreRevision(revision) {
+    const restored = restoreArticleRevision(draft, revision);
+    await save(restored, {
+      changedSection: revision.changedSection || "Article",
+      changeSource: "user",
+      action: "restore-revision",
+      reason: `Restored revision from ${new Date(revision.timestamp).toLocaleString()}.`
+    });
+    setStatus("Previous revision restored.");
+  }
+
+  async function regenerateArticleImage(kind, index = -1) {
+    const image = kind === "featured" ? null : draft.images?.[index];
+    const prompt = kind === "featured" ? draft.featuredImagePrompt : image?.prompt;
+    if (!prompt) {
+      setStatus("This image has no saved prompt to regenerate.");
+      return;
+    }
+    const workingKey = kind === "featured" ? "featured" : `image-${index}`;
+    setImageBusy(workingKey);
+    setStatus(`Regenerating ${kind === "featured" ? "featured image" : `image ${index + 1}`}...`);
+    try {
+      const result = await electronAPI.generateImage({
+        prompt,
+        aspectRatio: kind === "featured" ? (draft.featuredImageAspectRatio || settings.featuredImageRatio || "3:2") : (image.aspectRatio || settings.intextImageRatio || "4:3"),
+        settings,
+        jobKey: `article:${draft.id}:${workingKey}:regenerate`
+      });
+      const displayUrl = result.displayUrl || result.localImageUrl || result.imageUrl || "";
+      if (!displayUrl && !result.localPath) throw new Error("The image provider returned no usable image.");
+      let next;
+      if (kind === "featured") {
+        next = {
+          ...draft,
+          featuredImage: displayUrl,
+          featuredImageDisplay: displayUrl,
+          featuredImageLocalUrl: result.localImageUrl || "",
+          featuredImageLocalPath: result.localPath || "",
+          featuredImageRemoteUrl: result.remoteImageUrl || result.imageUrl || "",
+          featuredImageAspectRatio: result.aspectRatio || draft.featuredImageAspectRatio
+        };
+      } else {
+        const images = [...(draft.images || [])];
+        const previousSources = [image.displayUrl, image.localUrl, image.url].filter(Boolean);
+        images[index] = {
+          ...image,
+          url: displayUrl,
+          displayUrl,
+          localUrl: result.localImageUrl || "",
+          localPath: result.localPath || "",
+          remoteImageUrl: result.remoteImageUrl || result.imageUrl || "",
+          aspectRatio: result.aspectRatio || image.aspectRatio
+        };
+        let content = draft.content || "";
+        previousSources.forEach((source) => {
+          content = content.split(source).join(displayUrl);
+        });
+        next = { ...draft, images, content };
+      }
+      await save(next, {
+        changedSection: kind === "featured" ? "Featured image" : `In-text image ${index + 1}`,
+        changeSource: "ai",
+        modelUsed: settings.imageModel,
+        action: "regenerate-image",
+        reason: "User requested a replacement image from the saved prompt."
+      });
+      setStatus("Replacement image generated and saved.");
+    } catch (error) {
+      setStatus(error.message || "Image regeneration failed.");
+    } finally {
+      setImageBusy("");
+    }
   }
 
   async function applyInternalLinksToDraft(inputDraft, site, shouldSave = true) {
@@ -298,7 +537,14 @@ export default function ArticleEditor({ article, settings, saveSettings, onClose
     onClose();
   }
 
-  async function publish(site) {
+  async function publish(site, publishOptions = {}) {
+    if (publishOptions.status === "future") {
+      const scheduledDate = new Date(publishOptions.scheduledAt || scheduleAt);
+      if (Number.isNaN(scheduledDate.getTime()) || scheduledDate.getTime() <= Date.now()) {
+        setStatus("Choose a future date and time before scheduling.");
+        return;
+      }
+    }
     setStatus(`Publishing to ${site.name || site.url}...`);
     let publishSite = site;
     const prePublishWarnings = [];
@@ -372,16 +618,20 @@ export default function ArticleEditor({ article, settings, saveSettings, onClose
       : matchWordPressCategory(readyDraft, publishSite);
     const articleForPublish = {
       ...readyDraft,
+      publishStatusOverride: publishOptions.status || settings.publishStatus || "publish",
+      scheduledAt: publishOptions.status === "future" ? (publishOptions.scheduledAt || scheduleAt) : "",
       wordpressCategoryId: readyDraft.wordpressCategoryId || match.category?.id,
       autoCategory: match
     };
     setStatus(match.category?.id ? `Publishing to ${publishSite.name || publishSite.url} in ${match.category.name}...` : `Publishing to ${publishSite.name || publishSite.url}...`);
     const result = await electronAPI.pushToWordPress({ article: articleForPublish, site: publishSite });
     const isPublic = result.status === "publish";
+    const isScheduled = result.status === "future";
     const publicPostUrl = isPublic ? (result.postUrl || readyDraft.wordpressPostUrl) : readyDraft.wordpressPostUrl;
     const next = {
       ...articleForPublish,
-      workflowStatus: result.success ? (isPublic ? "published" : "needs-review") : readyDraft.workflowStatus,
+      publishStatusOverride: "",
+      workflowStatus: result.success ? (isPublic ? "published" : isScheduled ? "approved" : "needs-review") : readyDraft.workflowStatus,
       wordpressPublishStatus: result.status || readyDraft.wordpressPublishStatus || "",
       wordpressPostId: result.postId || readyDraft.wordpressPostId,
       wordpressPostUrl: publicPostUrl,
@@ -398,9 +648,11 @@ export default function ArticleEditor({ article, settings, saveSettings, onClose
     await save(next);
     const warnings = [...prePublishWarnings, result.rankMathWarning, ...(result.mediaWarnings || [])].filter(Boolean);
     setStatus(warnings.length
-      ? `${isPublic ? "Published" : "Saved as draft"} with warning: ${warnings.join(" ")}`
+      ? `${isPublic ? "Published" : isScheduled ? "Scheduled" : "Saved as draft"} with warning: ${warnings.join(" ")}`
       : isPublic
       ? (result.postUrl ? `Published: ${result.postUrl}` : "Published to WordPress.")
+      : isScheduled
+      ? `Scheduled for ${new Date(publishOptions.scheduledAt || scheduleAt).toLocaleString()}. It will be sent to Pin Creator only after a confirmed public publish.`
       : "Saved as a WordPress draft. It was not sent to Pin Creator because it is not public.");
     return next;
   }
@@ -617,6 +869,7 @@ export default function ArticleEditor({ article, settings, saveSettings, onClose
           <div className="flex flex-wrap gap-2">
             <Button variant="secondary" onClick={onClose}>Close</Button>
             <Button variant="secondary" onClick={approve}>Approve</Button>
+            <Button variant="secondary" onClick={requestChanges}>Request Changes</Button>
             <Button variant="danger" onClick={remove}><Trash2 className="h-4 w-4" />Delete</Button>
             <Button onClick={() => save()}><Save className="h-4 w-4" />Save</Button>
           </div>
@@ -631,6 +884,43 @@ export default function ArticleEditor({ article, settings, saveSettings, onClose
                 <Field label="Original title"><input className={inputClass} value={draft.title || ""} onChange={(event) => setDraft({ ...draft, title: event.target.value })} /></Field>
                 <Field label="HTML content"><textarea className={`${inputClass} min-h-96 resize-y font-mono text-xs leading-5`} value={draft.content || ""} onChange={(event) => setDraft({ ...draft, content: event.target.value })} /></Field>
               </div>
+            </div>
+
+            <div className="soft-card rounded-lg p-4">
+              <div className="mb-1 text-lg font-black text-slate-900">Section Review</div>
+              <div className="mb-3 text-sm font-medium text-slate-500">Generate a proposal for one section. The current article stays unchanged until you accept it.</div>
+              <div className="grid gap-3 md:grid-cols-[0.8fr_1.2fr]">
+                <Field label="Section">
+                  <select className={inputClass} value={sectionId || articleSections[0]?.id || ""} onChange={(event) => setSectionId(event.target.value)}>
+                    {articleSections.map((section) => <option key={section.id} value={section.id}>{section.label}</option>)}
+                  </select>
+                </Field>
+                <Field label="Improvement instruction">
+                  <input className={inputClass} value={sectionInstruction} onChange={(event) => setSectionInstruction(event.target.value)} placeholder="Example: add clearer doneness cues and a rescue tip" />
+                </Field>
+              </div>
+              <div className="mt-3">
+                <Button variant="secondary" onClick={proposeSectionRegeneration} disabled={sectionBusy || !articleSections.length}>
+                  <Sparkles className="h-4 w-4" />{sectionBusy ? "Preparing..." : "Regenerate Selected Section"}
+                </Button>
+              </div>
+              {sectionProposal ? (
+                <div className="mt-4 space-y-3 rounded-md border border-violet-200 bg-violet-50 p-3">
+                  <div className="font-black text-violet-900">Compare {sectionProposal.sectionLabel}</div>
+                  <div className="grid gap-3 lg:grid-cols-2">
+                    <Field label="Current version">
+                      <textarea className={`${inputClass} min-h-48 resize-y font-mono text-xs`} value={sectionProposal.previousHtml} readOnly />
+                    </Field>
+                    <Field label="Proposed replacement">
+                      <textarea className={`${inputClass} min-h-48 resize-y font-mono text-xs`} value={sectionProposal.proposedHtml} onChange={(event) => setSectionProposal({ ...sectionProposal, proposedHtml: event.target.value })} />
+                    </Field>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button onClick={acceptSectionProposal}><Save className="h-4 w-4" />Accept Replacement</Button>
+                    <Button variant="secondary" onClick={() => setSectionProposal(null)}>Reject</Button>
+                  </div>
+                </div>
+              ) : null}
             </div>
 
             <div className="soft-card rounded-lg p-4">
@@ -688,7 +978,10 @@ export default function ArticleEditor({ article, settings, saveSettings, onClose
             </div>
 
             <div className="soft-card rounded-lg p-4">
-              <div className="mb-3 text-lg font-black text-slate-900">Rank Math SEO Fields</div>
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                <div className="text-lg font-black text-slate-900">Rank Math SEO Fields</div>
+                <Button variant="secondary" onClick={regenerateMetadata}><RefreshCw className="h-4 w-4" />Regenerate Metadata</Button>
+              </div>
               <div className="grid gap-3 md:grid-cols-2">
                 <Field label="SEO title"><input className={inputClass} value={draft.rankMathTitle || draft.metaTitle || ""} onChange={(event) => setDraft({ ...draft, rankMathTitle: event.target.value, metaTitle: event.target.value })} /></Field>
                 <Field label="Slug"><input className={inputClass} value={draft.slug || ""} onChange={(event) => setDraft({ ...draft, slug: event.target.value })} /></Field>
@@ -889,13 +1182,20 @@ export default function ArticleEditor({ article, settings, saveSettings, onClose
             <div className="flex flex-wrap gap-2">
               {settings.wordpressSites?.map((site) => (
                 <span key={site.id || site.url} className="flex flex-wrap gap-2">
-                  <Button variant="secondary" onClick={() => publish(site)}><Send className="h-4 w-4" />{site.name || "WordPress"}</Button>
+                  <Button variant="secondary" onClick={() => publish(site, { status: "draft" })}><Send className="h-4 w-4" />Draft to {site.name || "WordPress"}</Button>
+                  <Button variant="secondary" onClick={() => publish(site, { status: "future", scheduledAt: scheduleAt })}><Send className="h-4 w-4" />Schedule on {site.name || "WordPress"}</Button>
+                  <Button onClick={() => publish(site, { status: "publish" })}><Send className="h-4 w-4" />Publish to {site.name || "WordPress"}</Button>
                   <Button onClick={() => runOneClickWorkflow(site)} disabled={assetWorking}><PackageCheck className="h-4 w-4" />Update + Pin + GHL Pack</Button>
                   <Button variant="secondary" onClick={() => applyInternalLinksToDraft(draft, site)}><Link2 className="h-4 w-4" />Add Internal Links</Button>
                   <Button variant="secondary" onClick={() => sendInternalLinksToPinQueue(site)}><Link2 className="h-4 w-4" />Send Internal Links</Button>
                 </span>
               ))}
             </div>
+            {settings.wordpressSites?.length ? (
+              <Field label="Scheduled publication time" hint="Used only by Schedule. WordPress receives the exact selected time.">
+                <input type="datetime-local" className={inputClass} value={scheduleAt} onChange={(event) => setScheduleAt(event.target.value)} />
+              </Field>
+            ) : null}
             {draft.wordpressPostUrl || draft.workflowStatus === "published" ? (
               <div className="rounded-md bg-emerald-50 px-3 py-2 text-sm font-black text-emerald-700 ring-1 ring-emerald-100">
                 Post already published{draft.wordpressPostUrl ? `: ${draft.wordpressPostUrl}` : "."}
@@ -1001,18 +1301,36 @@ export default function ArticleEditor({ article, settings, saveSettings, onClose
               </div>
             ) : null}
             <div className="soft-card rounded-lg p-4">
-              <div className="mb-3 text-lg font-black text-slate-900">Image Alt Text</div>
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                <div className="text-lg font-black text-slate-900">Image Alt Text</div>
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="secondary" onClick={() => replaceArticleImage("featured")} disabled={!!imageBusy}>
+                    <Image className="h-4 w-4" />Replace
+                  </Button>
+                  <Button variant="secondary" onClick={() => regenerateArticleImage("featured")} disabled={imageBusy === "featured" || !draft.featuredImagePrompt}>
+                    <RefreshCw className="h-4 w-4" />{imageBusy === "featured" ? "Regenerating..." : "Regenerate Featured"}
+                  </Button>
+                </div>
+              </div>
               <div className="space-y-3">
                 <Field label="Featured image alt"><input className={inputClass} value={draft.featuredImageAlt || ""} onChange={(event) => setDraft({ ...draft, featuredImageAlt: event.target.value })} /></Field>
                 <Field label="Featured image SEO filename"><input className={inputClass} value={draft.featuredImageSeoFileName || ""} onChange={(event) => setDraft({ ...draft, featuredImageSeoFileName: event.target.value })} placeholder="keyword-rich-featured-image.webp" /></Field>
                 {(draft.images || []).map((image, index) => (
-                  <div key={`${image.localPath || image.url || index}`} className="grid gap-3 md:grid-cols-2">
+                  <div key={`${image.localPath || image.url || index}`} className="grid gap-3 md:grid-cols-[1fr_1fr_auto] md:items-end">
                     <Field label={`Image ${index + 1} alt`}>
                       <input className={inputClass} value={image.altText || ""} onChange={(event) => updateImage(index, { altText: event.target.value })} />
                     </Field>
                     <Field label={`Image ${index + 1} SEO filename`}>
                       <input className={inputClass} value={image.seoFileName || ""} onChange={(event) => updateImage(index, { seoFileName: event.target.value })} placeholder="keyword-rich-image.webp" />
                     </Field>
+                    <div className="flex flex-wrap gap-2">
+                      <Button variant="secondary" onClick={() => replaceArticleImage("in-text", index)} disabled={!!imageBusy}>
+                        <Image className="h-4 w-4" />Replace
+                      </Button>
+                      <Button variant="secondary" onClick={() => regenerateArticleImage("in-text", index)} disabled={imageBusy === `image-${index}` || !image.prompt}>
+                        <RefreshCw className="h-4 w-4" />{imageBusy === `image-${index}` ? "Working..." : "Regenerate"}
+                      </Button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -1033,7 +1351,10 @@ export default function ArticleEditor({ article, settings, saveSettings, onClose
             </div>
             {draft.structuredData ? (
               <div className="soft-card rounded-lg p-4">
-                <div className="mb-3 text-lg font-black text-slate-900">Recipe Schema JSON-LD</div>
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                  <div className="text-lg font-black text-slate-900">Recipe Schema JSON-LD</div>
+                  <Button variant="secondary" onClick={repairRecipeSchema}><RefreshCw className="h-4 w-4" />Repair from Recipe Card</Button>
+                </div>
                 <textarea className={`${inputClass} min-h-48 resize-y font-mono text-xs`} value={draft.structuredData || ""} onChange={(event) => setDraft({ ...draft, structuredData: event.target.value })} />
               </div>
             ) : null}
@@ -1046,6 +1367,28 @@ export default function ArticleEditor({ article, settings, saveSettings, onClose
               </div>
             ) : null}
             <div className="article-preview rounded-lg bg-white p-5 shadow-sm ring-1 ring-ink/10" dangerouslySetInnerHTML={{ __html: sanitizeHtml(draft.content || "<p>No content generated yet.</p>") }} />
+            {(draft.revisions || []).length ? (
+              <div className="soft-card rounded-lg p-4">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <div className="text-lg font-black text-slate-900">Revision History</div>
+                  <span className="rounded-full bg-violet-100 px-3 py-1 text-xs font-black text-violet-700">{draft.revisionCount || draft.revisions.length}</span>
+                </div>
+                <div className="max-h-80 space-y-2 overflow-auto pr-1">
+                  {draft.revisions.map((revision) => (
+                    <div key={revision.id} className="flex flex-col gap-2 rounded-md border border-slate-200 bg-white p-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="min-w-0">
+                        <div className="font-black text-slate-800">{revision.changedSection || "Article edit"}</div>
+                        <div className="text-xs font-semibold text-slate-500">
+                          {new Date(revision.timestamp).toLocaleString()} / {revision.changeSource || "user"}{revision.modelUsed ? ` / ${revision.modelUsed}` : ""} / {revision.action || "edit"}
+                        </div>
+                        {revision.reason ? <div className="mt-1 text-xs font-medium text-slate-600">{revision.reason}</div> : null}
+                      </div>
+                      <Button variant="secondary" onClick={() => restoreRevision(revision)}><RotateCcw className="h-4 w-4" />Restore</Button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
             {draft.publishHistory?.length ? (
               <div className="soft-card rounded-lg p-4">
                 <div className="mb-3 text-lg font-black text-slate-900">Publish History</div>

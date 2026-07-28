@@ -4359,6 +4359,76 @@ ipcMain.handle('generate-article-outline', async (e, { prompt, settings, jobKey 
   }
 });
 
+ipcMain.handle('regenerate-article-section', async (e, {
+  title,
+  sectionLabel,
+  currentHtml,
+  articleBrief,
+  outline,
+  instructions,
+  settings,
+  jobKey
+}) => {
+  const apiToken = settings?.replicateApiToken;
+  if (!apiToken) throw new Error('Replicate API token is missing');
+  const controller = new AbortController();
+  const safeCurrentHtml = String(currentHtml || '').slice(0, 24000);
+  if (safeCurrentHtml.replace(/<[^>]+>/g, ' ').trim().length < 20) {
+    throw new Error('The selected section is too short to regenerate safely.');
+  }
+  if (jobKey) activeJobs.set(jobKey, controller);
+  const prompt = `Rewrite one section of a people-first article for editorial review.
+
+Article title: ${String(title || '').slice(0, 500)}
+Selected section: ${String(sectionLabel || 'Article section').slice(0, 300)}
+Article brief: ${JSON.stringify(articleBrief || {}).slice(0, 10000)}
+Approved outline: ${String(outline || '').slice(0, 8000)}
+Additional editor instruction: ${String(instructions || 'Improve reader value, specificity, accuracy, and readability without changing the article promise.').slice(0, 2000)}
+
+CURRENT SECTION:
+${safeCurrentHtml}
+
+RULES:
+- Return only the replacement HTML fragment for this section.
+- Preserve the selected H2 heading when it is already present, unless the editor instruction explicitly asks to improve it.
+- Answer the reader's task directly and add useful, topic-specific detail.
+- Keep recipe quantities, timing, temperatures, yield, ingredients, and method consistent with the current section and brief.
+- Do not invent testing, personal experience, ratings, nutrition, prices, availability, studies, or expert endorsements.
+- Do not include an H1, Markdown, code fences, explanation, or em dash in a heading.
+- Do not mention this prompt, SEO instructions, analytics, or competitors.`;
+  try {
+    const url = getAIModelUrl(settings.aiModel || 'gpt5nano');
+    const response = await replicateRequest(url, {
+      stream: false,
+      input: {
+        prompt,
+        max_tokens: 2600,
+        temperature: 0.25,
+        top_p: 1
+      }
+    }, apiToken, { signal: controller.signal, timeout: 90000 });
+    const html = String(await pollReplicate(response.data.id, apiToken, {
+      maxAttempts: 45,
+      intervalMs: 2000,
+      signal: controller.signal
+    }))
+      .replace(/```(?:html)?/gi, '')
+      .replace(/```/g, '')
+      .replace(/\u2014/g, '-')
+      .trim();
+    if (html.replace(/<[^>]+>/g, ' ').trim().length < 40 || !/<(?:p|h2|h3|ul|ol)\b/i.test(html)) {
+      throw new Error('The proposed replacement was incomplete. Keep the current section and try again.');
+    }
+    return {
+      html,
+      predictionId: response.data.id,
+      model: settings.aiModel || 'gpt5nano'
+    };
+  } finally {
+    if (jobKey) activeJobs.delete(jobKey);
+  }
+});
+
 ipcMain.handle('generate-article', async (e, { title, settings, jobKey }) => {
   const apiToken = settings.replicateApiToken;
   if (!apiToken) throw new Error('Replicate API token is missing');
@@ -6522,7 +6592,12 @@ ipcMain.handle('push-to-wordpress', async (e, { article, site }) => {
     structuredDataWithImage(article.structuredData || '', featuredMediaUrl)
   );
 
-  const status = ['publish', 'draft'].includes(settings.publishStatus) ? settings.publishStatus : 'publish';
+  const requestedStatus = article.publishStatusOverride || settings.publishStatus;
+  const status = ['publish', 'draft', 'future'].includes(requestedStatus) ? requestedStatus : 'publish';
+  const scheduledAt = status === 'future' ? new Date(article.scheduledAt || '') : null;
+  if (status === 'future' && (!scheduledAt || Number.isNaN(scheduledAt.getTime()) || scheduledAt.getTime() <= Date.now())) {
+    throw new Error('Choose a valid future publication date and time before scheduling.');
+  }
 
   const categoryId = Number(article.wordpressCategoryId || article.autoCategory?.id || site.defaultCategoryId || 0);
   const payload = {
@@ -6534,6 +6609,7 @@ ipcMain.handle('push-to-wordpress', async (e, { article, site }) => {
   };
   if (categoryId) payload.categories = [categoryId];
   if (article.slug) payload.slug = article.slug;
+  if (status === 'future') payload.date_gmt = scheduledAt.toISOString();
 
   const postEndpoint = article.wordpressPostId
     ? `${url}/wp-json/wp/v2/posts/${encodeURIComponent(article.wordpressPostId)}`
@@ -6679,6 +6755,37 @@ ipcMain.handle('select-watermark-image', async () => {
   } catch (error) {
     await fsp.unlink(targetPath).catch(() => {});
     throw new Error(`The selected watermark is not a valid image: ${error.message}`);
+  }
+});
+
+ipcMain.handle('select-article-image', async () => {
+  const ownerWindow = BrowserWindow.getFocusedWindow() || mainWindow;
+  const result = await dialog.showOpenDialog(ownerWindow || undefined, {
+    properties: ['openFile'],
+    filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp'] }]
+  });
+  if (result.canceled || !result.filePaths?.[0]) return { success: false, canceled: true };
+  const sourcePath = result.filePaths[0];
+  const stat = await fsp.stat(sourcePath);
+  if (stat.size > 25 * 1024 * 1024) throw new Error('The selected image is larger than 25 MB.');
+  initializeImagesDir();
+  try {
+    const sourceBuffer = await fsp.readFile(sourcePath);
+    const optimized = await optimizeImageBufferToWebp(sourceBuffer, {
+      maxWidth: 2400,
+      maxHeight: 2400,
+      quality: 84,
+      targetBytes: 1.5 * 1024 * 1024
+    });
+    const targetPath = path.join(imagesDir, `article-replacement-${Date.now()}.webp`);
+    await fsp.writeFile(targetPath, optimized);
+    return {
+      success: true,
+      localPath: targetPath,
+      localImageUrl: localPathToFileUrl(targetPath)
+    };
+  } catch (error) {
+    throw new Error(`The selected image could not be imported: ${error.message}`);
   }
 });
 
