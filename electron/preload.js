@@ -32,6 +32,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Generation (each takes optional jobKey for cancellation)
   generateArticleOutline: (params) => ipcRenderer.invoke('generate-article-outline', params),
+  regenerateArticleSection: (params) => ipcRenderer.invoke('regenerate-article-section', params),
   generateArticle: (params) => ipcRenderer.invoke('generate-article', params),
   generateImagePrompts: (params) => ipcRenderer.invoke('generate-image-prompts', params),
   generateFeaturedImagePrompt: (params) => ipcRenderer.invoke('generate-featured-image-prompt', params),
@@ -81,6 +82,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openPath: (filePath) => ipcRenderer.invoke('open-path', filePath),
   openLogFile: () => ipcRenderer.invoke('open-log-file'),
   selectWatermarkImage: () => ipcRenderer.invoke('select-watermark-image'),
+  selectArticleImage: () => ipcRenderer.invoke('select-article-image'),
   importTitlesCsv: () => ipcRenderer.invoke('import-titles-csv'),
   createPinterestPin: (params) => ipcRenderer.invoke('create-pinterest-pin', params),
   exportRepurposePacks: (params) => ipcRenderer.invoke('export-repurpose-packs', params),

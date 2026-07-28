@@ -256,6 +256,14 @@ function makeMockApi() {
         "- Keep times, yield, ingredients, and instructions consistent."
       ].join("\n");
     },
+    async regenerateArticleSection({ currentHtml, settings }) {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      return {
+        html: String(currentHtml || "").replace(/<\/p>\s*$/i, " Add one specific reader-focused improvement.</p>"),
+        predictionId: "browser-preview",
+        model: settings?.aiModel || "gpt5nano"
+      };
+    },
     async generateArticleTitle({ title }) {
       return `${title} Worth Reading Today`;
     },
@@ -453,6 +461,9 @@ function makeMockApi() {
     },
     async selectWatermarkImage() {
       return null;
+    },
+    async selectArticleImage() {
+      return { success: false, canceled: true };
     },
     async testWordPressConnection() {
       return { success: true, user: "Preview User", roles: ["editor"] };
