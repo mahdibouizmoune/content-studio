@@ -30,30 +30,7 @@ import { Button, Field, inputClass } from "@/components/ui";
 import { electronAPI } from "@/lib/electron";
 import { ARTICLE_SIZE_OPTIONS } from "@/lib/articlePostProcess.mjs";
 import { DEFAULT_PIN_CUSTOM_STYLES, DEFAULT_PIN_TITLE_DESC_PROMPT } from "@/lib/pinCreatorDefaults";
-
-const textModels = [
-  ["gpt5nano", "GPT-5 Nano", "Fastest, lowest default cost"],
-  ["gpt5mini", "GPT-5 Mini", "Cheap, stronger long-form quality"],
-  ["gpt41mini", "GPT-4.1 Mini", "Reliable low-cost drafting"],
-  ["chatgpt", "GPT-5", "Higher quality, higher cost"],
-  ["claude", "Claude 4.5 Sonnet", "Strong long-form structure"],
-  ["gemini", "Gemini 2.5 Flash", "Balanced speed and price"],
-  ["deepseek", "DeepSeek V3", "Budget-friendly drafting"],
-  ["qwen3", "Qwen3 Instruct", "Cheap strong instruction following"],
-  ["llama4scout", "Llama 4 Scout", "Low-cost long-context drafting"]
-];
-
-const imageModels = [
-  ["z-image-turbo", "Z-Image Turbo", "~$0.003/image"],
-  ["flux-schnell", "Flux Schnell", "Very cheap fast drafts"],
-  ["seedream-4.5", "Seedream 4.5", "~$0.03/image"],
-  ["qwen-image", "Qwen Image", "Good text and poster-style images"],
-  ["flux-pro-2", "Flux 2 Max", "~$0.04/image"],
-  ["recraft-v4", "Recraft V4", "~$0.04/image"],
-  ["gpt-image-2", "GPT Image 2", "~$0.04/image"],
-  ["imagen-4-fast", "Imagen 4 Fast", "~$0.02/image"],
-  ["imagen-4-ultra", "Imagen 4 Ultra", "Best quality Imagen option"]
-];
+import { imageModelCards as imageModels, textModelCards as textModels } from "@/lib/modelRegistry.mjs";
 
 const imageRatioOptions = [
   ["1:1", "1:1 Square"],
@@ -1316,6 +1293,35 @@ export default function Settings({ settings, saveSettings, refreshArticles, setA
               </div>
             );
           })()}
+        </SettingPanel>
+
+        <SettingPanel id="advanced-features" open={open} setOpen={setOpen} icon={Sparkles} tone="icon-gradient-blue" title="Advanced Features" subtitle="Opt-in planning, attribution, and operational tools">
+          <div className="mb-4 rounded-md bg-violet-50 px-3 py-2 text-sm font-semibold text-violet-700 ring-1 ring-violet-100">
+            These local workspace tools are off by default. Enabling them adds navigation screens but does not enable automatic publishing.
+          </div>
+          <div className="grid gap-3 md:grid-cols-2">
+            {[
+              ["contentCalendar", "Content Calendar", "Article, social, newsletter, and seasonal dates"],
+              ["campaignRecords", "Campaign Records", "Connect article and channel assets"],
+              ["contentUpdateQueue", "Content Update Queue", "Evidence-backed refresh recommendations"],
+              ["revenueAttribution", "Revenue Attribution", "Source-labeled CSV revenue foundations"],
+              ["runHistory", "Run History", "Generation checkpoints, costs, and failures"],
+              ["modelRegistry", "Model Registry", "Central model capabilities and cost guidance"]
+            ].map(([id, label, description]) => (
+              <label key={id} className="flex items-center justify-between gap-4 rounded-md bg-slate-50 p-4 ring-1 ring-slate-100">
+                <span>
+                  <span className="block font-black text-slate-900">{label}</span>
+                  <span className="mt-1 block text-sm font-medium text-slate-500">{description}</span>
+                </span>
+                <input
+                  type="checkbox"
+                  className="h-5 w-5 shrink-0"
+                  checked={draft.featureFlags?.[id] === true}
+                  onChange={(event) => update({ featureFlags: { ...(draft.featureFlags || {}), [id]: event.target.checked } })}
+                />
+              </label>
+            ))}
+          </div>
         </SettingPanel>
 
         <SettingPanel id="backup" open={open} setOpen={setOpen} icon={ListChecks} tone="bg-slate-700" title="Backup and Logs" subtitle="Export, import, troubleshoot">

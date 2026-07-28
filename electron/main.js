@@ -93,6 +93,13 @@ const { auditRecipeHtml } = require('./recipe-seo-audit');
 const { booleanFeatureFlags, connectionStatus } = require('./diagnostics');
 const { buildWordPressPostPayload } = require('./wordpress-payload');
 const { normalizeBatchImportRows } = require('./article-import');
+const {
+  COLLECTIONS: GROWTH_COLLECTIONS,
+  allowedCollection,
+  deleteGrowthRecord,
+  normalizeRevenueRows,
+  upsertGrowthRecord
+} = require('./growth-workspace');
 
 log.initialize();
 log.transports.file.level = 'info';
@@ -2455,7 +2462,15 @@ const articleSettingsDefaults = {
   googleClientId: '',
   googleSearchConsoleProperty: '',
   googleSearchConsoleSites: [],
-  pinterestAnalyticsAccessToken: ''
+  pinterestAnalyticsAccessToken: '',
+  featureFlags: {
+    contentCalendar: false,
+    campaignRecords: false,
+    contentUpdateQueue: false,
+    revenueAttribution: false,
+    runHistory: false,
+    modelRegistry: false
+  }
 };
 
 const defaultPinterestBoards = [
@@ -4365,6 +4380,56 @@ ipcMain.handle('get-diagnostics', () => {
     settingsSchemaVersion: Number(rawSettings.settingsSchemaVersion || 0),
     featureFlags: booleanFeatureFlags(rawSettings),
     safeStorageAvailable: safeStorage.isEncryptionAvailable()
+  };
+});
+
+ipcMain.handle('get-growth-workspace', () => {
+  return Object.fromEntries(
+    GROWTH_COLLECTIONS.map((collection) => [
+      collection,
+      store.get(`growthWorkspace.${collection}`, [])
+    ])
+  );
+});
+
+ipcMain.handle('upsert-growth-record', (event, { collection, record } = {}) => {
+  const safeCollection = allowedCollection(collection);
+  const current = store.get(`growthWorkspace.${safeCollection}`, []);
+  const next = upsertGrowthRecord(current, safeCollection, record);
+  store.set(`growthWorkspace.${safeCollection}`, next);
+  scheduleWorkspaceBackup(`growth-${safeCollection}`);
+  return { success: true, records: next };
+});
+
+ipcMain.handle('delete-growth-record', (event, { collection, id } = {}) => {
+  const safeCollection = allowedCollection(collection);
+  const current = store.get(`growthWorkspace.${safeCollection}`, []);
+  const next = deleteGrowthRecord(current, id);
+  store.set(`growthWorkspace.${safeCollection}`, next);
+  scheduleWorkspaceBackup(`growth-${safeCollection}`);
+  return { success: true, records: next };
+});
+
+ipcMain.handle('import-revenue-csv', async () => {
+  const result = await dialog.showOpenDialog({
+    properties: ['openFile'],
+    filters: [{ name: 'Revenue CSV', extensions: ['csv'] }]
+  });
+  if (result.canceled || !result.filePaths.length) return { success: false, canceled: true };
+  const filePath = result.filePaths[0];
+  const stat = fs.statSync(filePath);
+  if (stat.size > 10 * 1024 * 1024) throw new Error('The revenue CSV is larger than 10 MB.');
+  const records = parseCsv(fs.readFileSync(filePath, 'utf8').replace(/^\uFEFF/, ''), {
+    columns: true,
+    skip_empty_lines: true,
+    relax_column_count: true,
+    bom: true,
+    trim: true
+  });
+  return {
+    success: true,
+    fileName: path.basename(filePath),
+    rows: normalizeRevenueRows(records, path.basename(filePath))
   };
 });
 

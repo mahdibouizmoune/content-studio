@@ -33,6 +33,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getDiagnostics: () => ipcRenderer.invoke('get-diagnostics'),
   clearTemporaryMediaCache: () => ipcRenderer.invoke('clear-temporary-media-cache'),
   openLogsFolder: () => ipcRenderer.invoke('open-logs-folder'),
+  getGrowthWorkspace: () => ipcRenderer.invoke('get-growth-workspace'),
+  upsertGrowthRecord: (params) => ipcRenderer.invoke('upsert-growth-record', params),
+  deleteGrowthRecord: (params) => ipcRenderer.invoke('delete-growth-record', params),
+  importRevenueCsv: () => ipcRenderer.invoke('import-revenue-csv'),
 
   // Generation (each takes optional jobKey for cancellation)
   generateArticleOutline: (params) => ipcRenderer.invoke('generate-article-outline', params),
