@@ -2,45 +2,44 @@ export const DEFAULT_PIN_CUSTOM_STYLES = {
   "custom-ingredient-closeup": {
     name: "Ingredient Closeup Pin",
     prompt: [
-      "Create a vertical 2:3 Pinterest food pin led by a photorealistic, appetite-first close-up of the finished dish or one fork-ready hero bite.",
-      "Fill roughly 65-80% of the canvas with the food. Use a tight 30-45 degree or overhead food-photography angle that shows the recipe clearly, with one plate or bowl edge still visible.",
-      "Make the most desirable truthful texture sharply visible, such as browned crisp edges, glossy sauce, a tender center, creamy layers, fresh garnish, or melted cheese. Use gentle steam only when the food should be hot.",
-      "Use bright diffused side-window light, natural shadows, true ingredient colors, realistic portions, and subtle home-cooked imperfections. Avoid plastic-looking food, extreme blur, dark restaurant lighting, or an overstyled table.",
-      "Add one bold 3-7 word keyword-led text panel in the placement supplied by the app. Keep it off the hero bite, readable at mobile thumbnail size, and supported by the source.",
-      "Create click curiosity by showing a clear delicious result people can imagine making, not through vague hype, invented ingredients, fake time or health claims, logos, tiny text, or clutter."
+      "Create a vertical 2:3 editorial recipe pin featuring the exact finished dish from the source.",
+      "Show one complete, recognizable homemade serving from a natural three-quarter or slightly overhead angle. Let the dish fill about 55-70% of the frame, with one especially appealing texture visible, but do not use an extreme macro crop.",
+      "Use soft side-window daylight, gentle natural shadows, true ingredient colors, and small homemade imperfections. The food should look freshly cooked and believable, not glossy plastic, over-sharpened, or like a restaurant advertisement.",
+      "Use a simple real-kitchen surface with no more than two quiet props. Keep the source-supported food as the only focal point.",
+      "Reserve clean space in the placement supplied by the app for exactly one bold 3-7 word headline on a simple high-contrast panel. Keep the headline off the best food detail and add no other text.",
+      "Aim for warm, useful recipe inspiration that makes the finished result easy to recognize and worth saving. Do not invent ingredients, garnish, timing, nutrition, or preparation claims."
     ].join("\n")
   },
   "custom-recipe-card": {
     name: "Recipe Card Traffic Pin",
     prompt: [
-      "Create a vertical 2:3 Pinterest traffic pin for a recipe blog post.",
-      "Use a photorealistic tight close-up of the finished dish as the dominant background. Fill roughly 65-80% of the canvas with a sharply focused hero serving and show accurate appetizing texture.",
-      "Use bright diffused side-window light, natural shadows, true food color, realistic portions, and a lightly styled home-kitchen setting with enough clean negative space.",
-      "Add one clean recipe-card panel in the placement supplied by the app with strong contrast and generous mobile safe margins.",
-      "Use a 4-7 word keyword-led overlay that names the dish and gives one accurate reason to save or click.",
-      "Use one verified recipe cue only when supported by the source, such as 30 Min, One Pan, Make Ahead, or Family Dinner.",
-      "Keep the hero bite unobstructed and the card secondary. No invented garnish, plastic-looking food, unsupported nutrition claims, fake times, logos, tiny text, edge text, or clutter."
+      "Create a vertical 2:3 Pinterest recipe traffic pin with one full-bleed editorial photograph of the exact finished dish.",
+      "Photograph a complete serving in soft natural daylight with realistic texture and a warm homemade setting. Keep the dish clearly recognizable and avoid extreme cropping.",
+      "Reserve about one quarter of the canvas in the placement supplied by the app for a clean solid or softly translucent title panel. The panel must feel integrated with the photograph, not like a busy app card.",
+      "Render exactly one 4-7 word keyword-led headline that names the dish. Add one short source-verified cue such as 30 Min or One Pan only when it is genuinely supported, and add no other text.",
+      "Use strong mobile contrast, generous safe margins, and a calm visual hierarchy. Keep the food dominant and unobstructed.",
+      "No invented garnish, fake timing or health claims, multiple badges, tiny text, logos, decorative clutter, or plastic-looking food."
     ].join("\n")
   },
   "custom-weeknight-solution": {
     name: "Weeknight Solution Pin",
     prompt: [
-      "Create a vertical 2:3 Pinterest pin for a practical weeknight recipe or meal idea.",
-      "Use a photorealistic close-up of the finished dish or plated serving, filling roughly 65-80% of the frame with crisp, saucy, creamy, or tender texture clearly visible as appropriate.",
-      "Use bright natural side light, realistic portions, true ingredient colors, and a simple home dinner or meal-prep context without distracting props.",
-      "Use a 4-7 word headline in the placement supplied by the app, focused on an accurate time, cleanup, make-ahead, family, or ingredient benefit.",
-      "Keep the food sharply focused, approachable, and dominant. Use strong mobile contrast and generous safe margins.",
-      "Avoid luxury restaurant styling, fake steam, invented ingredients, vague clickbait, unsupported budget or health claims, tiny text, edge text, and clutter."
+      "Create a vertical 2:3 Pinterest pin that presents the exact recipe as an achievable weeknight meal.",
+      "Show a complete plated serving or serving dish on a real home table from a natural three-quarter or overhead angle. Include one restrained dinner cue such as a serving spoon, folded napkin, or second place setting without adding unrelated ingredients.",
+      "Use fresh side-window light, true food color, realistic portions, and an approachable lived-in feeling. Keep the food crisp enough to read at thumbnail size without looking overprocessed.",
+      "Reserve the placement supplied by the app for exactly one 4-7 word headline focused on a source-supported time, cleanup, make-ahead, or family benefit.",
+      "Use a simple high-contrast text panel and generous mobile safe margins. Add no extra captions or badges.",
+      "Avoid luxury restaurant styling, fake steam, invented ingredients, vague hype, unsupported budget or health claims, and crowded props."
     ].join("\n")
   },
   "custom-listicle-collage": {
     name: "Recipe Listicle Collage",
     prompt: [
       "Create a vertical 2:3 Pinterest collage pin for a recipe roundup or listicle.",
-      "Use 3 clean photorealistic close-up food panels with consistent bright natural lighting, clearly different relevant dishes, sharply visible texture, and simple dividers.",
-      "Crop each dish tightly enough to feel appetizing while keeping it recognizable. Use realistic portions, true ingredient colors, and no repeated or invented food.",
-      "Add one bold overlay in the placement supplied by the app using the exact list number and main keyword from the source.",
-      "Keep the headline to 3-7 words and readable at mobile size. Avoid repeated images, fake list numbers, edge text, and crowded layouts."
+      "Use two or three clean editorial food photographs from the exact source theme. Make one image dominant and the others supporting, with consistent natural daylight and simple dividers.",
+      "Show complete recognizable servings with realistic portions and true ingredient colors. Do not repeat the same dish, invent food, or use extreme macro crops.",
+      "Reserve a calm area in the placement supplied by the app for exactly one bold 3-7 word headline using the source list number and main keyword.",
+      "Keep the layout spacious and readable at mobile size with no subtitle, badge, logo, or extra lettering. Avoid equal-size crowded grids and generic stock imagery."
     ].join("\n")
   }
 };
@@ -84,6 +83,6 @@ export function normalizePinCreatorDefaults(pinCreator = {}) {
     ...pinCreator,
     customStyles: mergePinCustomStyles(pinCreator.customStyles),
     titleDescPrompt: pinCreator.titleDescPrompt || DEFAULT_PIN_TITLE_DESC_PROMPT,
-    promptDefaultsVersion: 2
+    promptDefaultsVersion: 3
   };
 }
