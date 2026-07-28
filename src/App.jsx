@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import Sidebar from "@/components/Sidebar";
+import ErrorBoundary from "@/components/ErrorBoundary";
 import ArticlesWorkflow from "@/components/ArticlesWorkflow";
 import { electronAPI, isElectronApp } from "@/lib/electron";
 import { DEFAULT_PIN_CUSTOM_STYLES, DEFAULT_PIN_TITLE_DESC_PROMPT, normalizePinCreatorDefaults } from "@/lib/pinCreatorDefaults";
@@ -477,28 +478,30 @@ export default function App() {
             Browser preview mode is for UI testing only. Launch the Electron app to call Replicate, generate images, save files, and publish.
           </div>
         ) : null}
-        <Suspense fallback={
-          <div className="glass rounded-lg p-6 text-sm font-black text-slate-700 shadow-panel">
-            Loading screen...
-          </div>
-        }>
-          <div className={activeScreen === "articles" ? "" : "hidden"}>
-            <ArticlesWorkflow {...screenProps} />
-          </div>
-          <div className={activeScreen === "pin-creator" ? "" : "hidden"}>
-            <PinCreatorView {...screenProps} />
-          </div>
-          <div className={activeScreen === "meta-studio" ? "" : "hidden"}>
-            <MetaStudio {...screenProps} />
-          </div>
-          <div className={activeScreen === "video-studio" ? "" : "hidden"}>
-            <VideoStudio {...screenProps} />
-          </div>
-          <div className={activeScreen === "trends" ? "" : "hidden"}>
-            <TrendsResearch {...screenProps} />
-          </div>
-          {!['articles', 'pin-creator', 'meta-studio', 'video-studio', 'trends'].includes(activeScreen) ? screen : null}
-        </Suspense>
+        <ErrorBoundary key={activeScreen} onReturnArticles={() => setActiveScreen("articles")}>
+          <Suspense fallback={
+            <div className="glass rounded-lg p-6 text-sm font-black text-slate-700 shadow-panel">
+              Loading screen...
+            </div>
+          }>
+            <div className={activeScreen === "articles" ? "" : "hidden"}>
+              <ArticlesWorkflow {...screenProps} />
+            </div>
+            <div className={activeScreen === "pin-creator" ? "" : "hidden"}>
+              <PinCreatorView {...screenProps} />
+            </div>
+            <div className={activeScreen === "meta-studio" ? "" : "hidden"}>
+              <MetaStudio {...screenProps} />
+            </div>
+            <div className={activeScreen === "video-studio" ? "" : "hidden"}>
+              <VideoStudio {...screenProps} />
+            </div>
+            <div className={activeScreen === "trends" ? "" : "hidden"}>
+              <TrendsResearch {...screenProps} />
+            </div>
+            {!['articles', 'pin-creator', 'meta-studio', 'video-studio', 'trends'].includes(activeScreen) ? screen : null}
+          </Suspense>
+        </ErrorBoundary>
       </main>
     </div>
   );
