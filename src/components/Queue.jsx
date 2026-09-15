@@ -1,5 +1,5 @@
 import { Ban, Check, Clock3, Pause, Play, Plus, RefreshCw, RotateCcw, Save, Trash2 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import SectionHeader from "@/components/SectionHeader";
 import { useConfirmDialog } from "@/components/ConfirmDialog";
 import { Button, EmptyState } from "@/components/ui";
@@ -87,7 +87,7 @@ function OutlineReviewCard({ article, busy, onSave, onApprove, onRegenerate, onC
   );
 }
 
-export default function Queue({ articles, settings, saveSettings, refreshArticles, setActiveScreen, setArticlesWorkflowStage, embedded = false, rowStatusFilter = "all" }) {
+export default function Queue({ articles, settings, refreshArticles, setActiveScreen, setArticlesWorkflowStage, embedded = false, rowStatusFilter = "all" }) {
   const confirmAction = useConfirmDialog();
   const [running, setRunning] = useState(false);
   const [paused, setPaused] = useState(false);
@@ -107,6 +107,33 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
   const [estimateLoading, setEstimateLoading] = useState(false);
   const [estimateError, setEstimateError] = useState("");
   const [outlineWorkingId, setOutlineWorkingId] = useState("");
+  const articleSettings = useCallback((article) => {
+    const smartRecommendations = buildSmartGenerationSettings(article, settings);
+    const selectedPreset = settings.projectPresets?.find((preset) => preset.id === article.projectPresetId);
+    const resolved = resolveArticleGenerationSettings({
+      article,
+      preset: selectedPreset,
+      smartRecommendations,
+      globalSettings: settings
+    });
+    const brandVoiceId = resolved.brandVoiceId || smartRecommendations.smartIntent?.brandVoiceId || "";
+    const brandVoice = settings.brandVoices?.find((voice) => voice.id === brandVoiceId);
+    const articleBrief = buildArticleBrief({
+      article,
+      resolvedSettings: resolved,
+      cannibalizationConflicts: detectCannibalization(
+        article.generatedTitle || article.title,
+        articles.filter((candidate) => candidate.id !== article.id),
+        { threshold: 62 }
+      )
+    });
+    return {
+      ...resolved,
+      brandVoice,
+      outline: article.outlineApproved ? article.outline : "",
+      articleBrief
+    };
+  }, [articles, settings]);
   const pending = useMemo(() => articles.filter((article) => article.queueStatus === "pending"), [articles]);
   const extraCollectionTextCalls = useMemo(() => pending.reduce((total, article) => {
     const count = parsePromisedRecipeCount(article.title);
@@ -114,11 +141,11 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
     return count >= 6 && !usesCompactRecipeCollection(count, articleLength)
       ? total + Math.ceil(count / 5)
       : total;
-  }, 0), [pending, settings]);
+  }, 0), [pending, articleSettings]);
   const outlineCalls = useMemo(() => pending.filter((article) => {
     const resolved = articleSettings(article);
     return articleGenerationEntryAction(article, resolved) === "generate-outline";
-  }).length, [pending, settings]);
+  }).length, [pending, articleSettings]);
   const completed = articles.filter((article) => article.queueStatus === "completed");
   const failed = articles.filter((article) => article.queueStatus === "error");
   const activeRowsAll = articles.filter((article) => ["pending", "generating", "outline-review", "error", "completed", "cancelled"].includes(article.queueStatus));
@@ -226,34 +253,6 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
     setProgress(pausedRef.current
       ? "Pause requested. The current request will finish, then processing will stop before the next step."
       : "Resuming article generation...");
-  }
-
-  function articleSettings(article) {
-    const smartRecommendations = buildSmartGenerationSettings(article, settings);
-    const selectedPreset = settings.projectPresets?.find((preset) => preset.id === article.projectPresetId);
-    const resolved = resolveArticleGenerationSettings({
-      article,
-      preset: selectedPreset,
-      smartRecommendations,
-      globalSettings: settings
-    });
-    const brandVoiceId = resolved.brandVoiceId || smartRecommendations.smartIntent?.brandVoiceId || "";
-    const brandVoice = settings.brandVoices?.find((voice) => voice.id === brandVoiceId);
-    const articleBrief = buildArticleBrief({
-      article,
-      resolvedSettings: resolved,
-      cannibalizationConflicts: detectCannibalization(
-        article.generatedTitle || article.title,
-        articles.filter((candidate) => candidate.id !== article.id),
-        { threshold: 62 }
-      )
-    });
-    return {
-      ...resolved,
-      brandVoice,
-      outline: article.outlineApproved ? article.outline : "",
-      articleBrief
-    };
   }
 
   async function requestOutline(article) {
@@ -407,16 +406,28 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
 
     const affiliateProvider = settingsForGen.affiliateProvider || "impact";
     const impactReady = Boolean(settingsForGen.impactAccountSid && settingsForGen.impactAuthToken);
-    const amazonReady = Boolean(settingsForGen.amazonPartnerTag);
+    const exactAmazonProductReady = (settingsForGen.affiliateLinks || []).some((item) =>
+      item?.enabled !== false
+      && item?.source === "amazon"
+      && item?.trackingVerified === true
+      && item?.amazonLinkType === "product"
+      && /^[A-Z0-9]{10}$/i.test(String(item?.amazonAsin || ""))
+    );
+    const amazonReady = Boolean(
+      settingsForGen.amazonPartnerTag
+      && ((settingsForGen.amazonCredentialId && settingsForGen.amazonCredentialSecret) || exactAmazonProductReady)
+    );
     const selectedProviderReady = affiliateProvider === "both"
       ? impactReady || amazonReady
       : affiliateProvider === "amazon"
         ? amazonReady
         : impactReady;
+    const fallbackProviderReady = settingsForGen.affiliateProviderFallback !== false
+      && (impactReady || amazonReady);
     const affiliateDiscoveryEnabled = settingsForGen.affiliateEnabled !== false
       && settingsForGen.affiliateAutoDiscover !== false
       && settingsForGen.affiliateAutoInsert !== false
-      && selectedProviderReady;
+      && (selectedProviderReady || fallbackProviderReady);
     let totalStages = 4
       + (settingsForGen.enableIntextImages ? 1 + Math.max(0, Number(settingsForGen.intextImageCount ?? 1)) : 0)
       + (affiliateDiscoveryEnabled ? 1 : 0);
@@ -641,13 +652,17 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
           reviewedProducts: Number(discovery.reviewedProducts || 0),
           qualifiedProducts: Number(discovery.qualifiedProducts || 0),
           queries: discovery.queries || [],
+          providers: discovery.providers || [],
+          providerErrors: discovery.providerErrors || [],
+          fallbackUsed: discovery.fallbackUsed === true,
+          notice: discovery.notice || "",
           discoveredCount: discovery.affiliates?.length || 0,
           completedAt: new Date().toISOString()
         };
         const availableAffiliateLinks = [
           ...(settingsForGen.affiliateLinks || []),
           ...(discovery.success ? discovery.affiliates || [] : [])
-        ];
+        ].filter((item) => item?.trackingVerified !== false);
         if (availableAffiliateLinks.length) {
           const affiliateLibrary = availableAffiliateLinks
             .filter((item, index, items) => items.findIndex((candidate) =>
@@ -725,7 +740,8 @@ export default function Queue({ articles, settings, saveSettings, refreshArticle
         { ...enriched, seoScore: seo.score, seoChecks: seo.checks, imageQa },
         {
           maxAffiliateLinks: settingsForGen.affiliateMaxLinks,
-          requireFeaturedImage: true
+          requireFeaturedImage: true,
+          site: internalLinkSite
         }
       );
 

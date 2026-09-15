@@ -132,6 +132,8 @@ function normalizedAffiliateItems(settings = {}) {
     }))
     .filter((item) => {
       if (item.enabled === false || !item.name || !item.url || !item.anchorText || !item.terms.length) return false;
+      if (item.trackingVerified === false) return false;
+      if (["impact", "amazon"].includes(item.source) && item.trackingVerified !== true) return false;
       if (item.source === "amazon") {
         return item.amazonLinkType === "product"
           && /^[A-Z0-9]{10}$/i.test(String(item.amazonAsin || ""));

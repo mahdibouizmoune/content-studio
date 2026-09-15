@@ -30,7 +30,11 @@ import Diagnostics from "@/components/Diagnostics";
 import { Button, Field, inputClass } from "@/components/ui";
 import { electronAPI } from "@/lib/electron";
 import { ARTICLE_SIZE_OPTIONS } from "@/lib/articlePostProcess.mjs";
-import { DEFAULT_PIN_CUSTOM_STYLES, DEFAULT_PIN_TITLE_DESC_PROMPT } from "@/lib/pinCreatorDefaults";
+import {
+  DEFAULT_PIN_CUSTOM_STYLES,
+  DEFAULT_PIN_TITLE_DESC_PROMPT,
+  PIN_PROMPT_DEFAULTS_VERSION
+} from "@/lib/pinCreatorDefaults";
 import { imageModelCards as imageModels, textModelCards as textModels } from "@/lib/modelRegistry.mjs";
 
 const imageRatioOptions = [
@@ -104,6 +108,24 @@ function RadioCards({ value, onChange, items }) {
   );
 }
 
+function SecretControl({ value, onChange, onClear, placeholder = "" }) {
+  return (
+    <div className="flex items-center gap-2">
+      <input
+        type="password"
+        className={inputClass}
+        autoComplete="new-password"
+        value={value || ""}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
+      />
+      <Button type="button" variant="secondary" onClick={onClear} disabled={!value} title="Remove the saved credential">
+        <Trash2 className="h-4 w-4" />Clear
+      </Button>
+    </div>
+  );
+}
+
 export default function Settings({ settings, saveSettings, refreshArticles, setActiveScreen, initialOpenSection = "general" }) {
   const confirmAction = useConfirmDialog();
   const [draft, setDraft] = useState(settings);
@@ -169,7 +191,7 @@ export default function Settings({ settings, saveSettings, refreshArticles, setA
     updatePinCreator({
       customStyles: DEFAULT_PIN_CUSTOM_STYLES,
       titleDescPrompt: DEFAULT_PIN_TITLE_DESC_PROMPT,
-      promptDefaultsVersion: 5
+      promptDefaultsVersion: PIN_PROMPT_DEFAULTS_VERSION
     });
   }
 
@@ -201,6 +223,50 @@ export default function Settings({ settings, saveSettings, refreshArticles, setA
     const wordpressSites = [...(draft.wordpressSites || [])];
     wordpressSites[index] = { ...wordpressSites[index], ...patch };
     update({ wordpressSites });
+  }
+
+  async function clearCredential(credential, options = {}) {
+    const label = options.label || "saved credential";
+    if (!await confirmAction({
+      title: `Remove ${label}`,
+      message: `Content Studio will permanently remove the encrypted ${label} from this computer.`,
+      confirmLabel: "Remove Credential",
+      tone: "danger"
+    })) return;
+    const result = await electronAPI.clearStoredCredential({
+      credential,
+      siteId: options.site?.id,
+      siteUrl: options.site?.url
+    });
+    if (!result?.success) {
+      setStatus(result?.error || `Could not remove ${label}.`);
+      return;
+    }
+    setDraft((current) => {
+      if (credential === "imgbb") {
+        return { ...current, pinCreator: { ...(current.pinCreator || {}), imgbbApiKey: "" } };
+      }
+      if (credential === "wordpress") {
+        return {
+          ...current,
+          wordpressSites: (current.wordpressSites || []).map((site, index) => (
+            index === options.index ? { ...site, apiKey: "" } : site
+          ))
+        };
+      }
+      const fieldMap = {
+        replicate: "replicateApiToken",
+        ghl: "ghlApiToken",
+        impact: "impactAuthToken",
+        amazon: "amazonCredentialSecret",
+        pinterest: "pinterestAnalyticsAccessToken"
+      };
+      if (credential === "google") {
+        return { ...current, googleClientSecret: "", googleSearchConsoleConnected: false };
+      }
+      return fieldMap[credential] ? { ...current, [fieldMap[credential]]: "" } : current;
+    });
+    setStatus(`${label} removed.`);
   }
 
   function updateBrandVoice(index, patch) {
@@ -650,11 +716,19 @@ export default function Settings({ settings, saveSettings, refreshArticles, setA
         <SettingPanel id="api" open={open} setOpen={setOpen} icon={KeyRound} tone="icon-gradient-purple" title="API Configuration" subtitle="Replicate token and text model" badge={draft.replicateApiToken ? "connected" : ""}>
           <div className="space-y-5">
             <Field label="Replicate API Token" hint="Stored encrypted by the Electron main process.">
-              <input type="password" className={inputClass} value={draft.replicateApiToken || ""} onChange={(event) => update({ replicateApiToken: event.target.value })} />
+              <SecretControl
+                value={draft.replicateApiToken}
+                onChange={(replicateApiToken) => update({ replicateApiToken })}
+                onClear={() => clearCredential("replicate", { label: "Replicate API token" })}
+              />
             </Field>
             <div className="grid gap-4 md:grid-cols-2">
               <Field label="GoHighLevel API Token" hint="Sub-account Private Integration token with socialplanner/post.write and socialplanner/post.readonly. Stored encrypted.">
-                <input type="password" className={inputClass} value={draft.ghlApiToken || ""} onChange={(event) => update({ ghlApiToken: event.target.value })} />
+                <SecretControl
+                  value={draft.ghlApiToken}
+                  onChange={(ghlApiToken) => update({ ghlApiToken })}
+                  onClear={() => clearCredential("ghl", { label: "GoHighLevel API token" })}
+                />
               </Field>
               <Field label="GoHighLevel Location ID" hint="Required for direct Social Planner CSV upload.">
                 <input className={inputClass} value={draft.ghlLocationId || ""} onChange={(event) => update({ ghlLocationId: event.target.value })} placeholder="Sub-account location ID" />
@@ -715,7 +789,11 @@ export default function Settings({ settings, saveSettings, refreshArticles, setA
                   <input className={inputClass} value={draft.googleClientId || ""} onChange={(event) => update({ googleClientId: event.target.value })} placeholder="...apps.googleusercontent.com" />
                 </Field>
                 <Field label="Google Desktop OAuth Client Secret" hint="Stored encrypted.">
-                  <input type="password" className={inputClass} value={draft.googleClientSecret || ""} onChange={(event) => update({ googleClientSecret: event.target.value })} />
+                  <SecretControl
+                    value={draft.googleClientSecret}
+                    onChange={(googleClientSecret) => update({ googleClientSecret })}
+                    onClear={() => clearCredential("google", { label: "Google OAuth credentials" })}
+                  />
                 </Field>
                 <Field label="Search Console property">
                   <select className={inputClass} value={draft.googleSearchConsoleProperty || ""} onChange={(event) => update({ googleSearchConsoleProperty: event.target.value })}>
@@ -736,7 +814,11 @@ export default function Settings({ settings, saveSettings, refreshArticles, setA
               <div className="mb-3 font-black text-slate-900">Pinterest Analytics</div>
               <div className="grid gap-4 md:grid-cols-[1fr_auto]">
                 <Field label="Pinterest access token" hint="Requires Pinterest analytics access. Stored encrypted.">
-                  <input type="password" className={inputClass} value={draft.pinterestAnalyticsAccessToken || ""} onChange={(event) => update({ pinterestAnalyticsAccessToken: event.target.value })} />
+                  <SecretControl
+                    value={draft.pinterestAnalyticsAccessToken}
+                    onChange={(pinterestAnalyticsAccessToken) => update({ pinterestAnalyticsAccessToken })}
+                    onClear={() => clearCredential("pinterest", { label: "Pinterest access token" })}
+                  />
                 </Field>
                 <div className="flex items-end">
                   <Button variant="secondary" onClick={testPinterestAnalytics} disabled={!!analyticsBusy}>
@@ -753,7 +835,11 @@ export default function Settings({ settings, saveSettings, refreshArticles, setA
           <div className="space-y-5">
             <div className="grid gap-4 md:grid-cols-2">
               <Field label="ImgBB API Key" hint="Optional. Used to host generated pins permanently.">
-                <input type="password" className={inputClass} value={draft.pinCreator?.imgbbApiKey || ""} onChange={(event) => updatePinCreator({ imgbbApiKey: event.target.value })} />
+                <SecretControl
+                  value={draft.pinCreator?.imgbbApiKey}
+                  onChange={(imgbbApiKey) => updatePinCreator({ imgbbApiKey })}
+                  onClear={() => clearCredential("imgbb", { label: "ImgBB API key" })}
+                />
               </Field>
               <Field label="Pin Creator AI Model">
                 <select className={inputClass} value={draft.pinCreator?.aiModel || "auto"} onChange={(event) => updatePinCreator({ aiModel: event.target.value })}>
@@ -899,8 +985,8 @@ export default function Settings({ settings, saveSettings, refreshArticles, setA
               </Field>
             </div>
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-              <Field label="Featured article image"><ImageRatioSelect value={draft.featuredImageRatio || "3:2"} onChange={(featuredImageRatio) => update({ featuredImageRatio })} /></Field>
-              <Field label="In-text article image"><ImageRatioSelect value={draft.intextImageRatio || "4:3"} onChange={(intextImageRatio) => update({ intextImageRatio })} /></Field>
+              <Field label="Featured thumbnail image"><ImageRatioSelect value={draft.featuredImageRatio || "3:2"} onChange={(featuredImageRatio) => update({ featuredImageRatio })} /></Field>
+              <Field label="In-article portrait for Pinterest"><ImageRatioSelect value={draft.intextImageRatio || "9:16"} onChange={(intextImageRatio) => update({ intextImageRatio })} /></Field>
               <Field label="Pinterest pin"><ImageRatioSelect value={draft.pinterestPinRatio || "2:3"} onChange={(pinterestPinRatio) => update({ pinterestPinRatio })} /></Field>
               <Field label="Instagram portrait"><ImageRatioSelect value={draft.instagramPortraitRatio || "4:5"} onChange={(instagramPortraitRatio) => update({ instagramPortraitRatio })} /></Field>
               <Field label="Instagram Story or Reel"><ImageRatioSelect value={draft.instagramStoryRatio || "9:16"} onChange={(instagramStoryRatio) => update({ instagramStoryRatio })} /></Field>
@@ -948,7 +1034,12 @@ export default function Settings({ settings, saveSettings, refreshArticles, setA
                   <input className={inputClass} autoComplete="off" value={draft.impactAccountSid || ""} onChange={(event) => update({ impactAccountSid: event.target.value })} placeholder="Account SID" />
                 </Field>
                 <Field label="Impact Auth Token">
-                  <input type="password" className={inputClass} autoComplete="new-password" value={draft.impactAuthToken || ""} onChange={(event) => update({ impactAuthToken: event.target.value })} placeholder="Auth Token" />
+                  <SecretControl
+                    value={draft.impactAuthToken}
+                    onChange={(impactAuthToken) => update({ impactAuthToken })}
+                    onClear={() => clearCredential("impact", { label: "Impact auth token" })}
+                    placeholder="Auth Token"
+                  />
                 </Field>
                 <Field label="Media Property ID" hint="Optional">
                   <input className={inputClass} autoComplete="off" value={draft.impactMediaPropertyId || ""} onChange={(event) => update({ impactMediaPropertyId: event.target.value })} placeholder="Property ID" />
@@ -1037,7 +1128,12 @@ export default function Settings({ settings, saveSettings, refreshArticles, setA
                     <input className={inputClass} autoComplete="off" value={draft.amazonCredentialId || ""} onChange={(event) => update({ amazonCredentialId: event.target.value })} placeholder="Credential ID" />
                   </Field>
                   <Field label="Creators API Credential Secret" hint="Optional and encrypted">
-                    <input type="password" className={inputClass} autoComplete="new-password" value={draft.amazonCredentialSecret || ""} onChange={(event) => update({ amazonCredentialSecret: event.target.value })} placeholder="Credential Secret" />
+                    <SecretControl
+                      value={draft.amazonCredentialSecret}
+                      onChange={(amazonCredentialSecret) => update({ amazonCredentialSecret })}
+                      onClear={() => clearCredential("amazon", { label: "Amazon credential secret" })}
+                      placeholder="Credential Secret"
+                    />
                   </Field>
                 </div>
                 <div className="mt-3 flex flex-wrap gap-2">
@@ -1136,6 +1232,10 @@ export default function Settings({ settings, saveSettings, refreshArticles, setA
                 <span><span className="block">Auto Search Provider</span><span className="text-sm font-medium text-slate-500">Search selected providers while each article is generated</span></span>
                 <input type="checkbox" className="h-5 w-5" checked={draft.affiliateAutoDiscover !== false} onChange={(event) => update({ affiliateAutoDiscover: event.target.checked })} />
               </label>
+              <label className="flex items-center justify-between gap-4 rounded-md bg-slate-50 p-4 font-bold text-slate-800 ring-1 ring-slate-100">
+                <span><span className="block">Verified Provider Fallback</span><span className="text-sm font-medium text-slate-500">Use the other connected provider when the selected one is not ready</span></span>
+                <input type="checkbox" className="h-5 w-5" checked={draft.affiliateProviderFallback !== false} onChange={(event) => update({ affiliateProviderFallback: event.target.checked })} />
+              </label>
               <Field label="Maximum links per article" hint="A restrained limit keeps recommendations useful.">
                 <input type="number" min="0" max="8" className={inputClass} value={draft.affiliateMaxLinks ?? 3} onChange={(event) => update({ affiliateMaxLinks: Math.max(0, Math.min(8, Number(event.target.value))) })} />
               </Field>
@@ -1229,7 +1329,13 @@ export default function Settings({ settings, saveSettings, refreshArticles, setA
                   <Field label="Site name"><input className={inputClass} value={site.name || ""} onChange={(event) => updateSite(index, { name: event.target.value })} /></Field>
                   <Field label="URL"><input className={inputClass} value={site.url || ""} onChange={(event) => updateSite(index, { url: event.target.value })} /></Field>
                   <Field label="Username"><input className={inputClass} value={site.username || ""} onChange={(event) => updateSite(index, { username: event.target.value })} /></Field>
-                  <Field label="Application password"><input type="password" className={inputClass} value={site.apiKey || ""} onChange={(event) => updateSite(index, { apiKey: event.target.value })} /></Field>
+                  <Field label="Application password">
+                    <SecretControl
+                      value={site.apiKey}
+                      onChange={(apiKey) => updateSite(index, { apiKey })}
+                      onClear={() => clearCredential("wordpress", { label: `${site.name || "WordPress"} application password`, site, index })}
+                    />
+                  </Field>
                   <Field label="Fallback category">
                     <select className={inputClass} value={site.defaultCategoryId || ""} onChange={(event) => updateSite(index, { defaultCategoryId: event.target.value })}>
                       <option value="">None</option>
@@ -1304,7 +1410,7 @@ export default function Settings({ settings, saveSettings, refreshArticles, setA
 
         <SettingPanel id="advanced-features" open={open} setOpen={setOpen} icon={Sparkles} tone="icon-gradient-blue" title="Advanced Features" subtitle="Opt-in planning, attribution, and operational tools">
           <div className="mb-4 rounded-md bg-violet-50 px-3 py-2 text-sm font-semibold text-violet-700 ring-1 ring-violet-100">
-            These local workspace tools are off by default. Enabling them adds navigation screens but does not enable automatic publishing.
+            These local workspaces are available by default. They never publish without a clear publishing action.
           </div>
           <div className="grid gap-3 md:grid-cols-2">
             {[
@@ -1328,6 +1434,26 @@ export default function Settings({ settings, saveSettings, refreshArticles, setA
                 />
               </label>
             ))}
+          </div>
+          <div className="mt-4 grid gap-3 md:grid-cols-2">
+            <label className="flex items-center justify-between gap-4 rounded-md bg-slate-50 p-4 ring-1 ring-slate-100">
+              <span><span className="block font-black text-slate-900">Performance Scheduling</span><span className="mt-1 block text-sm font-medium text-slate-500">Use imported Pinterest performance to recommend post times</span></span>
+              <input type="checkbox" className="h-5 w-5 shrink-0" checked={draft.performanceSchedulingEnabled !== false} onChange={(event) => update({ performanceSchedulingEnabled: event.target.checked })} />
+            </label>
+            <label className="flex items-center justify-between gap-4 rounded-md bg-slate-50 p-4 ring-1 ring-slate-100">
+              <span><span className="block font-black text-slate-900">Post-Publish QA</span><span className="mt-1 block text-sm font-medium text-slate-500">Check the public recipe, schema, links, and media after publish</span></span>
+              <input type="checkbox" className="h-5 w-5 shrink-0" checked={draft.postPublishQaEnabled !== false} onChange={(event) => update({ postPublishQaEnabled: event.target.checked })} />
+            </label>
+            <label className="flex items-center justify-between gap-4 rounded-md bg-slate-50 p-4 ring-1 ring-slate-100">
+              <span><span className="block font-black text-slate-900">Automatic Media Cleanup</span><span className="mt-1 block text-sm font-medium text-slate-500">Remove unreferenced generated files after the retention period</span></span>
+              <input type="checkbox" className="h-5 w-5 shrink-0" checked={draft.automaticMediaCleanupEnabled !== false} onChange={(event) => update({ automaticMediaCleanupEnabled: event.target.checked })} />
+            </label>
+            <Field label="Unused generated media retention days" hint="Defaults to 7 days. Files still referenced by saved articles, Pins, social posts, or videos are protected.">
+              <input className={inputClass} type="number" min="7" max="365" value={draft.mediaRetentionDays || 7} onChange={(event) => update({ mediaRetentionDays: Math.max(7, Number(event.target.value || 7)) })} />
+            </Field>
+            <Field label="Secure update feed URL">
+              <input className={inputClass} type="url" value={draft.updateFeedUrl || ""} onChange={(event) => update({ updateFeedUrl: event.target.value })} placeholder="https://updates.example.com/content-studio" />
+            </Field>
           </div>
         </SettingPanel>
 

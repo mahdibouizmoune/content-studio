@@ -1,7 +1,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
+const sharp = require('sharp');
 
 const { cancelJobsByPrefixes } = require('../electron/job-control');
 const {
@@ -11,18 +13,66 @@ const {
 } = require('../electron/pin-queue');
 const { addUtmParams, isUtmEligibleDestination } = require('../electron/utm');
 const {
+  affiliateProviderOrder,
+  affiliateProviderReadiness,
+  normalizeAffiliateLibrary
+} = require('../electron/affiliate-system');
+const {
   PINTEREST_FOOD_GUARDRAIL_MARKER,
+  enhancePinterestAiTextPrompt,
+  enhancePinterestFoodPhotoPrompt,
   enhancePinterestImagePrompt,
+  enhancePinterestOriginalJulyAiPrompt,
+  enhancePinterestJuly25AiPrompt,
+  enhancePinterestLegacyAiPrompt,
+  enhancePinterestPromptLedAiPrompt,
+  isLikelyBowlPrompt,
+  isLikelyDrinkPrompt,
   isLikelyFoodPrompt,
-  removePreviousRequirements
+  isPinterestAiLetteringPrompt,
+  isPromptLedPinterestCreative,
+  pinterestAiOverlayTreatment,
+  pinterestAppetiteDirection,
+  pinterestIngredientRealityRules,
+  pinterestPhotographyDirection,
+  removePreviousRequirements,
+  stripTextProhibitions
 } = require('../electron/pinterest-image-prompt');
+const {
+  buildOverlaySvg,
+  comparePinterestImageIdentity,
+  createPinterestOverlay,
+  perceptualHash,
+  perceptualHashDistance,
+  polishPinterestOverlayText,
+  shortOverlayText,
+  wrapOverlayText
+} = require('../electron/pinterest-overlay');
+const {
+  PINTEREST_CSV_HEADERS,
+  assertPinterestCsvBytes,
+  normalizePinterestKeywords,
+  normalizePinterestPublishDate,
+  pinterestCsvFilename,
+  sanitizePinterestCsvValue,
+  serializePinterestCsv,
+  splitPinterestRows,
+  validatePinterestRows
+} = require('../electron/pinterest-export');
+const { findMatchingWordPressSite, normalizedHostname } = require('../electron/pinterest-hosting');
+const { buildPinSourceSnapshot } = require('../electron/pin-source');
 const { extractCleanPinPrompt, fallbackPinPrompt, hasReasoningLeak } = require('../electron/pin-prompt-quality');
 const { normalizeImportedArticles } = require('../electron/article-storage');
 const { assertSafeRemoteRedirect, isPathInsideRoots, isSafeRemoteMediaUrl } = require('../electron/media-security');
+const { mediaCleanupCandidates, normalizeMediaRetentionDays } = require('../electron/media-retention');
+const { configuredWindowsPublisherNames, normalizeUpdateFeedUrl } = require('../electron/update-security');
 const { mergePinStyles, migratePinStyles } = require('../electron/pin-style-settings');
 const {
   articleLengthMaximum,
   buildRecipeChunkRanges,
+  buildRecipeRetryPrompt,
+  canonicalizeNumberedRecipeHeadings,
+  extractNumberedH2s,
   recommendedRecipeCollectionLength,
   validateRecipeChunk,
   validateRecipeCard,
@@ -56,7 +106,6 @@ const {
   buildAmazonAffiliateItem,
   buildAmazonManualAffiliate,
   buildAmazonProductUrl,
-  buildAmazonSearchAffiliate,
   buildAmazonSearchUrl,
   extractAmazonAsin,
   extractAmazonItems,
@@ -80,8 +129,25 @@ const { migrateSettings } = require('../electron/settings-migrations');
 const { ratioToDimensions, resolveImageRatio } = require('../electron/image-ratios');
 const { calculateEstimatedCost } = require('../electron/cost-estimation');
 const { buildWordPressPostPayload } = require('../electron/wordpress-payload');
-const { connectionStatus, sanitizeDiagnosticReport } = require('../electron/diagnostics');
+const { sanitizeWordPressArticleHtml } = require('../electron/wordpress-content');
+const { connectionStatus, sanitizeDiagnosticReport, sanitizeProviderError } = require('../electron/diagnostics');
+const { createWorkspaceStore } = require('../electron/workspace-store');
+const { createJobCenter } = require('../electron/job-center');
+const { buildPerformanceScheduleProfile, nextPerformanceSlots } = require('../electron/performance-scheduling');
+const { postPublishChecks } = require('../electron/post-publish-qa');
+const { chunkRows, numberedCsvPath } = require('../electron/ghl-export');
+const { recoverMaskedTokenFailures, resolveRendererSecret } = require('../electron/credential-boundary');
+const {
+  extractPinterestSourceMetadata,
+  fallbackPinterestClusterPlan,
+  normalizePinterestClusterPlan
+} = require('../electron/pinterest-clusters');
 const { normalizeBatchImportRows } = require('../electron/article-import');
+const {
+  preferredMetaSource,
+  syncAutomaticMetaProjects,
+  upsertAutomaticMetaProject
+} = require('../electron/meta-auto-pack');
 const {
   allowedCollection,
   normalizeRevenueRows,
@@ -673,15 +739,18 @@ test('Pinterest image prompts preserve ultra-realistic close-up food photography
   const enhanced = enhancePinterestImagePrompt(original);
 
   assert.match(enhanced, new RegExp(PINTEREST_FOOD_GUARDRAIL_MARKER));
-  assert.match(enhanced, /ultra-realistic premium photorealistic editorial food photography/i);
-  assert.match(enhanced, /70-82%/);
-  assert.match(enhanced, /30-45 degree view or tight overhead view/i);
-  assert.match(enhanced, /bright diffused side-window light/i);
+  assert.match(enhanced, /unmistakably real, premium close-up editorial photograph/i);
+  assert.match(enhanced, /72-86%/);
+  assert.match(enhanced, /30-45 degree hero angle or close overhead angle/i);
+  assert.match(enhanced, /large diffused side window and soft bounce fill/i);
+  assert.match(enhanced, /real full-frame food-photography look with a natural 50-85mm perspective/i);
+  assert.match(enhanced, /f\/4-f\/5\.6-like depth of field/i);
   assert.match(enhanced, /vertical 2:3 Pinterest composition/i);
   assert.match(enhanced, /only the one quoted headline/i);
-  assert.match(enhanced, /premium bold geometric sans-serif/i);
-  assert.match(enhanced, /full-width frosted-glass ribbon/i);
-  assert.match(enhanced, /recipe remains clearly visible beneath it/i);
+  assert.match(enhanced, /premium bold display lettering/i);
+  assert.match(enhanced, /strong contrasting outline/i);
+  assert.doesNotMatch(enhanced, /frosted-glass ribbon/i);
+  assert.match(enhanced, /Do not draw a banner/i);
   assert.ok(enhanced.startsWith(original));
   assert.equal(enhancePinterestImagePrompt(enhanced), enhanced);
 });
@@ -700,6 +769,7 @@ test('Pinterest prompt enhancement does not force recipe styling onto non-food s
   const enhanced = enhancePinterestImagePrompt('Bright modern kitchen organization with the exact headline "Calm Kitchen Ideas".');
 
   assert.equal(isLikelyFoodPrompt('Garlic butter shrimp recipe'), true);
+  assert.equal(isLikelyFoodPrompt('Sparkling cherry lemonade'), true);
   assert.equal(isLikelyFoodPrompt('Modern entryway storage ideas'), false);
   assert.match(enhanced, /polished, believable editorial photograph/i);
   assert.doesNotMatch(enhanced, /exact finished recipe/i);
@@ -712,18 +782,1166 @@ test('pin prompt quality allows normal titles containing actually and removes re
 
   const reasoned = `Let's craft the image prompt.\n\nFinal image prompt: Photorealistic close-up of cottage cheese toast with centered readable text.`;
   assert.match(extractCleanPinPrompt(reasoned), /^Photorealistic close-up/);
-  assert.match(fallbackPinPrompt({ sourceTitle: 'Cottage Cheese Breakfast Ideas' }, 'middle'), /frosted-glass center ribbon/i);
+  const fallback = fallbackPinPrompt({ sourceTitle: 'Cottage Cheese Breakfast Ideas' }, 'middle');
+  assert.match(fallback, /center band visually calm/i);
+  assert.match(fallback, /Generate no text/i);
 });
 
-test('Pinterest image generation uses Ideogram enhancement and standard 2:3 default', () => {
+test('Pinterest clean-photo prompts remove model-generated overlay instructions', () => {
+  const prompt = enhancePinterestFoodPhotoPrompt(
+    'Close-up garlic shrimp. Text Overlay: "Easy Garlic Shrimp" on a frosted-glass ribbon.',
+    'middle'
+  );
+  assert.match(prompt, /Generate only a clean/i);
+  assert.match(prompt, /72-86%/);
+  assert.match(prompt, /pores, crumbs, fibers/i);
+  assert.match(prompt, /later exact title lettering/i);
+  assert.doesNotMatch(prompt.split('PINTEREST CLEAN FOOD PHOTO REQUIREMENTS:')[0], /Text Overlay|frosted-glass/i);
+});
+
+test('Pinterest AI lettering prompts use exact clean mobile typography without a visible title bar', () => {
+  const prompt = enhancePinterestAiTextPrompt(
+    'Ultra-realistic close-up garlic butter shrimp. Generate no text, labels, panels, logos, or watermarks. Keep the center calm for a later local title overlay.',
+    'middle',
+    'Easy Garlic Shrimp',
+    'bold retro groovy display lettering'
+  );
+  assert.match(prompt, /Render only this exact headline once: "Easy Garlic Shrimp"/);
+  assert.match(prompt, /bold retro groovy display lettering/i);
+  assert.match(prompt, /slightly above the visual center/i);
+  assert.match(prompt, /warm-white letters with a thin charcoal keyline/i);
+  assert.match(prompt, /small feathered darkening immediately beneath the letters/i);
+  assert.match(prompt, /Never use script, mixed fonts, warped letters, or 3D effects/i);
+  assert.match(prompt, /looks genuinely photographed/i);
+  assert.match(prompt, /real full-frame food-photography look with a natural 50-85mm perspective/i);
+  assert.match(prompt, /No visible rectangle, full-width bar, ribbon, frosted panel/i);
+  assert.doesNotMatch(prompt, /use a full-width|place the text on a/i);
+  assert.doesNotMatch(prompt.split('PINTEREST IMAGE AND LETTERING BRIEF:')[0], /Generate no text|later local title overlay/i);
+  assert.equal(stripTextProhibitions('Close-up pasta. Generate no text or labels. Bright natural light.'), 'Close-up pasta. Bright natural light.');
+  assert.equal(isPinterestAiLetteringPrompt(prompt), true);
+  assert.equal(isPinterestAiLetteringPrompt('Clean close-up food photo'), false);
+});
+
+test('Pinterest ingredient realism preserves canned tuna instead of inventing raw fish cubes', () => {
+  const rule = pinterestIngredientRealityRules('Classic poke bowl made with canned tuna and rice');
+  assert.match(rule, /drained, fully cooked, opaque pale-beige tuna/i);
+  assert.match(rule, /irregular tender flakes/i);
+  assert.match(rule, /Never show raw salmon, sashimi, glossy orange cubes/i);
+  assert.match(pinterestIngredientRealityRules('Roasted chicken dinner'), /natural ingredient scale/i);
+});
+
+test('Pinterest AI generation preserves the original Saturday food prompt while reuse stays separate', () => {
+  const original = 'Closeup of garlic butter shrimp with bright natural light. Generate no text or labels. Keep a calm area for later local typography.';
+  const prompt = enhancePinterestLegacyAiPrompt(original, 'middle', 'Easy Shrimp Dinner');
+
+  assert.match(prompt, /^The text "Easy Shrimp Dinner" in the center middle\./);
+  assert.match(prompt, /PINTEREST FOOD PHOTO REQUIREMENTS/);
+  assert.match(prompt, /finished dish or one irresistible hero bite/i);
+  assert.match(prompt, /filling about 65-80% of the image/i);
+  assert.match(prompt, /bright diffused side-window light/i);
+  assert.match(prompt, /clean negative space behind the requested text panel/i);
+  assert.match(prompt, /PINTEREST AI TYPOGRAPHY/);
+  assert.match(prompt, /large bold uppercase geometric sans-serif lettering/i);
+  assert.match(prompt, /softly translucent full-width center band/i);
+  assert.doesNotMatch(prompt, /Generate no text|later local typography/i);
+  assert.doesNotMatch(prompt, /PINTEREST IMAGE AND LETTERING BRIEF/);
+  assert.equal(prompt.split('PINTEREST FOOD PHOTO REQUIREMENTS').length - 1, 1);
+  assert.match(pinterestAiOverlayTreatment('Sparkling cherry lemonade drink'), /rounded rectangle/i);
+});
+
+test('Original July AI prompt keeps the July 25 one-pass Ideogram requirements', () => {
+  const prompt = enhancePinterestJuly25AiPrompt('Closeup of garlic butter shrimp. Text Overlay in the center: "GARLIC BUTTER SHRIMP" in bold readable font.');
+  assert.match(prompt, /PINTEREST JULY 25 AI REQUIREMENTS/);
+  assert.match(prompt, /photorealistic editorial food photography, not illustration or CGI/i);
+  assert.match(prompt, /filling about 65-80% of the image/i);
+  assert.match(prompt, /bright diffused side-window light/i);
+  assert.match(prompt, /clean negative space behind the requested text panel/i);
+  assert.match(prompt, /Text Overlay in the center: "GARLIC BUTTER SHRIMP"/);
+  assert.equal(enhancePinterestJuly25AiPrompt(prompt), prompt);
+});
+
+test('Ingredient Closeup AI style uses one centered translucent panel and no stray labels', () => {
+  const prompt = enhancePinterestOriginalJulyAiPrompt(
+    'This Pinterest pin is viral. A bright professional close-up photograph of sparkling cherry lemonade with realistic ice, fruit, and natural window light. Text Overlay in the center: "Sparkling Cherry Lemonade". This Pinterest pin is bright and highly clickable.',
+    'Sparkling Cherry Lemonade'
+  );
+  assert.match(prompt, /one full-bleed vertical 2:3 photograph/i);
+  assert.match(prompt, /"SPARKLING CHERRY LEMONADE"/);
+  assert.match(prompt, /exact center middle/i);
+  assert.match(prompt, /compact softly translucent rounded rectangle/i);
+  assert.match(prompt, /thin warm-white border/i);
+  assert.doesNotMatch(prompt, /GET THE RECIPE/);
+  assert.match(prompt, /It is the only visible wording/i);
+  assert.match(prompt, /platform icon, corner badge, label, decorative symbol, extra letters/i);
+  assert.doesNotMatch(prompt, /This Pinterest pin is viral|highly clickable|ORIGINAL JULY PIN REQUIREMENTS/i);
+  assert.ok(prompt.split(/\s+/).length <= 185, `Expected a focused Ideogram prompt, received ${prompt.split(/\s+/).length} words`);
+  assert.equal(enhancePinterestOriginalJulyAiPrompt(prompt, 'Sparkling Cherry Lemonade'), prompt);
+});
+
+test('Pinterest AI generation removes accidental collages and polishes awkward overlay copy', () => {
+  const collagePrompt = 'A vertical close-up of sardine toast. Two smaller supporting shots show a skillet and melting butter, separated by dividers. Keep the center calm for overlay.';
+  const prompt = enhancePinterestLegacyAiPrompt(collagePrompt, 'middle', 'Sardine Toast Canned Fish Taste', false);
+
+  assert.match(prompt, /one single full-bleed vertical 2:3 photograph/i);
+  assert.doesNotMatch(prompt, /two smaller supporting shots|separated by dividers/i);
+  assert.match(prompt, /Never put the title in a white footer/i);
+  assert.equal(polishPinterestOverlayText('Sardine Toast Canned Fish Taste'), 'Sardine Toast');
+  assert.equal(polishPinterestOverlayText('Cold Pasta Salad Protein'), 'Cold Pasta Salad Protein');
+  assert.equal(polishPinterestOverlayText('Sardine Toast with Lemon Caper Butter'), 'Sardine Toast');
+  assert.equal(polishPinterestOverlayText('Classic Carrot Jell-O Salad with Pineapple and Marshmallows'), 'Classic Carrot Jell-O Salad');
+  assert.equal(polishPinterestOverlayText('1. Classic Sesame Tuna Poke Bowl'), 'Classic Sesame Tuna Poke Bowl');
+});
+
+test('Pinterest prompt-led AI preserves the creative layout and adds one compact recipe CTA', () => {
+  const creative = 'Create an ultra-realistic close-up cherry lemonade photograph. Integrate the headline "Sparkling Cherry Lemonade" in bold white geometric lettering inside a compact translucent cherry-red panel centered over the glass. Add a bottom button reading "GET THE RECIPE".';
+  const prompt = enhancePinterestPromptLedAiPrompt(creative, false, 'Sparkling Cherry Lemonade');
+
+  assert.equal(isPromptLedPinterestCreative(creative), true);
+  assert.match(prompt, /Preserve the prompt's chosen typography, color, placement, and integrated text treatment/i);
+  assert.match(prompt, /title bold, uppercase, geometric/i);
+  assert.match(prompt, /transparent panel, center band, direct-text glow, or stacked-band treatment/i);
+  assert.match(prompt, /no more than three centered lines/i);
+  assert.match(prompt, /no more than 28% of the canvas height/i);
+  assert.match(prompt, /Render exactly this headline once/i);
+  assert.match(prompt, /"Sparkling Cherry Lemonade"/);
+  assert.match(prompt, /Add one compact call-to-action button near the bottom center/i);
+  assert.match(prompt, /34-44% of the canvas width/i);
+  assert.match(prompt, /5-7% above the bottom edge/i);
+  assert.match(prompt, /only two text elements allowed/i);
+  assert.match(prompt, /"GET THE RECIPE"/);
+  assert.match(prompt, /translucent cherry-red panel/i);
+  assert.doesNotMatch(prompt, /softly translucent full-width center band sampled from/i);
+  assert.throws(
+    () => enhancePinterestPromptLedAiPrompt('Clean close-up shrimp photo. Generate no text or labels.'),
+    /photo-only/i
+  );
+});
+
+test('Pinterest realism prompts specialize drinks and bowls without local-overlay conflicts', () => {
+  const drink = pinterestPhotographyDirection('Sparkling cherry lemonade mocktail');
+  const bowl = pinterestPhotographyDirection('High protein chicken pasta salad bowl');
+  const aiDrink = enhancePinterestAiTextPrompt(
+    'Ultra-realistic sparkling cherry lemonade. Keep the top calm for a later local text overlay. Generate no text or labels.',
+    'top',
+    'Sparkling Cherry Lemonade',
+    'bold clean sans serif'
+  );
+
+  assert.equal(isLikelyDrinkPrompt('Sparkling cherry lemonade mocktail'), true);
+  assert.equal(isLikelyBowlPrompt('High protein chicken pasta salad bowl'), true);
+  assert.match(drink, /glass fill 74-86%/i);
+  assert.match(drink, /believable translucency, refraction, condensation/i);
+  assert.match(bowl, /tight overhead or high three-quarter/i);
+  assert.match(bowl, /part of the rim naturally cropped/i);
+  assert.doesNotMatch(aiDrink.split('PINTEREST IMAGE AND LETTERING BRIEF:')[0], /later local text overlay|Generate no text/i);
+  assert.match(aiDrink, /believable translucency, refraction, condensation/i);
+  assert.match(aiDrink, /Render only this exact headline once/i);
+  const sardineRules = pinterestIngredientRealityRules('Canned sardine toast with lemon and capers');
+  assert.match(sardineRules, /cooked sardine fillets at believable scale/i);
+  assert.match(sardineRules, /Avoid fish heads or eyes/i);
+  assert.match(enhancePinterestFoodPhotoPrompt('Premium sardine toast recipe photo', 'top'), /cooked sardine fillets at believable scale/i);
+});
+
+test('Pinterest appetite direction adapts realistic texture to each recipe type', () => {
+  assert.match(pinterestAppetiteDirection('Sparkling cherry lemonade mocktail'), /genuinely cold and freshly poured/i);
+  assert.match(pinterestAppetiteDirection('Flaky peach hand pie'), /tender interior, distinct crumb, crisp baked edge, flaky layer/i);
+  assert.match(pinterestAppetiteDirection('Creamy garlic pasta'), /believable sauce viscosity/i);
+  assert.match(pinterestAppetiteDirection('Air fryer crispy chicken'), /crisp irregular edges and natural browning/i);
+  assert.match(pinterestAppetiteDirection('Grilled salmon dinner'), /fully cooked as required, juicy but not raw/i);
+  assert.match(enhancePinterestOriginalJulyAiPrompt(
+    'Close-up creamy garlic pasta with browned edges and fresh parsley.',
+    'Creamy Garlic Pasta'
+  ), /believable sauce viscosity/i);
+});
+
+test('Pinterest local overlays preserve exact short copy and bundle supported fonts', () => {
+  const fontsDir = path.join(__dirname, '..', 'electron', 'assets', 'fonts');
+  assert.equal(shortOverlayText('Easy Garlic Butter Shrimp For Busy Weeknight Dinners'), 'Easy Garlic Butter Shrimp Busy Weeknight Dinners');
+  assert.deepEqual(wrapOverlayText('Easy Garlic Butter Shrimp', 12, 3), ['Easy Garlic', 'Butter', 'Shrimp']);
+  for (const file of [
+    'Poppins-Bold.ttf',
+    'Montserrat-Bold.ttf',
+    'PlayfairDisplay-Bold.ttf',
+    'DMSerifDisplay-Regular.ttf',
+    'BebasNeue-Regular.ttf',
+    'Shrikhand-Regular.ttf',
+    'Sacramento-Regular.ttf',
+    'CabinSketch-Bold.ttf'
+  ]) {
+    assert.equal(fs.existsSync(path.join(fontsDir, file)), true);
+  }
+  const overlay = buildOverlaySvg({ text: 'Easy Garlic Butter Shrimp', placement: 'middle', font: 'serif-sans', fontsDir });
+  assert.match(overlay.input.toString(), /Garlic Butter Shrimp/);
+  assert.match(overlay.input.toString(), /GET THE RECIPE/);
+  assert.match(overlay.input.toString(), /fill="#fffdf7" stroke="#2f2144"/);
+  assert.match(overlay.input.toString(), /stroke-width="12"/);
+  assert.ok(overlay.fontSize >= 90);
+  assert.equal(overlay.font, 'serif-sans');
+  assert.equal(overlay.fontLabel, 'Playfair + Montserrat');
+  assert.equal(overlay.lines.length, 2);
+  const groovy = buildOverlaySvg({ text: 'Cozy Pasta Night', placement: 'middle', font: 'groovy', fontsDir });
+  assert.equal(groovy.fontLabel, 'Shrikhand Groovy');
+  const generated = buildOverlaySvg({
+    text: 'Classic Pineapple Cheese Jell-O',
+    placement: 'middle',
+    font: 'serif-sans',
+    fontsDir,
+    variant: 'generated'
+  });
+  const generatedSvg = generated.input.toString();
+  assert.equal(generated.font, 'poppins');
+  assert.deepEqual(generated.lines, ['CLASSIC PINEAPPLE', 'CHEESE JELL-O']);
+  assert.match(generatedSvg, /id="headlineShade"/);
+  assert.doesNotMatch(generatedSvg, /panelShadow|rgba\(27,18,43,0\.64\)/);
+  assert.match(generatedSvg, /GET THE RECIPE/);
+  assert.equal(generated.placement, 'top');
+  assert.equal(generated.backgroundTreatment, 'minimal-editorial');
+  const magazine = buildOverlaySvg({
+    text: 'Sardine Toast',
+    placement: 'middle',
+    font: 'poppins',
+    fontsDir,
+    variant: 'generated',
+    pinStyle: 'custom-modern-recipe-magazine'
+  });
+  const magazineSvg = magazine.input.toString();
+  assert.equal(magazine.font, 'food-editorial');
+  assert.deepEqual(magazine.lines, ['SARDINE', 'TOAST']);
+  assert.equal(magazine.placement, 'top');
+  assert.equal(magazine.backgroundTreatment, 'modern-recipe-magazine');
+  assert.match(magazineSvg, /fill="#fffaf2"/);
+  assert.match(magazineSvg, /fill="#382149" stroke="#382149"/);
+  assert.doesNotMatch(magazineSvg, /fill="url\(#headlineShade\)"/);
+  const ingredientCloseup = buildOverlaySvg({
+    text: 'Sparkling Cherry Lemonade Hot Days',
+    placement: 'top',
+    font: 'serif-sans',
+    fontsDir,
+    variant: 'generated',
+    pinStyle: 'custom-ingredient-closeup'
+  });
+  const ingredientCloseupSvg = ingredientCloseup.input.toString();
+  assert.equal(ingredientCloseup.font, 'poppins');
+  assert.equal(ingredientCloseup.placement, 'middle');
+  assert.equal(ingredientCloseup.backgroundTreatment, 'ingredient-closeup-glass');
+  assert.match(ingredientCloseupSvg, /width="(?:5[6-9]\d|[6-8]\d\d)"[\s\S]*rx="34"/);
+  assert.match(ingredientCloseupSvg, /fill="#21162f" fill-opacity="0\.58"/);
+  assert.match(ingredientCloseupSvg, /GET THE RECIPE/);
+  const originalJulyCenter = buildOverlaySvg({
+    text: 'Sparkling Cherry Lemonade Hot Days',
+    placement: 'top',
+    font: 'serif-sans',
+    fontsDir,
+    variant: 'original-july',
+    pinStyle: 'custom-july-original-ai',
+    panelColor: 'rgb(90,38,42)'
+  });
+  const originalJulySvg = originalJulyCenter.input.toString();
+  assert.equal(originalJulyCenter.font, 'poppins');
+  assert.equal(originalJulyCenter.placement, 'middle');
+  assert.equal(originalJulyCenter.backgroundTreatment, 'original-july-center-glass');
+  assert.equal(originalJulyCenter.ctaText, '');
+  assert.match(originalJulySvg, /fill="rgb\(90,38,42\)" fill-opacity="0\.56"/);
+  assert.match(originalJulySvg, /stroke="#fffdf8" stroke-opacity="0\.88"/);
+  assert.match(originalJulySvg, /SPARKLING CHERRY LEMONADE HOT DAYS/);
+  assert.doesNotMatch(originalJulySvg, /GET THE RECIPE|UPORAL PILL/);
+});
+
+test('Pinterest overlay renderer creates a verified 1000 by 1500 WebP without Replicate', async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'content-studio-pin-test-'));
+  const outputPath = path.join(tempDir, 'pin.webp');
+  try {
+    const inputBuffer = await sharp({
+      create: { width: 900, height: 1600, channels: 3, background: { r: 180, g: 70, b: 45 } }
+    }).png().toBuffer();
+    const qa = await createPinterestOverlay({
+      sharp,
+      inputBuffer,
+      outputPath,
+      overlayText: 'Garlic Butter Shrimp',
+      placement: 'middle',
+      font: 'serif-sans',
+      fontsDir: path.join(__dirname, '..', 'electron', 'assets', 'fonts')
+    });
+    assert.equal(qa.dimensionsVerified, true);
+    assert.equal(qa.overlayVerified, true);
+    assert.equal(qa.safeZoneVerified, true);
+    assert.equal(qa.nonBlankVerified, true);
+    assert.equal(qa.ctaText, 'GET THE RECIPE');
+    assert.equal(qa.ctaVerified, true);
+    assert.equal(qa.backgroundTreatment, 'adaptive-outline-editorial-cta');
+    assert.equal(fs.existsSync(outputPath), true);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('Original July center overlay renders exact middle text without a CTA', async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'content-studio-july-pin-'));
+  const outputPath = path.join(tempDir, 'july-center.webp');
+  try {
+    const inputBuffer = await sharp({
+      create: { width: 1000, height: 1500, channels: 3, background: { r: 177, g: 72, b: 58 } }
+    }).png().toBuffer();
+    const qa = await createPinterestOverlay({
+      sharp,
+      inputBuffer,
+      outputPath,
+      overlayText: 'Sparkling Cherry Lemonade',
+      placement: 'top',
+      font: 'serif-sans',
+      fontsDir: path.join(__dirname, '..', 'electron', 'assets', 'fonts'),
+      variant: 'original-july',
+      pinStyle: 'custom-july-original-ai'
+    });
+    assert.equal(qa.dimensionsVerified, true);
+    assert.equal(qa.overlayVerified, true);
+    assert.equal(qa.safeZoneVerified, true);
+    assert.equal(qa.placement, 'middle');
+    assert.equal(qa.font, 'poppins');
+    assert.equal(qa.backgroundTreatment, 'original-july-center-glass');
+    assert.equal(qa.ctaText, '');
+    assert.equal(qa.ctaVerified, true);
+    assert.equal(fs.existsSync(outputPath), true);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('Pinterest cost estimates include generation and make article image reuse free', async () => {
+  const {
+    estimatePinterestPackCost,
+    pinterestImageUnitCost
+  } = await import('../src/lib/pinterestCost.mjs');
+  const generated = estimatePinterestPackCost({
+    pinCount: 10,
+    imageSourceMode: 'generate-new',
+    imageModel: 'ideogram',
+    aspectRatio: '2:3'
+  });
+  assert.equal(generated.imageCost, 0.3);
+  assert.equal(generated.textCost, 0.02);
+  assert.equal(generated.total, 0.32);
+
+  const reused = estimatePinterestPackCost({
+    pinCount: 10,
+    imageSourceMode: 'reuse-article',
+    imageModel: 'ideogram'
+  });
+  assert.equal(reused.imageCost, 0);
+  assert.equal(reused.total, 0.02);
+  assert.equal(pinterestImageUnitCost('pruna', '2:3'), 0.005);
+  assert.equal(pinterestImageUnitCost('pruna', '1:1'), 0.01);
+});
+
+test('Pinterest generated images receive exact local lettering and CTA', async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'content-studio-ai-pin-test-'));
+  const outputPath = path.join(tempDir, 'ai-pin.webp');
+  try {
+    const inputBuffer = await sharp({
+      create: { width: 768, height: 1152, channels: 3, background: { r: 55, g: 130, b: 85 } }
+    }).png().toBuffer();
+    const qa = await createPinterestOverlay({
+      sharp,
+      inputBuffer,
+      outputPath,
+      overlayText: 'Easy Garlic Shrimp',
+      placement: 'middle',
+      font: 'poppins',
+      fontsDir: path.join(__dirname, '..', 'electron', 'assets', 'fonts'),
+      variant: 'generated'
+    });
+    assert.equal(qa.dimensionsVerified, true);
+    assert.equal(qa.overlayVerified, true);
+    assert.equal(qa.safeZoneVerified, true);
+    assert.equal(qa.ctaVerified, true);
+    assert.equal(qa.ctaText, 'GET THE RECIPE');
+    assert.equal(qa.font, 'poppins');
+    assert.equal(qa.placement, 'top');
+    assert.equal(qa.backgroundTreatment, 'minimal-editorial');
+    assert.equal(fs.existsSync(outputPath), true);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('Pinterest CSV round trip preserves eight UTF-8 fields without a BOM', () => {
+  const rows = Array.from({ length: 3 }, (_, index) => [
+    index === 0 ? 'Crème, "hello" ñ ç ’ – 🍋' : `Recipe ${index + 1}`,
+    `https://i.ibb.co/pin-${index}.jpg?download=1&size=large`,
+    '  Dîners &  Délices/Été  ', 'N/A',
+    "Easy, fast, family-friendly dinner\r\nWith \"quotes\" & herbs\0now",
+    ' https://example.com/recipe?a=1&amp;b=2#recipe ', '', '#été, piña colada'
+  ]);
+  const bytes = serializePinterestCsv(rows);
+  assert.equal(bytes.subarray(0, 5).toString('hex'), '5469746c65');
+  assert.notEqual(bytes.subarray(0, 3).toString('hex'), 'efbbbf');
+  const text = new (require('node:util').TextDecoder)('utf-8', { fatal: true }).decode(bytes);
+  assert.equal(text.split('\r\n')[0], PINTEREST_CSV_HEADERS.join(','));
+  const records = require('csv-parse/sync').parse(bytes, { bom: false });
+  assert.equal(records.length, 4);
+  assert.ok(records.every((row) => row.length === 8));
+  assert.equal(records[1][0], rows[0][0]);
+  assert.equal(records[1][2], 'Dîners &  Délices/Été');
+  assert.equal(records[1][3], '');
+  assert.equal(records[1][4], 'Easy, fast, family-friendly dinner With "quotes" & herbs now');
+  assert.equal(records[1][5], 'https://example.com/recipe?a=1&b=2#recipe');
+  assert.equal(records[1][6], '');
+  assert.equal(records[1][7], '#été, piña colada');
+  assert.deepEqual(records.slice(1), validatePinterestRows(rows).rows);
+  assert.ok(records.slice(1).flat().every((cell) => !/[\r\n\0]/.test(cell)));
+});
+
+test('Pinterest sanitizer removes placeholders and controls while preserving Unicode', () => {
+  for (const value of [null, undefined, NaN, {}, [], 'null', 'undefined', '[object Object]', 'NaN']) {
+    assert.equal(sanitizePinterestCsvValue(value), '');
+  }
+  assert.equal(sanitizePinterestCsvValue('  sautéed jalapeño crème brûlée 🍋 ’ –  '), 'sautéed jalapeño crème brûlée 🍋 ’ –');
+  assert.equal(sanitizePinterestCsvValue('A\r\nB\0C\tD\uFEFF'), 'A B C D');
+  const rows = [['Title', 'https://i.ibb.co/pin.jpg', 'Recipes', null, undefined, null, undefined, null]];
+  const values = require('csv-parse/sync').parse(serializePinterestCsv(rows))[1];
+  assert.deepEqual(values.slice(3), ['', '', '', '', '']);
+});
+
+test('Pinterest title and description limits preserve whole Unicode graphemes', () => {
+  for (const text of ['É'.repeat(600), '🍋'.repeat(600), 'e\u0301'.repeat(600), '👩‍🍳'.repeat(600), 'Recipe words '.repeat(100)]) {
+    const row = validatePinterestRows([[text, 'https://i.ibb.co/a.jpg', 'Recipes', '', text, '', '', '']]).rows[0];
+    assert.ok(row[0].length <= 100);
+    assert.ok(row[4].length <= 500);
+    assert.equal(row[0].isWellFormed(), true);
+    assert.equal(row[4].isWellFormed(), true);
+    const graphemes = [...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(text)].map((item) => item.segment);
+    assert.ok(graphemes.join('').startsWith(row[0]));
+    if (!text.includes(' ')) assert.ok(graphemes.includes([...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(row[0])].at(-1).segment));
+  }
+});
+
+test('Pinterest rejects local paths, private hosts, gallery pages and temporary media', () => {
+  for (const media of ['localhost', 'http://localhost/p.jpg', 'https://foo.localhost/p.jpg', 'http://127.0.0.1/p.jpg', 'http://10.0.0.1/p.jpg', 'http://[::1]/p.jpg', 'blob:abc', 'data:image/png;base64,abc', '/uploads/p.jpg', 'C:\\images\\p.jpg', 'https://ibb.co/gallery', 'https://replicate.delivery/p.jpg', 'https://example.com/p.webp']) {
+    const validation = validatePinterestRows([['Recipe', media, 'Recipes', '', '', '', '', '']]);
+    assert.equal(validation.valid, false, media);
+    assert.ok(validation.errors.some((error) => error.rowIndex === 1 && error.title === 'Recipe' && error.field === 'Media URL'));
+    assert.throws(() => serializePinterestCsv([['Recipe', media, 'Recipes', '', '', '', '', '']]));
+  }
+  for (const media of ['https://i.ibb.co/p.jpg', 'http://example.com/p.png', 'https://example.com/p.jpeg?size=2&quality=90']) {
+    assert.equal(validatePinterestRows([['Recipe', media, 'Recipes', '', '', '', '', '']]).valid, true, media);
+  }
+});
+
+test('Pinterest destination links are optional, public, and retain raw query parameters', () => {
+  for (const value of ['', 'http://example.com/?a=1&b=2', 'https://example.com/#recipe']) {
+    assert.equal(validatePinterestRows([['Recipe', 'https://i.ibb.co/p.jpg', 'Recipes', '', '', value, '', '']]).valid, true);
+  }
+  for (const value of ['https://', 'file:///tmp/a', 'javascript:alert(1)', 'https://localhost/p', 'https://user:secret@example.com/p']) {
+    assert.equal(validatePinterestRows([['Recipe', 'https://i.ibb.co/p.jpg', 'Recipes', '', '', value, '', '']]).valid, false);
+  }
+});
+
+test('Pinterest dates preserve deliberate blanks and serialize explicit UTC or offsets', () => {
+  const now = Date.parse('2026-09-14T12:00:00Z');
+  for (const value of ['', ' ', null, undefined]) assert.equal(normalizePinterestPublishDate(value, { now }), '');
+  assert.equal(normalizePinterestPublishDate('garbage', { now, selected: false }), '');
+  assert.equal(normalizePinterestPublishDate('2026-09-15T14:00:00+01:00', { now }), '2026-09-15T13:00:00');
+  assert.equal(normalizePinterestPublishDate(new Date('2026-09-15T13:00:00Z'), { now }), '2026-09-15T13:00:00');
+  assert.equal(normalizePinterestPublishDate('2026-09-15T13:00:00', { now }), '2026-09-15T13:00:00');
+  for (const value of ['9/14/2026', '14/09/2026', 'September 14, 2026', 'null', 'undefined', '2026-02-30T12:00:00', '2026-09-15T24:00:00', '2026-09-14T11:59:59Z', '2026-11-15T12:00:00', new Date(NaN)]) {
+    assert.throws(() => normalizePinterestPublishDate(value, { now }), undefined, String(value));
+  }
+});
+
+test('Pinterest preflight rejects expired schedules without changing them or scheduling blank rows', () => {
+  const now = Date.parse('2026-09-14T12:00:00Z');
+  const rows = ['', '2026-09-13T12:00:00', '2026-09-16T12:00:00', '2026-09-15T12:00:00'].map((date, i) => [
+    `Recipe ${i}`, `https://i.ibb.co/p-${i}.jpg`, 'Recipes', '', '', '', date, ''
+  ]);
+  const validation = validatePinterestRows(rows, [], { now });
+  assert.equal(validation.valid, false);
+  assert.equal(validation.rowCount, 4);
+  assert.deepEqual(validation.rows.map((row) => row[6]), rows.map((row) => row[6]));
+  assert.equal(validation.errors[0].rowIndex, 2);
+  assert.equal(validation.errors[0].field, 'Publish date');
+  assert.throws(() => serializePinterestCsv(rows, { now }), /past/);
+  const accepted = rows.filter((_, i) => i !== 1);
+  assert.doesNotThrow(() => serializePinterestCsv(accepted, { now }));
+});
+
+test('Pinterest validates video thumbnail timestamps and leaves image thumbnails empty', () => {
+  for (const thumbnail of ['62', '01:02', 'https://example.com/thumbnail.jpg']) {
+    const rows = [['Video', 'https://example.com/p.mp4', 'Recipes', thumbnail, '', '', '', '']];
+    assert.equal(validatePinterestRows(rows).valid, true);
+  }
+  assert.equal(validatePinterestRows([['Video', 'https://example.com/p.mp4', 'Recipes', '', '', '', '', '']]).valid, false);
+});
+
+test('Pinterest parser rejects BOM, altered headers, invalid UTF-8 and wrong row counts', () => {
+  const bytes = serializePinterestCsv([['Recipe', 'https://i.ibb.co/a.jpg', 'Recipes', '', '', '', '', '']]);
+  assert.throws(() => assertPinterestCsvBytes(Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), bytes]), 1), /BOM/);
+  assert.throws(() => assertPinterestCsvBytes(Buffer.from(bytes.toString().replace('Title,', 'Titles,')), 1), /headers/);
+  assert.throws(() => assertPinterestCsvBytes(Buffer.concat([bytes, Buffer.from([0xff])]), 1));
+  assert.throws(() => assertPinterestCsvBytes(bytes, 2), /row count/);
+  assert.equal(validatePinterestRows([['Recipe', 'https://i.ibb.co/a.jpg']]).valid, false);
+});
+
+test('Pinterest keeps complete batches, splits only above 200 rows, and uses clean filenames', () => {
+  const rows = Array.from({ length: 45 }, (_, i) => [`Recipe ${i}`, `https://i.ibb.co/${i}.jpg`, 'Recipes', '', '', '', '', '']);
+  assert.equal(require('csv-parse/sync').parse(serializePinterestCsv(rows)).length, 46);
+  assert.deepEqual(splitPinterestRows(rows).map((part) => part.length), [45]);
+  assert.deepEqual(splitPinterestRows(Array.from({ length: 250 })).map((part) => part.length), [200, 50]);
+  assert.equal(pinterestCsvFilename(new Date('2026-09-14T12:34:56Z')), 'pinterest-bulk-upload-20260914-123456.csv');
+  assert.equal(validatePinterestRows([]).valid, false);
+});
+
+test('Pinterest duplicate media is rejected and valid keyword content is preserved', () => {
+  const row = ['Recipe', 'https://i.ibb.co/a.jpg', 'Recipes', '', '', '', '', '#dinner, café, meal prep'];
+  assert.ok(validatePinterestRows([row, row]).errors.some((error) => error.rule === 'duplicate_media'));
+  assert.equal(normalizePinterestKeywords(row[7]), row[7]);
+});
+
+test('Both Pinterest export buttons use the shared writer and legacy BOM downloads are removed', () => {
+  const legacy = fs.readFileSync(path.join(__dirname, '..', 'electron', 'pin-creator', 'renderer.js'), 'utf8');
+  const react = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'PinCreatorView.jsx'), 'utf8');
+  assert.match(legacy, /window\.electronAPI\.exportPinterestCsv/);
+  assert.doesNotMatch(legacy, /\\uFEFF|new Blob\(\[.*csvContent/);
+  assert.match(react, /exportPinterestCsv\(\{ testOnly: true \}\)/);
+});
+
+test('Pinterest explicit schedule fitting keeps a requested batch inside 30 days', async () => {
+  const { fitPinterestSchedule } = await import('../src/lib/pinterestCsv.mjs');
+  const now = Date.parse('2026-09-14T12:00:00Z');
+  const fitted = fitPinterestSchedule({ count: 32, start: new Date(now + 29 * 86400000), intervalMinutes: 1440, now });
+  assert.equal(fitted.dates.length, 32);
+  assert.ok(fitted.dates.every((date) => date.getTime() > now && date.getTime() <= now + 30 * 86400000));
+});
+
+test('Pinterest interest intelligence builds specific use cases and avoids generic boards', async () => {
+  const {
+    buildInterestProfile,
+    interestAlignmentPreflight,
+    rankBoardsByInterest
+  } = await import('../src/lib/pinterestInterestIntelligence.mjs');
+  const pin = {
+    title: 'Quick High Protein Chicken Dinners for Busy Weeknights',
+    description: 'These high protein chicken dinners are ready quickly and make weeknight cooking practical.',
+    prompt: 'Ultra-realistic close-up of a finished chicken dinner with natural food texture.',
+    url: 'https://gourmetgather.com/high-protein-chicken-dinners/',
+    evidenceType: 'live_search',
+    evidenceConfidence: 'high'
+  };
+  const profile = buildInterestProfile(pin);
+  assert.equal(profile.dimensions.core, 'chicken');
+  assert.deepEqual(profile.dimensions.goals, ['high protein', 'quick']);
+  assert.match(profile.primary.label, /Quick High Protein Chicken Weeknight Dinners/);
+  assert.equal(profile.lifecycle.stage, 'growing');
+  assert.ok(profile.relatedTopics.length >= 5);
+  const matches = rankBoardsByInterest(pin, ['Recipe Blog', 'High Protein Chicken Recipes', 'Dessert Ideas']);
+  assert.equal(matches[0].board, 'High Protein Chicken Recipes');
+  assert.ok(matches[0].confidence >= 80);
+  const alignment = interestAlignmentPreflight(pin, matches[0].board, profile);
+  assert.equal(alignment.score, 100);
+  assert.deepEqual(alignment.issues, []);
+});
+
+test('Pinterest interest intelligence repairs incomplete legacy saved profiles', async () => {
+  const { aggregatePinterestClusters, interestAlignmentPreflight, resolveInterestProfile } = await import('../src/lib/pinterestInterestIntelligence.mjs');
+  const legacyPin = {
+    title: 'Sardine Toast with Lemon and Herbs',
+    description: 'A quick seafood lunch with crisp toast and bright lemon.',
+    url: 'https://gourmetgather.com/sardine-toast/',
+    interestProfile: {}
+  };
+  const repaired = resolveInterestProfile(legacyPin);
+  assert.ok(repaired.primary.id);
+  assert.ok(repaired.primary.label);
+  assert.ok(repaired.lifecycle.stage);
+  assert.ok(repaired.lifecycle.basis);
+  assert.ok(repaired.relatedTopics.length >= 5);
+  assert.doesNotThrow(() => interestAlignmentPreflight(legacyPin, 'Seafood Recipes', legacyPin.interestProfile));
+  assert.doesNotThrow(() => aggregatePinterestClusters([legacyPin]));
+});
+
+test('Pinterest cluster scheduler interleaves use cases and aggregates habit metrics', async () => {
+  const { aggregatePinterestClusters, buildInterestProfile, diversifyByInterest } = await import('../src/lib/pinterestInterestIntelligence.mjs');
+  const chicken = buildInterestProfile({ title: 'Quick chicken dinners' });
+  const dessert = buildInterestProfile({ title: 'Easy chocolate desserts' });
+  const ordered = diversifyByInterest([
+    { id: 'c1', title: 'Chicken one', interestProfile: chicken },
+    { id: 'c2', title: 'Chicken two', interestProfile: chicken },
+    { id: 'd1', title: 'Dessert one', interestProfile: dessert },
+    { id: 'd2', title: 'Dessert two', interestProfile: dessert }
+  ]);
+  assert.deepEqual(ordered.map((item) => item.id), ['c1', 'd1', 'c2', 'd2']);
+  const clusters = aggregatePinterestClusters([
+    { title: 'Quick chicken dinners', impressions: 1000, saves: 30, outboundClicks: 20, pinClicks: 50 },
+    { title: 'Weeknight chicken meals', impressions: 500, saves: 10, outboundClicks: 15, pinClicks: 25 },
+    { title: 'Easy chocolate desserts', impressions: 800, saves: 50, outboundClicks: 10, pinClicks: 30 }
+  ]);
+  assert.ok(clusters.length >= 2);
+  assert.ok(clusters.every((cluster) => Number.isFinite(cluster.habitScore)));
+  assert.ok(clusters.some((cluster) => cluster.label.includes('Chicken')));
+});
+
+test('Pinterest source snapshots retain recipe facts and prefer article portrait media', () => {
+  const snapshot = buildPinSourceSnapshot({
+    id: 'article-1',
+    generatedTitle: 'Garlic Butter Shrimp',
+    structuredData: JSON.stringify({
+      '@type': 'Recipe',
+      name: 'Garlic Butter Shrimp',
+      recipeIngredient: ['1 lb shrimp', '2 tbsp butter'],
+      recipeInstructions: [{ '@type': 'HowToStep', text: 'Cook the shrimp until opaque.' }],
+      totalTime: 'PT20M',
+      recipeYield: '4 servings'
+    }),
+    images: [{ id: 'portrait', aspectRatio: '9:16', localPath: 'C:\\images\\shrimp.webp' }]
+  });
+  assert.equal(snapshot.recipe.name, 'Garlic Butter Shrimp');
+  assert.equal(snapshot.recipe.totalTime, 'PT20M');
+  assert.equal(snapshot.preferredPortraitImageId, 'portrait');
+});
+
+test('Pinterest CSV media only exposes a verified final hosted image', async () => {
+  const { selectPinterestPublicImage } = await import('../src/lib/pinterestSource.mjs');
+  const finalUrl = 'https://i.ibb.co/example/final-pin.webp';
+  assert.equal(selectPinterestPublicImage({
+    csvMediaUrl: finalUrl,
+    hostedImageUrl: 'https://cdn.example.com/older-pin.webp',
+    imageQa: {
+      publicUrlVerified: true,
+      publicDimensionsVerified: true,
+      publicIdentityVerified: true,
+      publicAssetKind: 'finished-pinterest-pin',
+      publicWidth: 1000,
+      publicHeight: 1500,
+      publicValidatedUrl: finalUrl
+    }
+  }), finalUrl);
+  const hostedUrl = 'https://cdn.example.com/final-pin.webp';
+  assert.equal(selectPinterestPublicImage({
+    remoteImageUrl: 'https://replicate.delivery/example/output.webp',
+    hostedImageUrl: hostedUrl,
+    imageQa: {
+      publicUrlVerified: true,
+      publicDimensionsVerified: true,
+      publicIdentityVerified: true,
+      publicAssetKind: 'finished-pinterest-pin',
+      publicWidth: 1000,
+      publicHeight: 1500,
+      publicValidatedUrl: hostedUrl
+    }
+  }), hostedUrl);
+  assert.equal(selectPinterestPublicImage({
+    csvMediaUrl: 'https://cdn.example.com/replacement-landscape.webp',
+    hostedImageUrl: hostedUrl,
+    imageQa: {
+      publicUrlVerified: true,
+      publicDimensionsVerified: true,
+      publicIdentityVerified: true,
+      publicAssetKind: 'finished-pinterest-pin',
+      publicWidth: 1000,
+      publicHeight: 1500,
+      publicValidatedUrl: hostedUrl
+    }
+  }), hostedUrl, 'a changed CSV URL must not inherit another image verification');
+  assert.equal(selectPinterestPublicImage({
+    csvMediaUrl: finalUrl,
+    imageQa: {
+      publicUrlVerified: true,
+      publicDimensionsVerified: true,
+      publicIdentityVerified: true,
+      publicWidth: 1000,
+      publicHeight: 1500,
+      publicValidatedUrl: finalUrl
+    }
+  }), '', 'legacy verification without finished-Pin provenance must be refreshed');
+  assert.equal(selectPinterestPublicImage({
+    imageUrl: 'file:///C:/pins/local.webp',
+    remoteImageUrl: 'https://replicate.delivery/example/output.webp'
+  }), '');
+  assert.equal(selectPinterestPublicImage({
+    hostedImageUrl: 'https://cdn.example.com/unverified-size.webp',
+    imageQa: {
+      publicUrlVerified: true,
+      publicDimensionsVerified: false,
+      publicValidatedUrl: 'https://cdn.example.com/unverified-size.webp'
+    }
+  }), '');
+});
+
+test('Pinterest visual identity rejects a different image even at the correct size', () => {
+  const exact = comparePinterestImageIdentity(
+    { sha256: 'a'.repeat(64), perceptualHash: '0000000000000000' },
+    { sha256: 'a'.repeat(64), perceptualHash: 'ffffffffffffffff' }
+  );
+  assert.equal(exact.matches, true);
+  assert.equal(exact.exact, true);
+  assert.equal(perceptualHashDistance('0000000000000000', '000000000000000f'), 4);
+  assert.equal(comparePinterestImageIdentity(
+    { perceptualHash: '0000000000000000' },
+    { perceptualHash: '000000000000000f' }
+  ).matches, true);
+  assert.equal(comparePinterestImageIdentity(
+    { perceptualHash: '0000000000000000' },
+    { perceptualHash: 'ffffffffffffffff' }
+  ).matches, false);
+});
+
+test('Pinterest visual identity tolerates WebP optimization but rejects another portrait', async () => {
+  const original = await sharp({
+    create: { width: 1000, height: 1500, channels: 3, background: { r: 245, g: 210, b: 120 } }
+  })
+    .composite([
+      { input: Buffer.from('<svg width="700" height="900"><rect width="700" height="900" fill="#7a241f"/><circle cx="350" cy="450" r="260" fill="#f5efe1"/><path d="M100 750 L600 120" stroke="#213d2c" stroke-width="90"/></svg>'), left: 150, top: 250 }
+    ])
+    .webp({ quality: 92 })
+    .toBuffer();
+  const optimized = await sharp(original).webp({ quality: 72 }).toBuffer();
+  const different = await sharp({
+    create: { width: 1000, height: 1500, channels: 3, background: { r: 35, g: 60, b: 45 } }
+  })
+    .composite([
+      { input: Buffer.from('<svg width="800" height="1000"><rect width="800" height="1000" fill="#f4efe5"/><path d="M40 100 L760 900" stroke="#642c25" stroke-width="120"/><path d="M760 100 L40 900" stroke="#d6a238" stroke-width="80"/></svg>'), left: 100, top: 200 }
+    ])
+    .webp({ quality: 92 })
+    .toBuffer();
+  const originalIdentity = {
+    sha256: require('node:crypto').createHash('sha256').update(original).digest('hex'),
+    perceptualHash: await perceptualHash(sharp, original)
+  };
+  const optimizedIdentity = {
+    sha256: require('node:crypto').createHash('sha256').update(optimized).digest('hex'),
+    perceptualHash: await perceptualHash(sharp, optimized)
+  };
+  const differentIdentity = {
+    sha256: require('node:crypto').createHash('sha256').update(different).digest('hex'),
+    perceptualHash: await perceptualHash(sharp, different)
+  };
+  assert.equal(comparePinterestImageIdentity(originalIdentity, optimizedIdentity).matches, true);
+  assert.equal(comparePinterestImageIdentity(originalIdentity, differentIdentity).matches, false);
+});
+
+test('Pinterest hosting results cannot overwrite a newer generated Pin', async () => {
+  const { mergePreparedPinHosting } = await import('../src/lib/pinBatch.mjs');
+  const current = [{
+    id: 'pin-1',
+    localPath: 'C:\\pins\\new.webp',
+    imageQa: { sha256: 'b'.repeat(64), dimensionsVerified: true },
+    csvMediaUrl: ''
+  }];
+  const stale = [{
+    id: 'pin-1',
+    localPath: 'C:\\pins\\old.webp',
+    imageQa: {
+      sha256: 'a'.repeat(64),
+      publicUrlVerified: true,
+      publicDimensionsVerified: true,
+      publicIdentityVerified: true,
+      publicWidth: 1000,
+      publicHeight: 1500,
+      publicValidatedUrl: 'https://example.com/old.webp'
+    },
+    csvMediaUrl: 'https://example.com/old.webp'
+  }];
+  assert.deepEqual(mergePreparedPinHosting(current, stale), current);
+
+  const matching = [{
+    ...current[0],
+    csvMediaUrl: 'https://example.com/new.webp',
+    hostedImageUrl: 'https://example.com/new.webp',
+    imageQa: {
+      ...current[0].imageQa,
+      publicUrlVerified: true,
+      publicDimensionsVerified: true,
+      publicIdentityVerified: true,
+      publicWidth: 1000,
+      publicHeight: 1500,
+      publicValidatedUrl: 'https://example.com/new.webp'
+    }
+  }];
+  assert.equal(mergePreparedPinHosting(current, matching)[0].csvMediaUrl, 'https://example.com/new.webp');
+});
+
+test('repaired Pinterest hosting keeps the finished-pin marker needed by CSV export', async () => {
+  const { mergePreparedPinHosting } = await import('../src/lib/pinBatch.mjs');
+  const current = [{ id: 'pin-1', localPath: 'same.webp', imageQa: { sha256: 'a'.repeat(64) } }];
+  const prepared = [{
+    id: 'pin-1',
+    localPath: 'same.webp',
+    csvMediaUrl: 'https://i.ibb.co/repaired-pin.jpg',
+    hostedImageUrl: 'https://i.ibb.co/repaired-pin.jpg',
+    imageQa: {
+      sha256: 'a'.repeat(64),
+      publicUrlVerified: true,
+      publicDimensionsVerified: true,
+      publicIdentityVerified: true,
+      publicAssetKind: 'finished-pinterest-pin',
+      publicWidth: 1000,
+      publicHeight: 1500,
+      publicValidatedUrl: 'https://i.ibb.co/repaired-pin.jpg'
+    }
+  }];
+  const [merged] = mergePreparedPinHosting(current, prepared);
+  assert.equal(merged.imageQa.publicAssetKind, 'finished-pinterest-pin');
+  assert.equal(merged.csvMediaUrl, 'https://i.ibb.co/repaired-pin.jpg');
+});
+
+test('Pinterest CSV keeps row identity and rejects stale image verification', () => {
+  const pinViewSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'PinCreatorView.jsx'), 'utf8');
+  const mainSource = fs.readFileSync(path.join(__dirname, '..', 'electron', 'main.js'), 'utf8');
+  const legacyRendererSource = fs.readFileSync(path.join(__dirname, '..', 'electron', 'pin-creator', 'renderer.js'), 'utf8');
+  assert.match(pinViewSource, /const \{ headers, rows, scheduledPins \} = useMemo/);
+  assert.match(pinViewSource, /scheduledPins\.map\(\(pin, rowIndex\) =>/);
+  assert.match(pinViewSource, /publicValidatedUrl: ""/);
+  assert.doesNotMatch(pinViewSource, /csvMediaUrl:\s*result\.csvMediaUrl[^\n]*pin\.csvMediaUrl/);
+  assert.match(mainSource, /comparePinterestImageIdentity\(expectedIdentity, validation(?:, 14)?\)/);
+  assert.doesNotMatch(mainSource, /validationIsFresh/);
+  assert.match(mainSource, /pin\.imageQa\?\.publicValidatedUrl !== mediaUrl/);
+  assert.match(mainSource, /pin\.imageQa\?\.publicIdentityVerified !== true/);
+  assert.match(mainSource, /Number\(pin\.imageQa\?\.publicWidth \|\| 0\) !== PIN_WIDTH/);
+  assert.match(mainSource, /Number\(pin\.imageQa\?\.publicHeight \|\| 0\) !== PIN_HEIGHT/);
+  const legacyPublicMediaBlock = legacyRendererSource.match(/function getPinPublicMediaUrl\(pin\) \{[\s\S]*?\n\}/)?.[0] || '';
+  assert.match(legacyPublicMediaBlock, /publicIdentityVerified !== true/);
+  assert.doesNotMatch(legacyPublicMediaBlock, /remoteImageUrl/);
+});
+
+test('Pinterest WordPress media fallback only selects the article domain', () => {
+  const sites = [
+    { url: 'gourmetgather.com', username: 'editor', apiKey_encrypted: 'encrypted-a' },
+    { url: 'https://example.com', username: 'editor', apiKey_encrypted: 'encrypted-b' }
+  ];
+  assert.equal(normalizedHostname('https://www.GourmetGather.com/recipe/'), 'gourmetgather.com');
+  assert.equal(normalizedHostname('gourmetgather.com'), 'gourmetgather.com');
+  assert.equal(normalizedHostname('www.gourmetgather.com/recipe/'), 'gourmetgather.com');
+  assert.equal(
+    findMatchingWordPressSite(sites, 'https://www.gourmetgather.com/garlic-shrimp/')?.url,
+    'gourmetgather.com'
+  );
+  assert.equal(findMatchingWordPressSite(sites, 'https://gourmetgather.com.evil.test/recipe/'), null);
+  assert.equal(findMatchingWordPressSite([{ url: 'https://gourmetgather.com', username: 'editor' }], 'https://gourmetgather.com/recipe/'), null);
+});
+
+test('Pinterest automatic hosting prefers ImgBB before its WordPress fallback', () => {
+  const mainSource = fs.readFileSync(path.join(__dirname, '..', 'electron', 'main.js'), 'utf8');
+  const hostingBlock = mainSource.match(/async function hostFinalPinterestImage[\s\S]*?\n}\n\nasync function ensureDurablePinImage/)?.[0] || '';
+  const automaticBlock = hostingBlock.slice(hostingBlock.indexOf('const imgbbUrl'));
+  const wordpressCall = automaticBlock.indexOf('uploadPinterestImageToWordPress');
+  const imgbbCall = automaticBlock.indexOf('uploadLocalImageToImgBB');
+  assert.ok(wordpressCall >= 0);
+  assert.ok(imgbbCall >= 0);
+  assert.ok(imgbbCall < wordpressCall);
+});
+
+test('ImgBB hosting serializes uploads and retries transient failures without a long lockout', () => {
+  const mainSource = fs.readFileSync(path.join(__dirname, '..', 'electron', 'main.js'), 'utf8');
+  const uploadStart = mainSource.indexOf('async function uploadLocalImageToImgBB');
+  const uploadEnd = mainSource.indexOf('function normalizeImageUrl', uploadStart);
+  const uploadBlock = uploadStart >= 0 && uploadEnd > uploadStart ? mainSource.slice(uploadStart, uploadEnd) : '';
+  assert.match(mainSource, /let imgbbUploadQueue = Promise\.resolve\(\)/);
+  assert.match(uploadBlock, /imgbbUploadQueue\.catch\(\(\) => \{\}\)\.then/);
+  assert.match(uploadBlock, /withTransientRetries/);
+  assert.match(uploadBlock, /attempts: 4/);
+  assert.match(uploadBlock, /response\.status >= 500/);
+  assert.match(uploadBlock, /Rate limits and provider outages are transient/);
+  assert.doesNotMatch(uploadBlock, /6 \* 60 \* 60 \* 1000/);
+});
+
+test('Pinterest hosting keeps generated center overlays and reused overlays on separate verified paths', () => {
+  const mainSource = fs.readFileSync(path.join(__dirname, '..', 'electron', 'main.js'), 'utf8');
+  const hostingBlock = mainSource.match(/async function hostFinalPinterestImage[\s\S]*?\n}\n\nasync function ensureDurablePinImage/)?.[0] || '';
+  const assetBlock = mainSource.match(/secureIpcHandle\('create-pinterest-pin-asset'[\s\S]*?\n}\)\);/)?.[0] || '';
+  assert.match(hostingBlock, /sourceMode === 'reuse-article'/);
+  assert.match(hostingBlock, /Reused-image Pins must use the matching WordPress Media Library/);
+  assert.match(hostingBlock, /sourceMode === 'auto' \|\| sourceMode === 'generate-new'/);
+  assert.match(hostingBlock, /!requirePinterestDimensions && \/\^https/);
+  assert.match(mainSource, /requiredWidth: PIN_WIDTH/);
+  assert.match(mainSource, /requiredHeight: PIN_HEIGHT/);
+  assert.doesNotMatch(mainSource, /fallbackUrl: reuseArticleImage \? '' : pin\.remoteImageUrl/);
+  assert.match(assetBlock, /const effectiveTextRenderMode = originalJulyCenter \? 'ai' : 'local'/);
+  assert.match(assetBlock, /originalJulyCenter[\s\S]*createPinterestImageWithoutOverlay/);
+  assert.match(assetBlock, /mode === 'generate-new'[\s\S]*createPinterestOverlay/);
+  assert.match(assetBlock, /variant: 'generated'/);
+  assert.match(assetBlock, /variant: 'reuse'/);
+});
+
+test('Pinterest generation verifies durable hosting immediately and uses a single-column workspace', () => {
+  const mainSource = fs.readFileSync(path.join(__dirname, '..', 'electron', 'main.js'), 'utf8');
+  const pinViewSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'PinCreatorView.jsx'), 'utf8');
+  const assetBlock = mainSource.match(/secureIpcHandle\('create-pinterest-pin-asset'[\s\S]*?\n}\)\);/)?.[0] || '';
+  assert.match(assetBlock, /await hostFinalPinterestImage/);
+  assert.match(assetBlock, /publicUrlVerified: durableHosted/);
+  assert.match(assetBlock, /publicDimensionsVerified: durableHosted/);
+  assert.match(assetBlock, /publicIdentityVerified: durableHosted/);
+  assert.match(assetBlock, /csvMediaUrl: durableUrl/);
+  assert.match(assetBlock, /hostingDeferred: !durableHosted/);
+  assert.match(mainSource, /: \[pin\.csvMediaUrl, pin\.hostedImageUrl, pin\.imgurUrl\]/);
+  assert.match(mainSource, /targetBytes: requirePinterestDimensions \? 0 : 420 \* 1024/);
+  assert.match(mainSource, /targetBytes: options\.targetBytes \?\? 240 \* 1024/);
+  assert.match(pinViewSource, /function generateImages[\s\S]*?\}, \{ concurrency: 2 \}\);/);
+  assert.match(pinViewSource, /pin\.imageQa\?\.dimensionsVerified !== true/);
+  assert.match(pinViewSource, /hosted image dimensions are not verified at 1000 x 1500/);
+  assert.match(pinViewSource, /Public hosting is pending and will retry automatically/);
+  assert.match(mainSource, /hostingError: ''/);
+  assert.doesNotMatch(pinViewSource, /xl:grid-cols-\[minmax\(0,1fr\)_360px\]/);
+});
+
+test('Pinterest defaults to the merged Ingredient Closeup one-pass style and retires redundant profiles', () => {
+  const pinViewSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'PinCreatorView.jsx'), 'utf8');
+  const pinDefaultsSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'lib', 'pinCreatorDefaults.js'), 'utf8');
+  const settingsSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'Settings.jsx'), 'utf8');
+  assert.match(pinViewSource, /const \[textPlacement, setTextPlacement\] = useState\("middle"\)/);
+  assert.match(pinViewSource, /useState\("generate-new"\)/);
+  assert.match(pinViewSource, /const \[selectedStyle, setSelectedStyle\] = useState\("custom-july-original-ai"\)/);
+  assert.match(pinViewSource, /const effectiveTextRenderMode = usesIngredientCloseupAiStyle \? "ai" : "local"/);
+  assert.match(pinViewSource, /useState\("ideogram"\)/);
+  assert.match(pinViewSource, /Ideogram Integrated \| Ingredient Closeup/);
+  assert.match(pinViewSource, /Local Exact Text/);
+  assert.match(pinViewSource, /Middle \| Fixed for this style/);
+  assert.match(pinViewSource, /no CTA, subtitle, number, or extra wording/i);
+  assert.match(pinViewSource, /\["generate-new", "Generate New Food Photo"\][\s\S]*\["reuse-article", "Reuse Article Portrait"\]/);
+  assert.match(pinViewSource, /\["custom-july-original-ai", "Ingredient Closeup Pin \(Default\)"\][\s\S]*\["custom-modern-recipe-magazine", "Modern Recipe Magazine"\][\s\S]*\["custom-minimal-editorial", "Minimal Editorial"\]/);
+  assert.doesNotMatch(pinViewSource, /\["custom-(?:ingredient-closeup|recipe-card|weeknight-solution|listicle-collage)",/);
+  assert.match(pinViewSource, /const styleWithPlacement = `\$\{selectedStyle\}::placement:\$\{textPlacement\}`/);
+  assert.doesNotMatch(pinViewSource, /pin\.smartPinStyle \|\| selectedStyle/);
+  assert.doesNotMatch(pinViewSource, /<Field label="Overlay text">/);
+  assert.match(pinViewSource, /Ideogram Turbo \| Fixed for Ingredient Closeup \| about \$0\.03/);
+  assert.match(pinViewSource, /Ideogram Balanced \| More detail \| about \$0\.06/);
+  assert.match(pinViewSource, /Ideogram Quality \| Best detail \| about \$0\.09/);
+  assert.match(pinViewSource, /md:grid-cols-\[minmax\(220px,280px\)_minmax\(0,1fr\)\]/);
+  assert.match(pinViewSource, /2xl:grid-cols-\[minmax\(260px,340px\)_minmax\(0,1fr\)\]/);
+  assert.match(pinViewSource, /soft-card w-full min-w-0 max-w-full overflow-hidden/);
+  assert.match(pinViewSource, /overflow-x-hidden animate-fade-in/);
+  assert.match(pinViewSource, />Clear All<\/Button>/);
+  assert.doesNotMatch(pinViewSource, /Estimated Full Pack Cost/);
+  assert.match(pinViewSource, /AI Integrated Center Text/);
+  assert.match(pinDefaultsSource, /Create one complete vertical 2:3 recipe Pin with an ultra-realistic, full-bleed close-up/);
+  assert.match(pinDefaultsSource, /real full-frame food-photography look/);
+  assert.match(pinDefaultsSource, /Avoid fake steam, excessive glaze, oily pools, plastic perfection, neon saturation/);
+  assert.doesNotMatch(pinDefaultsSource, /custom-july-original-ai[\s\S]{0,1000}Generate no text/);
+  assert.doesNotMatch(pinDefaultsSource, /"custom-(?:ingredient-closeup|recipe-card|weeknight-solution|listicle-collage)":/);
+  assert.match(settingsSource, /promptDefaultsVersion: PIN_PROMPT_DEFAULTS_VERSION/);
+});
+
+test('Meta reuses one Pinterest-first 4:5 image without a new image model call', () => {
+  const sidebarSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'Sidebar.jsx'), 'utf8');
+  const metaSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'MetaStudio.jsx'), 'utf8');
+  const mainSource = fs.readFileSync(path.join(__dirname, '..', 'electron', 'main.js'), 'utf8');
+  assert.match(sidebarSource, /\{ id: "meta-studio", label: "Meta"/);
+  assert.match(metaSource, /Pinterest Image for Meta/);
+  assert.match(metaSource, /Create 4:5 Meta Image/);
+  assert.match(metaSource, /sourceAsset: selectedSource/);
+  assert.match(metaSource, /sourceContext: sourceContext/);
+  assert.match(metaSource, /Selected automatically/);
+  assert.match(metaSource, /Download GHL CSV/);
+  assert.match(metaSource, /Create and Download GHL CSV/);
+  assert.match(metaSource, /hasPlatformMetaAssets/);
+  assert.match(metaSource, /Facebook and Instagram share that same image/);
+  assert.match(metaSource, /Push to GHL/);
+  assert.match(metaSource, /buildReadyGhlRows/);
+  assert.match(metaSource, /createRepurposeImageVariants/);
+  assert.match(metaSource, /prepareRepurposeGhlRows/);
+  assert.match(mainSource, /sourceAsset = null/);
+  assert.match(mainSource, /sharedMetaPortrait = false/);
+  assert.match(mainSource, /id: 'meta-social-portrait'/);
+  assert.match(mainSource, /userEdited: systemPrepared \? previous\?\.userEdited === true : true/);
+  const resizeStart = mainSource.indexOf('async function createRepurposeImageVariants');
+  const resizeEnd = mainSource.indexOf("secureIpcHandle('create-repurpose-image-variants'", resizeStart);
+  const resizeBlock = resizeStart >= 0 && resizeEnd > resizeStart
+    ? mainSource.slice(resizeStart, resizeEnd)
+    : '';
+  assert.match(resizeBlock, /\.resize\(format\.width, format\.height/);
+  assert.match(resizeBlock, /sharedMetaPortrait/);
+  assert.match(resizeBlock, /requiredWidth: format\.width, requiredHeight: format\.height/);
+  assert.match(mainSource, /platform: 'Instagram', label: 'Instagram Portrait', width: 1080, height: 1350/);
+  assert.match(mainSource, /platform: 'Facebook', label: 'Facebook Feed', width: 1200, height: 630/);
+  assert.match(mainSource, /requestedPlatforms\.has\(String\(format\.platform\)\.toLowerCase\(\)\)/);
+  assert.doesNotMatch(resizeBlock, /generatePinterestBaseImage|replicateRequest/);
+});
+
+test('Meta prepares all selected articles as one persistent GHL batch', () => {
+  const metaSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'MetaStudio.jsx'), 'utf8');
+  const mainSource = fs.readFileSync(path.join(__dirname, '..', 'electron', 'main.js'), 'utf8');
+  const preloadSource = fs.readFileSync(path.join(__dirname, '..', 'electron', 'preload.js'), 'utf8');
+  assert.match(metaSource, /All Articles to GHL/);
+  assert.match(metaSource, /Create and Download All/);
+  assert.match(metaSource, /Prepare All for Editing/);
+  assert.match(metaSource, /prepareMetaBulkGhlRows/);
+  assert.match(metaSource, /onMetaBulkProgress/);
+  assert.match(metaSource, /completedArticles\.map\(\(item\) =>/);
+  assert.match(mainSource, /async function prepareMetaBulkGhlRows\(articleIds = \[\]\)/);
+  assert.match(mainSource, /store\.set\('metaBulkGhlDraft', draft\)/);
+  assert.match(mainSource, /buildGhlSocialRows\(preparedPacks\)/);
+  assert.match(mainSource, /emitProgress\('meta-bulk-progress'/);
+  assert.match(preloadSource, /getMetaBulkGhlDraft/);
+  assert.match(preloadSource, /prepareMetaBulkGhlRows/);
+  assert.match(preloadSource, /onMetaBulkProgress/);
+});
+
+test('Meta uses one vertical column and Pinterest CSV preparation stays responsive', () => {
+  const metaSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'MetaStudio.jsx'), 'utf8');
+  const pinViewSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'PinCreatorView.jsx'), 'utf8');
+  const mainSource = fs.readFileSync(path.join(__dirname, '..', 'electron', 'main.js'), 'utf8');
+  assert.match(metaSource, /Every Facebook and Instagram post is listed below in one vertical workflow/);
+  assert.match(metaSource, /Facebook Posts/);
+  assert.match(metaSource, /Instagram Posts/);
+  assert.doesNotMatch(metaSource, /activePlatform/);
+  assert.match(pinViewSource, /setCsvOpen\(true\);[\s\S]*setCsvHosting\(true\)/);
+  assert.match(pinViewSource, /visiblePins\.map/);
+  assert.match(pinViewSource, /Show 20 More Pins/);
+  assert.match(mainSource, /Math\.min\(wordpressExport \? 1 : 4, inputPins\.length\)/);
+  assert.match(mainSource, /Rejected stale or mismatched media URL/);
+  assert.match(pinViewSource, /mergePreparedPinHosting\(pinsRef\.current, hosting\?\.pins \|\| \[\]\)/);
+});
+
+test('Pinterest CSV editor keeps exact interval scheduling beside smart scheduling', () => {
+  const pinViewSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'PinCreatorView.jsx'), 'utf8');
+  const mainSource = fs.readFileSync(path.join(__dirname, '..', 'electron', 'main.js'), 'utf8');
+  assert.match(pinViewSource, /function applyPinterestTime\(\)/);
+  assert.match(pinViewSource, /index \* intervalHours \* 60 \* 60 \* 1000/);
+  assert.match(pinViewSource, /onClick=\{applyPinterestTime\}[\s\S]*>Apply Time<\/Button>/);
+  assert.match(pinViewSource, /onClick=\{applyPinterestSchedule\}[\s\S]*>Smart Schedule<\/Button>/);
+  assert.match(pinViewSource, /function autoFixPinterestCsv\(\)/);
+  assert.match(pinViewSource, /Check and Auto Fix CSV/);
+  assert.match(pinViewSource, /Auto Fix Errors/);
+  assert.match(pinViewSource, /rows: validation\?\.rows \|\| rows/);
+  assert.match(mainSource, /csvPublishImmediately: pin\.csvPublishImmediately === true/);
+});
+
+test('Pinterest AI lettering preflight groups review and remembers unchanged images', () => {
+  const pinViewSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'PinCreatorView.jsx'), 'utf8');
+  assert.match(pinViewSource, /function aiLetteringReviewKey\(pin = \{\}\)/);
+  assert.match(pinViewSource, /function hasCurrentAiLetteringReview\(pin = \{\}\)/);
+  assert.match(pinViewSource, /Review \$\{pendingAiTextReview\.length\} AI-lettered image/);
+  assert.match(pinViewSource, /aiLetteringReviewedFor: aiLetteringReviewKey\(pin\)/);
+  assert.match(pinViewSource, /Reviewed and Export/);
+  assert.doesNotMatch(pinViewSource, /Row \$\{index \+ 1\} uses AI lettering/);
+});
+
+test('completed articles receive a credit-free Meta draft and Pinterest enrichment', () => {
+  const article = {
+    id: 'article-meta-1',
+    title: 'Easy Garlic Chicken',
+    generatedTitle: 'Easy Garlic Chicken for Weeknight Dinners',
+    queueStatus: 'completed',
+    content: '<p>Juicy garlic chicken with a simple pan sauce and clear step-by-step instructions.</p>',
+    metaDescription: 'Make juicy garlic chicken with a quick pan sauce for an easy weeknight dinner.',
+    featuredImageLocalPath: 'C:\\media\\garlic-chicken.webp',
+    images: [{
+      id: 'portrait',
+      localPath: 'C:\\media\\garlic-chicken-portrait.webp',
+      remoteImageUrl: 'https://example.com/garlic-chicken-portrait.webp'
+    }]
+  };
+
+  const first = upsertAutomaticMetaProject([], article, [], '2026-07-28T12:00:00.000Z');
+  assert.equal(first.length, 1);
+  assert.equal(first[0].id, 'meta-auto-article-meta-1');
+  assert.equal(first[0].autoCreated, true);
+  assert.equal(first[0].creditFree, true);
+  assert.match(first[0].content.facebook.primaryPost, /quick pan sauce/i);
+  assert.match(first[0].content.instagram.feedCaption, /Save this recipe idea/i);
+  assert.equal(first[0].sourceLibrary.length, 1);
+  assert.equal(first[0].selectedSource.kind, 'article-featured');
+  assert.equal(preferredMetaSource(first[0].sourceLibrary).kind, 'article-featured');
+
+  const noDuplicate = upsertAutomaticMetaProject(first, article, [], '2026-07-28T12:01:00.000Z');
+  assert.equal(noDuplicate.length, 1);
+
+  const pin = {
+    id: 'pin-1',
+    articleId: article.id,
+    title: 'Garlic Chicken Dinner Everyone Saves',
+    description: 'A close-up garlic chicken dinner with a fast, flavorful pan sauce.',
+    imageUrl: 'https://i.ibb.co/example/garlic-chicken-pin.webp',
+    csvKeywords: 'garlic chicken, easy dinner'
+  };
+  const enriched = syncAutomaticMetaProjects(noDuplicate, [article], [pin], '2026-07-28T12:02:00.000Z');
+  assert.equal(enriched.length, 1);
+  assert.equal(enriched[0].sourceLibrary.length, 2);
+  assert.equal(enriched[0].sourceLibrary[0].kind, 'pin');
+  assert.equal(enriched[0].selectedSource.kind, 'pin');
+  assert.equal(enriched[0].selectedSource.pinId, pin.id);
+  assert.equal(enriched[0].sourceContext.title, pin.title);
+  assert.match(enriched[0].content.facebook.primaryPost, /Everyone Saves/i);
+
+  const edited = [{
+    ...enriched[0],
+    userEdited: true,
+    content: { custom: 'keep me' },
+    imageAssets: [
+      { id: 'instagram-portrait', platform: 'Instagram', sourceKind: 'pin', publicUrl: pin.imageUrl },
+      { id: 'facebook-feed', platform: 'Facebook', sourceKind: 'article-inline', publicUrl: article.images[0].remoteImageUrl }
+    ]
+  }];
+  const protectedDraft = syncAutomaticMetaProjects(edited, [article], [pin], '2026-07-28T12:03:00.000Z');
+  assert.deepEqual(protectedDraft[0].content, { custom: 'keep me' });
+  assert.equal(protectedDraft[0].sourceLibrary.length, 2);
+  assert.equal(protectedDraft[0].sourceLibrary[0].kind, 'pin');
+  assert.equal(protectedDraft[0].imageAssets.length, 0);
+});
+
+test('Meta uses one cropped Pinterest-first 4:5 image for both platform rows', () => {
+  const metaSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'MetaStudio.jsx'), 'utf8');
+  const mainSource = fs.readFileSync(path.join(__dirname, '..', 'electron', 'main.js'), 'utf8');
+  assert.match(metaSource, /finished Pinterest Pin is selected first/);
+  assert.match(metaSource, /sharedMetaPortrait: true/);
+  assert.match(mainSource, /id: 'meta-social-portrait'/);
+  assert.match(mainSource, /label: 'Meta Portrait 4:5'/);
+  assert.match(mainSource, /position: 'centre'/);
+  assert.match(mainSource, /asset\.id === metaPortraitFormat\.id/);
+});
+
+test('Pinterest image generation uses focused Ingredient Closeup AI while other profiles keep exact local type', () => {
   const mainSource = fs.readFileSync(path.join(__dirname, '..', 'electron', 'main.js'), 'utf8');
   const legacyRendererSource = fs.readFileSync(path.join(__dirname, '..', 'electron', 'pin-creator', 'renderer.js'), 'utf8');
 
   assert.match(mainSource, /generatePinImage\(prompt, aspectRatio = '2:3'/);
   assert.match(mainSource, /pinAspectRatio = '2:3'/);
-  assert.match(mainSource, /magic_prompt_option: 'Auto'/);
+  const pinterestModelBlock = mainSource.match(/function pinterestModelRequest[\s\S]*?async function generatePinterestBaseImage/)?.[0] || '';
+  assert.doesNotMatch(pinterestModelBlock, /magic_prompt_option: 'Auto'/);
+  assert.match(pinterestModelBlock, /magic_prompt_option: 'Off'/);
+  assert.match(mainSource, /ideogramLetteringModels = new Set\(\['ideogram', 'ideogram-balanced', 'ideogram-quality'\]\)/);
+  assert.match(mainSource, /ideogram-ai\/ideogram-v3-balanced/);
+  assert.match(mainSource, /ideogram-ai\/ideogram-v3-quality/);
+  assert.match(mainSource, /ideogramLetteringModels\.has\(model\) \? model : 'ideogram'/);
+  assert.match(mainSource, /enhancePinterestPromptLedAiPrompt\([\s\S]*polishPinterestOverlayText\(_overlayText\)/);
+  assert.match(mainSource, /Choose exactly one integrated headline treatment/);
+  assert.match(mainSource, /Montserrat ExtraBold or Poppins ExtraBold/);
+  assert.match(mainSource, /softly translucent full-width center band sampled from the food colors/);
+  assert.match(mainSource, /Fill about 72-88% of the frame/);
+  assert.match(mainSource, /overlay must occupy no more than 28% of the image height/);
+  assert.match(mainSource, /polishPinterestOverlayText\(overlayText \|\| safeSnapshot\.recipe\?\.name, safeSnapshot\.recipe\?\.name \|\| overlayText\)/);
+  assert.match(mainSource, /enhancePinterestOriginalJulyAiPrompt\(prompt, _overlayText\)/);
+  assert.match(mainSource, /compact softly translucent rounded panel/);
+  assert.match(mainSource, /const originalJulyCenter = mode === 'generate-new' && pinStyle === 'custom-july-original-ai'/);
+  assert.match(mainSource, /placement: 'middle'/);
+  assert.match(mainSource, /request\.model = 'ideogram-ai\/ideogram-v3-turbo'/);
+  assert.match(mainSource, /magic_prompt_option: 'Off'/);
+  assert.match(mainSource, /const effectiveTextRenderMode = originalJulyCenter \? 'ai' : 'local'/);
+  assert.match(mainSource, /originalJulyCenter[\s\S]*createPinterestImageWithoutOverlay/);
+  assert.match(mainSource, /variant: 'generated'/);
+  assert.match(mainSource, /font: effectiveFont,[\s\S]*variant: 'reuse'/);
+  assert.match(mainSource, /aiCtaRequested: false/);
+  assert.match(mainSource, /ctaText: qa\.ctaText/);
+  assert.match(mainSource.match(/secureIpcHandle\('create-pinterest-pin-asset'[\s\S]*?\n}\)\);/)?.[0] || '', /variant: 'generated'/);
+  assert.doesNotMatch(mainSource, /enhancePinterestLegacyAiPrompt\([\s\S]*polishPinterestOverlayText\(overlayText\)/);
+  assert.match(mainSource, /style_type: 'Realistic'/);
+  assert.match(mainSource, /runManagedReplicatePrediction/);
+  assert.doesNotMatch(mainSource, /falling back to Pruna\/Z-Image/);
   assert.match(legacyRendererSource, /2:3 - Standard Pinterest \(Recommended\)/);
   assert.doesNotMatch(legacyRendererSource, /9:16 - Standard Pinterest \(Recommended\)/);
+});
+
+test('Pinterest predictions persist IDs and cancel remote work before retry', () => {
+  const mainSource = fs.readFileSync(path.join(__dirname, '..', 'electron', 'main.js'), 'utf8');
+  const pinViewSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'PinCreatorView.jsx'), 'utf8');
+
+  assert.match(mainSource, /pinPredictionJobs/);
+  assert.match(mainSource, /pinPredictionHistory/);
+  assert.match(mainSource, /Cancel-After/);
+  assert.match(mainSource, /await cancelReplicatePrediction\(cancelUrl, apiToken\)/);
+  assert.match(mainSource, /create-pinterest-pin-asset/);
+  assert.match(mainSource, /ensureDurablePinImage/);
+  assert.match(pinViewSource, /reuse-article/);
+  assert.match(pinViewSource, /same final image/);
 });
 
 test('Pinterest SEO generation prioritizes visible keywords and verified trend evidence', () => {
@@ -734,9 +1952,10 @@ test('Pinterest SEO generation prioritizes visible keywords and verified trend e
   assert.match(mainSource, /relevantSavedPinterestResearch/);
   assert.match(mainSource, /Pinterest Predicts 2026: Cabbage Crush/);
   assert.match(mainSource, /Never force a trend, year, health promise, time claim, or ingredient/i);
-  assert.match(mainSource, /description at 450 characters or fewer/i);
-  assert.match(pinViewSource, /Title length", ok: title\.length >= 45 && title\.length <= 95/);
-  assert.match(pinViewSource, /Description depth", ok: description\.length >= 250 && description\.length <= 500/);
+  assert.match(mainSource, /description at 500 characters or fewer/i);
+  assert.match(mainSource, /selected board, and primary interest cluster without keyword stuffing/i);
+  assert.match(pinViewSource, /Title length", ok: title\.length >= 50 && title\.length <= 100/);
+  assert.match(pinViewSource, /Description depth", ok: description\.length >= 300 && description\.length <= 500/);
 });
 
 test('article imports receive stable unique IDs when IDs are missing or duplicated', () => {
@@ -770,6 +1989,8 @@ test('custom built-in pin style edits survive normalization after migration', ()
   assert.equal(migratePinStyles(defaults, customized, 2, 2).closeup.prompt, 'My custom prompt');
   assert.equal(migratePinStyles(defaults, customized, 0, 2).closeup.prompt, 'Default prompt');
   assert.equal(migratePinStyles(defaults, customized, 0, 2).extra.prompt, 'Extra prompt');
+  assert.equal(mergePinStyles(defaults, { ...customized, retired: { prompt: 'remove me' } }, ['retired']).retired, undefined);
+  assert.equal(migratePinStyles(defaults, { ...customized, retired: { prompt: 'remove me' } }, 1, 2, ['retired']).retired, undefined);
 });
 
 test('media security blocks private remote hosts and paths outside allowed storage', () => {
@@ -927,23 +2148,35 @@ test('settings migration adds purpose-specific image ratios and preserves unknow
   const second = migrateSettings(first.settings);
 
   assert.equal(first.settings.featuredImageRatio, '3:2');
-  assert.equal(first.settings.intextImageRatio, '4:3');
+  assert.equal(first.settings.intextImageRatio, '9:16');
   assert.equal(first.settings.pinterestPinRatio, '1:1');
   assert.equal(first.settings.instagramPortraitRatio, '4:5');
   assert.equal(first.settings.instagramStoryRatio, '9:16');
   assert.equal(first.settings.facebookFeedRatio, '1.91:1');
   assert.equal(first.settings.squareSocialRatio, '1:1');
-  assert.equal(first.settings.settingsSchemaVersion, 2);
+  assert.equal(first.settings.settingsSchemaVersion, 5);
+  assert.equal(first.settings.automaticMediaCleanupEnabled, true);
+  assert.equal(first.settings.mediaRetentionDays, 7);
   assert.equal(first.settings.internalLinkCount, 3);
   assert.equal(first.settings.internalLinkMaxPosts, 500);
   assert.equal(first.settings.publishStatus, 'publish');
   assert.equal(first.settings.affiliateAutoDiscover, true);
-  assert.equal(first.settings.featureFlags.contentCalendar, false);
+  assert.equal(first.settings.featureFlags.contentCalendar, true);
   assert.deepEqual(first.settings.customIntegration, { keep: true });
   assert.equal(first.settings.pinCreator.customField, 'keep');
   assert.equal(first.changed, true);
   assert.equal(second.changed, false);
   assert.deepEqual(second.settings, first.settings);
+});
+
+test('settings migration changes only the old in-article landscape default to portrait', () => {
+  const oldDefault = migrateSettings({ settingsSchemaVersion: 2, featuredImageRatio: '3:2', intextImageRatio: '4:3' });
+  const customPortrait = migrateSettings({ settingsSchemaVersion: 2, featuredImageRatio: '3:2', intextImageRatio: '2:3' });
+
+  assert.equal(oldDefault.settings.featuredImageRatio, '3:2');
+  assert.equal(oldDefault.settings.intextImageRatio, '9:16');
+  assert.equal(oldDefault.settings.settingsSchemaVersion, 5);
+  assert.equal(customPortrait.settings.intextImageRatio, '2:3');
 });
 
 test('settings schema migration preserves explicit and future feature values', () => {
@@ -963,6 +2196,40 @@ test('settings schema migration preserves explicit and future feature values', (
   assert.equal(result.settings.featureFlags.contentCalendar, true);
   assert.equal(result.settings.featureFlags.futureFlag, true);
   assert.equal(migrateSettings(result.settings).changed, false);
+});
+
+test('automatic media retention defaults to seven days and preserves custom values', () => {
+  const oldDefault = migrateSettings({ settingsSchemaVersion: 4, mediaRetentionDays: 30 });
+  const custom = migrateSettings({ settingsSchemaVersion: 4, mediaRetentionDays: 14, automaticMediaCleanupEnabled: false });
+  assert.equal(oldDefault.settings.mediaRetentionDays, 7);
+  assert.equal(oldDefault.settings.automaticMediaCleanupEnabled, true);
+  assert.equal(custom.settings.mediaRetentionDays, 14);
+  assert.equal(custom.settings.automaticMediaCleanupEnabled, false);
+  assert.equal(normalizeMediaRetentionDays(1), 7);
+  assert.equal(normalizeMediaRetentionDays(999), 365);
+});
+
+test('automatic media cleanup selects only old unreferenced managed candidates', () => {
+  const day = 24 * 60 * 60 * 1000;
+  const now = Date.UTC(2026, 7, 15, 12);
+  const files = [
+    { path: 'C:\\managed\\old-unused.webp', referenceKey: 'c:\\managed\\old-unused.webp', mtimeMs: now - 8 * day },
+    { path: 'C:\\managed\\old-used.webp', referenceKey: 'c:\\managed\\old-used.webp', mtimeMs: now - 20 * day },
+    { path: 'C:\\managed\\recent.webp', referenceKey: 'c:\\managed\\recent.webp', mtimeMs: now - 2 * day }
+  ];
+  const referenced = new Set(['c:\\managed\\old-used.webp']);
+  assert.deepEqual(
+    mediaCleanupCandidates(files, referenced, 7, now).map((file) => file.path),
+    ['C:\\managed\\old-unused.webp']
+  );
+});
+
+test('automatic media cleanup is scheduled and remains limited to managed storage', () => {
+  const mainSource = fs.readFileSync(path.join(__dirname, '..', 'electron', 'main.js'), 'utf8');
+  assert.match(mainSource, /scheduleAutomaticMediaCleanup\(\);/);
+  assert.match(mainSource, /scheduleAutomaticMediaCleanup\(24 \* 60 \* 60 \* 1000\)/);
+  assert.match(mainSource, /isPathInsideRoots\(file\.path, \[imagesDir, videosDir, repurposeImagesDir\]\)/);
+  assert.match(mainSource, /collectReferencedMediaPaths\(\)/);
 });
 
 test('renderer uses accessible app confirmation dialogs instead of native prompts', () => {
@@ -1355,6 +2622,8 @@ test('article setting resolver uses global then system length only as fallbacks'
   assert.equal(globalResolved.articleLength, '1000-1400');
   assert.equal(systemResolved.articleLengthSource, 'system');
   assert.equal(systemResolved.articleLength, '900-1200');
+  assert.equal(systemResolved.featuredImageRatio, '3:2');
+  assert.equal(systemResolved.intextImageRatio, '9:16');
 });
 
 test('article setting resolver preserves a legacy saved length without a source field', async () => {
@@ -1385,14 +2654,93 @@ test('recipe collection validation rejects thin or misnumbered recipes', () => {
   assert.equal(validateRecipeChunk(complete.replace(/<li>1 tsp salt<\/li>/g, ''), 1, 2).ok, false);
 });
 
+test('recipe collection headings accept common model variants without matching time headings', () => {
+  const variants = [
+    '<h2>Recipe 1: Lemon Chicken</h2>',
+    '<h2><strong>#2 Garlic Soup</strong></h2>',
+    '<h2>3) Tomato Pasta</h2>',
+    '<h2>4 - Herb Rice</h2>',
+    '<h2>5 Crispy Potatoes</h2>',
+    '<h2>30-Minute Dinner Tips</h2>'
+  ].join('\n');
+  assert.deepEqual(extractNumberedH2s(variants).map((heading) => heading.number), [1, 2, 3, 4, 5]);
+  const normalized = canonicalizeNumberedRecipeHeadings(variants);
+  assert.match(normalized, /<h2>1\. Lemon Chicken<\/h2>/);
+  assert.match(normalized, /<h2>2\. Garlic Soup<\/h2>/);
+  assert.match(normalized, /<h2>3\. Tomato Pasta<\/h2>/);
+  assert.match(normalized, /<h2>4\. Herb Rice<\/h2>/);
+  assert.match(normalized, /<h2>5\. Crispy Potatoes<\/h2>/);
+  assert.match(normalized, /<h2>30-Minute Dinner Tips<\/h2>/);
+});
+
+test('recipe collection retries include actionable validator feedback', () => {
+  const retry = buildRecipeRetryPrompt('Write seven recipes.', 'Recipe 2 needs timing and doneness cues');
+  assert.match(retry, /Write seven recipes\./);
+  assert.match(retry, /Recipe 2 needs timing and doneness cues/);
+  assert.match(retry, /Return the entire requested HTML again, corrected/);
+});
+
 test('recipe card validation requires quantities, timing, yield, and complete steps', () => {
   const card = `<section id="recipe-card">
-    <ul><li><strong>Prep Time:</strong> 10 minutes</li><li><strong>Total Time:</strong> 30 minutes</li><li><strong>Servings:</strong> 4</li></ul>
+    <ul><li><strong>Prep Time:</strong> 10 minutes</li><li><strong>Cook Time:</strong> 20 minutes</li><li><strong>Total Time:</strong> 30 minutes</li><li><strong>Servings:</strong> 4</li></ul>
     <h3>Ingredients</h3><ul><li>1 lb chicken</li><li>1 lemon</li><li>2 tbsp oil</li><li>1 tsp salt</li></ul>
-    <h3>Instructions</h3><ol><li>Heat the pan.</li><li>Cook for 12 minutes.</li><li>Rest and serve.</li></ol>
+    <h3>Instructions</h3><ol><li>Heat the pan until the oil shimmers.</li><li>Cook for 12 minutes until browned.</li><li>Rest and serve.</li></ol>
   </section>`;
   assert.equal(validateRecipeCard(card).ok, true);
   assert.equal(validateRecipeCard(card.replace('<li>1 lb chicken</li>', '<li>chicken</li>').replace('<li>1 lemon</li>', '<li>lemon</li>')).ok, false);
+  assert.equal(validateRecipeCard(card.replace('until the oil shimmers', 'briefly').replace('until browned', 'throughout')).ok, false);
+});
+
+test('recipe card enhancement is responsive, lightweight, and script free', async () => {
+  const { ensureRecipeCard } = await import('../src/lib/articlePostProcess.mjs');
+  const content = `<p>Useful recipe.</p><section id="recipe-card">
+    <h2>Recipe Card</h2><h3>Skillet Chicken</h3>
+    <ul><li><strong>Prep Time:</strong> 10 minutes</li><li><strong>Cook Time:</strong> 20 minutes</li><li><strong>Total Time:</strong> 30 minutes</li><li><strong>Servings:</strong> 4</li></ul>
+    <h3>Ingredients</h3><ul itemprop="recipeIngredient"><li>1 pound chicken</li></ul>
+    <h3>Instructions</h3><ol itemprop="recipeInstructions"><li>Cook for 20 minutes until browned.</li></ol>
+  </section>`;
+  const enhanced = ensureRecipeCard(content, 'Skillet Chicken');
+  assert.match(enhanced, /border-top:5px solid #7c3aed/);
+  assert.match(enhanced, /grid-template-columns:repeat\(auto-fit/);
+  assert.match(enhanced, /aria-label="Recipe card"/);
+  assert.doesNotMatch(enhanced, /<script|javascript:|onclick=/i);
+});
+
+test('explicitly unverified affiliate links are never inserted even with an exact text match', async () => {
+  const { applyAffiliateLinksToArticle } = await import('../src/lib/affiliateLinks.mjs');
+  const applied = applyAffiliateLinksToArticle({
+    title: 'Best Blender Sauce',
+    content: '<p>Useful introduction.</p><p>Use a countertop blender to make the sauce smooth.</p>'
+  }, {
+    affiliateLinks: [{
+      id: 'bad-blender',
+      name: 'Countertop Blender',
+      url: 'https://merchant.example/blender',
+      keywords: ['countertop blender', 'blender'],
+      source: 'impact',
+      trackingVerified: false,
+      discoveryScore: 200
+    }]
+  });
+  assert.equal(applied.affiliateLinks.length, 0);
+  assert.doesNotMatch(applied.content, /merchant\.example|affiliate-disclosure/);
+});
+
+test('internal links are placed after the most relevant article paragraph', async () => {
+  const { applyInternalLinksToHtml } = await import('../src/lib/internalLinks.js');
+  const content = [
+    '<p>This weeknight dinner has a simple method.</p>',
+    '<p>Store leftovers in the refrigerator and reheat them gently.</p>',
+    '<p>Serve the chicken with roasted potatoes and a crisp salad.</p>'
+  ].join('');
+  const linked = applyInternalLinksToHtml(content, [{
+    url: 'https://example.com/crispy-roasted-potatoes/',
+    title: 'Crispy Roasted Potatoes',
+    anchor: 'Crispy Roasted Potatoes',
+    categories: ['Side Dishes']
+  }]);
+  assert.ok(linked.html.indexOf('crispy-roasted-potatoes') > linked.html.indexOf('Serve the chicken'));
+  assert.equal(linked.applied.length, 1);
 });
 
 test('recipe collection title detection ignores time and calorie numbers', async () => {
@@ -1647,6 +2995,82 @@ test('legacy Amazon search links are never inserted into articles', async () => 
   assert.doesNotMatch(applied.content, /amazon\.com/);
 });
 
+test('affiliate library repairs verified Impact tracking links without trusting ordinary destinations', () => {
+  const repaired = normalizeAffiliateLibrary([
+    {
+      id: 'legacy-impact',
+      name: 'Mixing bowls',
+      url: 'https://merchant.pxf.io/c/7445429/3859433/51140',
+      source: 'impact',
+      trackingVerified: false
+    },
+    {
+      id: 'ordinary-link',
+      name: 'Ordinary destination',
+      url: 'https://merchant.example/products/bowl',
+      source: 'impact',
+      trackingVerified: false
+    }
+  ]);
+
+  assert.equal(repaired[0].trackingVerified, true);
+  assert.equal(repaired[0].trackingSource, 'verified_impact_tracking_domain');
+  assert.equal(repaired[1].trackingVerified, false);
+});
+
+test('affiliate library recognizes exact tagged Amazon products but not search pages', () => {
+  const normalized = normalizeAffiliateLibrary([
+    {
+      name: 'Cast iron skillet',
+      url: 'https://www.amazon.com/dp/B00006JSUA?tag=exampletag-20',
+      source: 'amazon',
+      trackingVerified: false
+    },
+    {
+      name: 'Amazon skillet search',
+      url: 'https://www.amazon.com/s?k=skillet&tag=exampletag-20',
+      source: 'amazon',
+      trackingVerified: true,
+      amazonLinkType: 'search'
+    }
+  ], {
+    amazonPartnerTag: 'exampletag-20',
+    amazonMarketplace: 'www.amazon.com'
+  });
+
+  assert.equal(normalized[0].trackingVerified, true);
+  assert.equal(normalized[0].amazonAsin, 'B00006JSUA');
+  assert.equal(normalized[0].amazonLinkType, 'product');
+  assert.equal(normalized[1].amazonLinkType, 'search');
+  assert.equal(normalized[1].amazonAsin, undefined);
+});
+
+test('affiliate provider fallback uses a connected verified provider when selection is not ready', () => {
+  const settings = {
+    affiliateProvider: 'amazon',
+    affiliateProviderFallback: true,
+    amazonPartnerTag: 'exampletag-20',
+    impactAccountSid: 'account-123',
+    impactAuthToken_encrypted: 'enc:stored-token',
+    affiliateLinks: [{
+      name: 'Legacy Amazon search',
+      url: 'https://www.amazon.com/s?k=skillet&tag=exampletag-20',
+      source: 'amazon',
+      amazonLinkType: 'search',
+      trackingVerified: true
+    }]
+  };
+
+  assert.deepEqual(affiliateProviderReadiness(settings), {
+    impact: true,
+    amazon: false,
+    amazonApi: false,
+    exactAmazonProducts: 0
+  });
+  assert.deepEqual(affiliateProviderOrder(settings), ['impact']);
+  assert.deepEqual(affiliateProviderOrder({ ...settings, affiliateProviderFallback: false }), []);
+});
+
 test('unverified or weak affiliate products are never force-placed', async () => {
   const { applyAffiliateLinksToArticle } = await import('../src/lib/affiliateLinks.mjs');
   const article = {
@@ -1834,11 +3258,34 @@ test('article generation overlaps independent planning while preserving bounded 
 
 test('WordPress publishing enforces bounded WebP media and responsive attachment recognition', () => {
   const source = fs.readFileSync(require.resolve('../electron/main.js'), 'utf8');
+  assert.match(source, /parsed\.protocol !== 'https:'/);
+  assert.match(source, /function safePublicLookup/);
+  assert.match(source, /function wordpressRequestConfig/);
+  assert.match(source, /Blocked a WordPress redirect to a different host/);
+  assert.match(source, /axios\.get\(`\$\{url\}\/wp-json\/`, wordpressRequestConfig\(url/);
+  assert.match(source, /axios\.post\(postEndpoint, payload, wordpressRequestConfig\(url/);
   assert.match(source, /targetBytes:\s*280\s*\*\s*1024/);
   assert.match(source, /targetBytes:\s*220\s*\*\s*1024/);
   assert.match(source, /wp-image-\$\{Number\(attachmentId\)\}/);
   assert.match(source, /loading',\s*'lazy'/);
   assert.match(source, /fetchpriority',\s*'low'/);
+});
+
+test('all user-controlled remote media downloads use public DNS resolution and byte limits', () => {
+  const source = fs.readFileSync(require.resolve('../electron/main.js'), 'utf8');
+  const sections = [
+    source.slice(source.indexOf('async function downloadImage'), source.indexOf('function videoExtFromUrlOrType')),
+    source.slice(source.indexOf('async function downloadVideo'), source.indexOf('function videoRecordWithDisplay')),
+    source.slice(source.indexOf('async function imageSourceBuffer'), source.indexOf('const repurposeImageFormats'))
+  ];
+
+  for (const section of sections) {
+    assert.match(section, /httpAgent:\s*safePublicHttpAgent/);
+    assert.match(section, /httpsAgent:\s*safePublicHttpsAgent/);
+    assert.match(section, /beforeRedirect:\s*assertSafeRemoteRedirect/);
+    assert.match(section, /maxContentLength:\s*\d+\s*\*\s*1024\s*\*\s*1024/);
+    assert.match(section, /maxBodyLength:\s*\d+\s*\*\s*1024\s*\*\s*1024/);
+  }
 });
 
 test('diagnostics report connection presence without exposing stored secrets', () => {
@@ -1875,6 +3322,61 @@ test('renderer error fallback sanitizes credentials and exposes recovery actions
   assert.match(source, /Copy Error Details/);
   assert.match(source, /Open Logs Folder/);
   assert.match(source, /Restore Latest Backup/);
+  assert.match(source, /View Error Details/);
+  assert.match(source, /reportRendererError/);
+});
+
+test('article preview sanitizer blocks active content and dangerous CSS', () => {
+  const sanitizerSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'lib', 'sanitizeHtml.js'), 'utf8');
+  assert.match(sanitizerSource, /"form", "input", "button", "textarea", "select"/);
+  assert.match(sanitizerSource, /"srcdoc", "formaction", "action", "method"/);
+  assert.match(sanitizerSource, /normalized\.startsWith\("javascript:"\)/);
+  assert.match(sanitizerSource, /position\\s\*:\\s\*\(\?:fixed\|absolute\|sticky\)/);
+  assert.match(sanitizerSource, /z-index\\s\*:/);
+  assert.match(sanitizerSource, /noopener noreferrer/);
+});
+
+test('WordPress publishing sanitizer keeps recipe markup and removes active content', () => {
+  const sanitized = sanitizeWordPressArticleHtml(`
+    <section id="recipe-card" class="recipe-card" data-recipe="true" itemscope itemtype="https://schema.org/Recipe" style="margin:32px 0;background:#fff;position:fixed;background-image:url(javascript:alert(1))">
+      <h2 itemprop="name">Lemon Soup</h2>
+      <a href=javascript:alert(1) onclick="steal()">Bad link</a>
+      <a href="/recipes/">Recipes</a>
+      <img src="https://example.com/lemon.webp" alt="Lemon soup" onerror="steal()">
+      <iframe src="https://evil.example/embed"></iframe>
+      <object data="https://evil.example/file"></object>
+      <form action="https://evil.example"><input name="password"></form>
+      <script>alert(1)</script>
+    </section>
+  `);
+  assert.match(sanitized, /id="recipe-card"/);
+  assert.match(sanitized, /data-recipe="true"/);
+  assert.match(sanitized, /itemtype="https:\/\/schema\.org\/Recipe"/);
+  assert.match(sanitized, /margin:32px 0/);
+  assert.match(sanitized, /href="\/recipes\/"/);
+  assert.match(sanitized, /src="https:\/\/example\.com\/lemon\.webp"/);
+  assert.doesNotMatch(sanitized, /javascript:|onclick|onerror|position:fixed|background-image|iframe|object|form|input|script/i);
+});
+
+test('remote publishing records idempotency receipts before renderer acknowledgement', () => {
+  const mainSource = fs.readFileSync(path.join(__dirname, '..', 'electron', 'main.js'), 'utf8');
+  assert.match(mainSource, /function saveWordPressPublishReceipt/);
+  assert.match(mainSource, /findWordPressPostByIdentity/);
+  assert.match(mainSource, /idempotencyKey: `\$\{publicationIdentity}:featured`/);
+  assert.ok(mainSource.indexOf('saveWordPressPublishReceipt({') < mainSource.indexOf('updateRankMathMeta(url, auth, postData.id'));
+  assert.match(mainSource, /function ghlUploadFingerprint/);
+  assert.match(mainSource, /priorGhlReceipt\(idempotencyKey\)/);
+  assert.match(mainSource, /Remote outcome is unknown, so automatic retry is blocked to prevent duplicates/);
+});
+
+test('saved credentials have an explicit encrypted-storage removal path', () => {
+  const mainSource = fs.readFileSync(path.join(__dirname, '..', 'electron', 'main.js'), 'utf8');
+  const preloadSource = fs.readFileSync(path.join(__dirname, '..', 'electron', 'preload.js'), 'utf8');
+  const settingsSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'Settings.jsx'), 'utf8');
+  assert.match(mainSource, /secureIpcHandle\('clear-stored-credential'/);
+  assert.match(mainSource, /delete copy\.apiKey_encrypted/);
+  assert.match(preloadSource, /clearStoredCredential/);
+  assert.match(settingsSource, /Remove Credential/);
 });
 
 test('preload exposes explicit IPC methods without a generic renderer escape hatch', () => {
@@ -1884,6 +3386,80 @@ test('preload exposes explicit IPC methods without a generic renderer escape hat
   assert.match(source, /restoreLatestWorkspaceBackup:\s*\(\)\s*=>\s*ipcRenderer\.invoke\('restore-latest-workspace-backup'\)/);
   assert.doesNotMatch(source, /electronAPI[^]*ipcRenderer\s*[,}]/);
   assert.doesNotMatch(source, /nodeIntegration\s*:/);
+});
+
+test('all application IPC handlers verify a trusted top-level renderer', () => {
+  const mainSource = fs.readFileSync(path.join(__dirname, '..', 'electron', 'main.js'), 'utf8');
+  const directHandles = mainSource.match(/ipcMain\.handle\(/g) || [];
+  const secureHandles = mainSource.match(/secureIpcHandle\(/g) || [];
+  assert.equal(directHandles.length, 1);
+  assert.ok(secureHandles.length > 90);
+  assert.match(mainSource, /frame !== event\?\.sender\?\.mainFrame/);
+  assert.match(mainSource, /isTrustedAppNavigation\(frame\.url\)/);
+  assert.match(mainSource, /Blocked IPC call from an untrusted renderer/);
+  assert.match(mainSource, /function trustedDevServerUrl\(\)[\s\S]*?if \(app\.isPackaged\) return ''/);
+  assert.match(mainSource, /loopback && \['http:', 'https:'\]\.includes\(parsed\.protocol\)/);
+  assert.doesNotMatch(mainSource, /mainWindow\.loadURL\(process\.env\.VITE_DEV_SERVER_URL\)/);
+  assert.match(mainSource, /devTools: !app\.isPackaged/);
+  assert.match(mainSource, /navigateOnDragDrop: false/);
+});
+
+test('packaged renderer and managed media use a constrained secure custom protocol', () => {
+  const mainSource = fs.readFileSync(path.join(__dirname, '..', 'electron', 'main.js'), 'utf8');
+  assert.match(mainSource, /protocol\.registerSchemesAsPrivileged/);
+  assert.match(mainSource, /scheme: APP_PROTOCOL/);
+  assert.match(mainSource, /secure: true/);
+  assert.match(mainSource, /protocol\.handle\(APP_PROTOCOL/);
+  assert.match(mainSource, /resolveAllowedMediaPath\(requestedPath\)/);
+  assert.match(mainSource, /fsp\.realpath\(path\.resolve\(filePath\)\)/);
+  assert.match(mainSource, /mainWindow\.loadURL\(`\$\{APP_PROTOCOL_ORIGIN\}\/index\.html`\)/);
+  assert.doesNotMatch(mainSource, /mainWindow\.loadFile\(/);
+  assert.doesNotMatch(mainSource, /img-src[^;]*file:/);
+  assert.doesNotMatch(mainSource, /media-src[^;]*file:/);
+});
+
+test('release packaging enables tamper resistance and omits source maps', () => {
+  const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+  const viteSource = fs.readFileSync(path.join(__dirname, '..', 'vite.config.js'), 'utf8');
+  const afterPackSource = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'after-pack.js'), 'utf8');
+  assert.equal(packageJson.build.asar, true);
+  assert.equal(packageJson.build.electronFuses.runAsNode, false);
+  assert.equal(packageJson.build.electronFuses.enableNodeOptionsEnvironmentVariable, false);
+  assert.equal(packageJson.build.electronFuses.enableNodeCliInspectArguments, false);
+  assert.equal(packageJson.build.electronFuses.grantFileProtocolExtraPrivileges, false);
+  assert.equal(packageJson.build.electronFuses.enableEmbeddedAsarIntegrityValidation, true);
+  assert.equal(packageJson.build.electronFuses.onlyLoadAppFromAsar, true);
+  assert.equal(packageJson.build.electronFuses.loadBrowserProcessSpecificV8Snapshot, false);
+  assert.match(viteSource, /sourcemap:\s*false/);
+  assert.ok(afterPackSource.indexOf('await obfuscateAppAsar(context)') < afterPackSource.indexOf("context.electronPlatformName !== 'win32'"));
+  assert.match(afterPackSource, /updateWindowsAsarIntegrity/);
+  assert.match(afterPackSource, /updateMacAsarIntegrity/);
+  assert.match(afterPackSource, /createHash\('sha256'\)\.update\(headerString\)/);
+  assert.match(afterPackSource, /filePath\.endsWith\('\.map'\)/);
+});
+
+test('automatic updates require a public HTTPS feed and a configured Windows publisher', () => {
+  assert.equal(normalizeUpdateFeedUrl('https://updates.example.com/content-studio/'), 'https://updates.example.com/content-studio');
+  assert.equal(normalizeUpdateFeedUrl('https://updates.example.com/content-studio/?token=secret#latest'), 'https://updates.example.com/content-studio');
+  assert.equal(normalizeUpdateFeedUrl('http://updates.example.com/content-studio'), '');
+  assert.equal(normalizeUpdateFeedUrl('https://user:secret@updates.example.com/content-studio'), '');
+  assert.equal(normalizeUpdateFeedUrl('https://localhost/content-studio'), '');
+  assert.equal(normalizeUpdateFeedUrl('https://192.168.1.20/content-studio'), '');
+  assert.deepEqual(configuredWindowsPublisherNames({ build: { win: {} } }), []);
+  assert.deepEqual(configuredWindowsPublisherNames({ build: { win: { publisherName: ['Content Studio LLC', 'Backup Publisher'] } } }), [
+    'Content Studio LLC',
+    'Backup Publisher'
+  ]);
+});
+
+test('legacy plaintext credentials migrate to encrypted storage before the window opens', () => {
+  const mainSource = fs.readFileSync(path.join(__dirname, '..', 'electron', 'main.js'), 'utf8');
+  assert.match(mainSource, /function migrateLegacyPlaintextSecrets\(\)/);
+  assert.match(mainSource, /migrateSecret\(next, 'impactAuthToken', 'impactAuthToken_encrypted'\)/);
+  assert.match(mainSource, /migrateSecret\(next\.pinCreator, 'imgbbApiKey', 'imgbbApiKey_encrypted'\)/);
+  assert.match(mainSource, /migrateSecret\(migrated, 'apiKey', 'apiKey_encrypted'\)/);
+  const startupBlock = mainSource.match(/app\.whenReady\(\)\.then\(\(\) => \{[\s\S]*?\n}\);/)?.[0] || '';
+  assert.ok(startupBlock.indexOf('migrateLegacyPlaintextSecrets();') < startupBlock.indexOf('createWindow();'));
 });
 
 test('WordPress payload creation supports draft, category, slug, and future scheduling', () => {
@@ -2021,4 +3597,196 @@ test('mocked article workflow reaches review and prepares a WordPress draft with
   assert.deepEqual(wordpressDraft.payload.categories, [9]);
   assert.equal(wordpressDraft.payload.featured_media, 22);
   assert.match(wordpressDraft.payload.content, /recipe-card/);
+});
+
+test('workspace SQLite migration separates large workspace data from settings', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'content-studio-workspace-'));
+  let state = { settings: { theme: 'dark' }, articles: [{ id: 'article-1', title: 'Soup' }] };
+  const listeners = new Set();
+  const settingsStore = {
+    get(key, fallback) { return Object.prototype.hasOwnProperty.call(state, key) ? state[key] : fallback; },
+    set(key, value) { state = { ...state, [key]: value }; listeners.forEach((listener) => listener()); },
+    delete(key) { const next = { ...state }; delete next[key]; state = next; },
+    has(key) { return Object.prototype.hasOwnProperty.call(state, key); },
+    onDidAnyChange(listener) { listeners.add(listener); return () => listeners.delete(listener); },
+    get store() { return state; },
+    set store(value) { state = value; }
+  };
+  const workspace = createWorkspaceStore(settingsStore, directory);
+  assert.equal(settingsStore.has('articles'), false);
+  assert.equal(workspace.get('articles.0.title'), 'Soup');
+  workspace.set('articles.0.queueStatus', 'completed');
+  assert.equal(workspace.get('articles.0.queueStatus'), 'completed');
+  assert.equal(workspace.get('settings', {}).theme, 'dark');
+  workspace.database.close();
+  fs.rmSync(directory, { recursive: true, force: true });
+});
+
+test('job center recovers interrupted work and never stores credentials', () => {
+  let jobs = [];
+  const memoryStore = {
+    get() { return jobs; },
+    set(_key, value) { jobs = value; }
+  };
+  const center = createJobCenter({ store: memoryStore });
+  center.start('native-pin-1', { payload: { articleId: 'a1', apiToken: 'secret-value' } });
+  assert.equal(center.list()[0].status, 'running');
+  assert.equal(center.list()[0].payload.apiToken, undefined);
+  center.recoverInterrupted();
+  assert.equal(center.list()[0].status, 'interrupted');
+  assert.match(center.list()[0].error, /retry/i);
+});
+
+test('performance scheduling learns strong posting hours and keeps minimum spacing', () => {
+  const rows = [
+    { publishedAt: '2026-07-01T18:00:00', outboundClicks: 20, impressions: 1000 },
+    { publishedAt: '2026-07-02T18:00:00', outboundClicks: 18, impressions: 900 },
+    { publishedAt: '2026-07-01T21:00:00', outboundClicks: 12, impressions: 800 },
+    { publishedAt: '2026-07-02T21:00:00', outboundClicks: 11, impressions: 700 }
+  ];
+  const profile = buildPerformanceScheduleProfile(rows);
+  const slots = nextPerformanceSlots(4, { start: new Date('2026-08-01T08:00:00'), intervalHours: 2, preferredHours: profile.preferredHours, pinsPerDay: 4 });
+  assert.equal(profile.mode, 'account-data');
+  assert.deepEqual(profile.preferredHours.slice(0, 2), [18, 21]);
+  assert.equal(slots.length, 4);
+  assert.ok(slots.every((slot, index) => index === 0 || slot - slots[index - 1] >= 2 * 60 * 60 * 1000));
+  const boundedSlots = nextPerformanceSlots(32, {
+    start: new Date('2026-08-29T08:00:00Z'),
+    intervalHours: 24,
+    preferredHours: [9],
+    pinsPerDay: 1,
+    maximumDate: new Date('2026-08-31T23:59:59Z')
+  });
+  assert.ok(boundedSlots.length < 32);
+  assert.ok(boundedSlots.every((slot) => slot <= new Date('2026-08-31T23:59:59Z')));
+});
+
+test('post-publish QA checks public SEO, recipe schema, links, and durable media', () => {
+  const url = 'https://example.com/lemon-soup/';
+  const html = `<html><head><title>Fresh Lemon Soup Recipe</title><meta name="description" content="A practical lemon soup recipe with measured ingredients, timing, serving advice, and storage tips for home cooks."><link rel="canonical" href="${url}"></head><body><img src="https://example.com/media/soup.webp" alt="Lemon soup"><a href="/recipes/">Recipes</a><a href="/tips/">Tips</a><script type="application/ld+json">{"@type":"Recipe"}</script></body></html>`;
+  const audit = postPublishChecks({ html, status: 200, url, recipeAudit: { hasRecipeSchema: true } });
+  assert.equal(audit.healthy, true);
+  assert.equal(audit.score, 100);
+});
+
+test('GoHighLevel CSV exports split at the documented 90 row limit', () => {
+  const rows = Array.from({ length: 181 }, (_, index) => [`row-${index}`]);
+  const chunks = chunkRows(rows);
+  assert.deepEqual(chunks.map((chunk) => chunk.length), [90, 90, 1]);
+  assert.match(numberedCsvPath('posts.csv', 1, 3), /part-02-of-03\.csv$/);
+});
+
+test('provider error logging removes secrets from messages and responses', () => {
+  const error = new Error('Authorization: Bearer top-secret-token');
+  error.response = { status: 401, data: { api_key: 'raw-key', message: 'token=hidden-value' } };
+  const sanitized = sanitizeProviderError(error);
+  const report = JSON.stringify(sanitized);
+  assert.doesNotMatch(report, /top-secret-token|raw-key|hidden-value/);
+  assert.match(report, /redacted/);
+});
+
+test('masked renderer credentials always resolve to the encrypted main-process secret', () => {
+  const placeholder = '__CONTENT_STUDIO_SECRET_CONFIGURED__';
+  assert.equal(resolveRendererSecret(placeholder, 'decrypted-token', placeholder), 'decrypted-token');
+  assert.equal(resolveRendererSecret('', 'decrypted-token', placeholder), 'decrypted-token');
+  assert.equal(resolveRendererSecret('fresh-token', 'decrypted-token', placeholder), 'fresh-token');
+
+  const mainSource = fs.readFileSync(path.join(__dirname, '../electron/main.js'), 'utf8');
+  assert.doesNotMatch(mainSource, /const apiToken = settings\??\.replicateApiToken/);
+  assert.match(mainSource, /resolveReplicateApiToken\(settings\)/);
+});
+
+test('masked token recovery does not depend on the damaged credential still decrypting', () => {
+  const mainSource = fs.readFileSync(path.join(__dirname, '../electron/main.js'), 'utf8');
+  const recoverySource = mainSource.slice(
+    mainSource.indexOf('function recoverMaskedTokenArticleFailures()'),
+    mainSource.indexOf('function initializePinReplicate()')
+  );
+  assert.doesNotMatch(recoverySource, /getDecryptedReplicateToken/);
+  assert.match(recoverySource, /recoverMaskedTokenFailures/);
+});
+
+test('settings only reports an encrypted credential as configured after successful decryption', () => {
+  const mainSource = fs.readFileSync(path.join(__dirname, '../electron/main.js'), 'utf8');
+  const helperSource = mainSource.slice(
+    mainSource.indexOf('function publicSecretValue('),
+    mainSource.indexOf('function migrateLegacyPlaintextSecrets()')
+  );
+  assert.match(helperSource, /decryptSecret/);
+  assert.match(helperSource, /!isSecretPlaceholder/);
+});
+
+test('masked-token 401 article failures return to the queue without losing article data', () => {
+  const source = [{
+    id: 'article-1',
+    title: 'Keep this title',
+    queueStatus: 'error',
+    workflowStatus: 'failed',
+    contentBrief: { audience: 'home cooks' },
+    errorMessage: "Error invoking remote method 'generate-article': Error: Replicate 401: You did not pass a valid authentication token."
+  }];
+  const result = recoverMaskedTokenFailures(source);
+  assert.equal(result.recovered, 1);
+  assert.equal(result.articles[0].queueStatus, 'pending');
+  assert.equal(result.articles[0].workflowStatus, 'queued');
+  assert.equal(result.articles[0].title, 'Keep this title');
+  assert.deepEqual(result.articles[0].contentBrief, source[0].contentBrief);
+  assert.equal(result.articles[0].errorMessage, '');
+});
+
+test('Pinterest cluster source metadata supports Pinterest and destination URLs', () => {
+  const html = `<!doctype html><html><head>
+    <meta content="Fresh Lemon Chicken Recipe" property="og:title">
+    <meta name="description" content="A bright skillet dinner with practical cooking tips.">
+    <meta property="og:image" content="https://cdn.example.com/lemon-chicken.jpg">
+    <meta property="pinterestapp:source" content="https://example.com/lemon-chicken/">
+    <link href="https://www.pinterest.com/pin/123456/" rel="canonical">
+  </head></html>`;
+  const source = extractPinterestSourceMetadata(html, 'https://www.pinterest.com/pin/123456/', 200);
+  assert.equal(source.title, 'Fresh Lemon Chicken Recipe');
+  assert.equal(source.sourceType, 'pinterest-pin');
+  assert.equal(source.destinationUrl, 'https://example.com/lemon-chicken/');
+  assert.equal(source.imageUrl, 'https://cdn.example.com/lemon-chicken.jpg');
+
+  const embedded = extractPinterestSourceMetadata(
+    '<link rel="canonical" href="https://www.pinterest.com/pin/789/"><script>{"destination_url":"https:\\/\\/example.com\\/taco-bowls\\/"}</script>',
+    'https://www.pinterest.com/pin/789/',
+    200
+  );
+  assert.equal(embedded.destinationUrl, 'https://example.com/taco-bowls/');
+});
+
+test('Pinterest cluster plans keep coherent variants and only use allowed boards', () => {
+  const context = {
+    source: { title: 'Garlic Chicken Dinner', canonicalUrl: 'https://example.com/garlic-chicken/' },
+    topic: 'Garlic Chicken Dinner',
+    maxClusters: 5,
+    boardNames: ['Easy Weeknight Dinners', 'Healthy Recipes', 'Dessert Ideas']
+  };
+  const fallback = fallbackPinterestClusterPlan(context);
+  assert.ok(fallback.clusters.length >= 3 && fallback.clusters.length <= 5);
+  assert.ok(fallback.clusters.every((cluster) => !cluster.board || context.boardNames.includes(cluster.board)));
+
+  const normalized = normalizePinterestClusterPlan({
+    topic: 'Garlic Chicken Dinner',
+    clusters: [
+      { label: 'Quick Garlic Chicken', role: 'core-depth', lifecycle: 'growing', board: 'Not A Real Board', keywords: ['quick garlic chicken'], pinIdeas: ['Quick Garlic Chicken Tonight'] },
+      { label: 'Meal Prep Garlic Chicken', role: 'adjacent-discovery', lifecycle: 'established', board: 'Healthy Recipes', keywords: ['meal prep chicken'] },
+      { label: 'Budget Garlic Chicken', role: 'frontier-test', lifecycle: 'emerging', board: 'Easy Weeknight Dinners', keywords: ['budget chicken dinner'] }
+    ]
+  }, context);
+  assert.equal(normalized.clusters.length, 3);
+  assert.ok(normalized.clusters.every((cluster) => !cluster.board || context.boardNames.includes(cluster.board)));
+  assert.ok(normalized.clusters.every((cluster) => cluster.pinIdeas[0].title.length <= 95));
+});
+
+test('Pin queue preserves separate interest clusters for the same destination URL', () => {
+  const items = dedupePinQueueItems([
+    { url: 'https://example.com/lemon-chicken/', queueType: 'interest-cluster', clusterVariantId: 'quick', title: 'Quick Lemon Chicken' },
+    { url: 'https://example.com/lemon-chicken/', queueType: 'interest-cluster', clusterVariantId: 'meal-prep', title: 'Meal Prep Lemon Chicken' },
+    { url: 'https://example.com/lemon-chicken/', queueType: 'interest-cluster', clusterVariantId: 'quick', title: 'Updated Quick Lemon Chicken' }
+  ]);
+  assert.equal(items.length, 2);
+  assert.ok(items.some((item) => item.clusterVariantId === 'quick' && item.title === 'Updated Quick Lemon Chicken'));
+  assert.ok(items.some((item) => item.clusterVariantId === 'meal-prep'));
 });

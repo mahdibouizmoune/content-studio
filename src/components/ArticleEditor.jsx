@@ -1,12 +1,12 @@
 import { BadgeDollarSign, ExternalLink, Image, Link2, PackageCheck, Plus, RefreshCw, RotateCcw, Save, Search, Send, Sparkles, Trash2 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useConfirmDialog } from "@/components/ConfirmDialog";
 import { Button, Field, inputClass } from "@/components/ui";
 import { electronAPI } from "@/lib/electron";
 import { buildMetadata, buildRankMathMeta, buildRecipeSchema, buildSeoImageAlt, buildSeoImageFilename, insertArticleImages, qaArticleImages, scoreArticle } from "@/lib/articlePostProcess.mjs";
-import { applyInternalLinksToHtml, buildInternalLinkSuggestions } from "@/lib/internalLinks";
-import { categoryNeedsReview, matchWordPressCategory } from "@/lib/wordpressCategories";
+import { applyInternalLinksToHtml, buildInternalLinkSuggestions, resolveArticleSite } from "@/lib/internalLinks";
+import { categoryNeedsReview, matchWordPressCategory, manualCategoryForSite } from "@/lib/wordpressCategories";
 import { sanitizeHtml } from "@/lib/sanitizeHtml";
 import { inferSmartIntent } from "@/lib/smartContentEngine";
 import { applyAffiliateLinksToArticle, findAffiliateOpportunities, removeManagedAffiliateLinks } from "@/lib/affiliateLinks.mjs";
@@ -14,10 +14,11 @@ import { buildArticleBrief } from "@/lib/articleBrief.mjs";
 import { buildArticleQualityReport } from "@/lib/articleQuality.mjs";
 import { applyReaderRetentionElements } from "@/lib/readerRetention.mjs";
 import { listArticleSections, recordArticleRevision, replaceArticleSection, restoreArticleRevision } from "@/lib/articleRevisions.mjs";
+import { buildPinSourceSnapshot } from "@/lib/pinterestSource.mjs";
 
 export default function ArticleEditor({ article, settings, saveSettings, onClose, refreshArticles }) {
   const confirmAction = useConfirmDialog();
-  const [draft, setDraft] = useState(article);
+  const [draft, setDraft] = useState(() => rescore(article));
   const [status, setStatus] = useState("");
   const [assetWorking, setAssetWorking] = useState(false);
   const [assetImageSource, setAssetImageSource] = useState("auto");
@@ -62,6 +63,13 @@ export default function ArticleEditor({ article, settings, saveSettings, onClose
 
   function rescore(nextDraft, options = {}) {
     let workingDraft = { ...nextDraft };
+    if ((workingDraft.affiliateLinks || []).some((item) => item?.trackingVerified === false)) {
+      const retainedLinks = workingDraft.affiliateLinks.filter((item) => item?.trackingVerified !== false);
+      workingDraft = applyAffiliateLinksToArticle(removeManagedAffiliateLinks(workingDraft), {
+        ...settings,
+        affiliateLinks: retainedLinks
+      });
+    }
     workingDraft.articleBrief = buildArticleBrief({
       article: workingDraft,
       resolvedSettings: {
@@ -94,14 +102,14 @@ export default function ArticleEditor({ article, settings, saveSettings, onClose
     const imageQa = qaArticleImages(enriched);
     const qualityReport = buildArticleQualityReport(
       { ...enriched, seoScore: seo.score, seoChecks: seo.checks, imageQa },
-      { maxAffiliateLinks: settings.affiliateMaxLinks, requireFeaturedImage: true }
+      {
+        maxAffiliateLinks: settings.affiliateMaxLinks,
+        requireFeaturedImage: true,
+        site: resolveArticleSite(workingDraft, settings)
+      }
     );
     return { ...enriched, seoScore: seo.score, seoChecks: seo.checks, imageQa, qualityReport, rankMathMeta: buildRankMathMeta(enriched) };
   }
-
-  useEffect(() => {
-    setDraft((current) => (current.seoChecks?.length && current.imageQa ? current : rescore(current)));
-  }, []);
 
   async function save(next = draft, revisionMeta = {}) {
     const rescored = rescore(next);
@@ -314,7 +322,7 @@ export default function ArticleEditor({ article, settings, saveSettings, onClose
     try {
       const result = await electronAPI.generateImage({
         prompt,
-        aspectRatio: kind === "featured" ? (draft.featuredImageAspectRatio || settings.featuredImageRatio || "3:2") : (image.aspectRatio || settings.intextImageRatio || "4:3"),
+        aspectRatio: kind === "featured" ? (draft.featuredImageAspectRatio || settings.featuredImageRatio || "3:2") : (image.aspectRatio || settings.intextImageRatio || "9:16"),
         settings,
         jobKey: `article:${draft.id}:${workingKey}:regenerate`
       });
@@ -628,14 +636,16 @@ export default function ArticleEditor({ article, settings, saveSettings, onClose
       setStatus("Publishing paused. Fix image QA issues or publish again to confirm.");
       return;
     }
-    const match = readyDraft.wordpressCategoryId
-      ? { category: publishSite.categories?.find((category) => String(category.id) === String(readyDraft.wordpressCategoryId)), confidence: 100, reason: "Manual category" }
+    const manualCategory = manualCategoryForSite(readyDraft, publishSite);
+    const match = manualCategory
+      ? { category: publishSite.categories?.find((category) => String(category.id) === String(manualCategory)), confidence: 100, reason: "Manual category" }
       : matchWordPressCategory(readyDraft, publishSite);
     const articleForPublish = {
       ...readyDraft,
       publishStatusOverride: publishOptions.status || settings.publishStatus || "publish",
       scheduledAt: publishOptions.status === "future" ? (publishOptions.scheduledAt || scheduleAt) : "",
-      wordpressCategoryId: readyDraft.wordpressCategoryId || match.category?.id,
+      wordpressCategoryId: manualCategory || match.category?.id,
+      wordpressCategorySiteUrl: publishSite.url.replace(/\/+$/, ""),
       autoCategory: match
     };
     setStatus(match.category?.id ? `Publishing to ${publishSite.name || publishSite.url} in ${match.category.name}...` : `Publishing to ${publishSite.name || publishSite.url}...`);
@@ -649,6 +659,7 @@ export default function ArticleEditor({ article, settings, saveSettings, onClose
       workflowStatus: result.success ? (isPublic ? "published" : isScheduled ? "approved" : "needs-review") : readyDraft.workflowStatus,
       wordpressPublishStatus: result.status || readyDraft.wordpressPublishStatus || "",
       wordpressPostId: result.postId || readyDraft.wordpressPostId,
+      wordpressSiteUrl: publishSite.url.replace(/\/+$/, ""),
       wordpressPostUrl: publicPostUrl,
       wordpressDraftUrl: isPublic ? "" : (result.postUrl || readyDraft.wordpressDraftUrl || ""),
       sourceUrl: publicPostUrl || readyDraft.sourceUrl,
@@ -682,21 +693,35 @@ export default function ArticleEditor({ article, settings, saveSettings, onClose
       ...String(readyDraft.seoBrief?.secondaryKeywords || "").split(",")
     ].map((item) => item?.trim()).filter(Boolean).slice(0, 8);
     const jobKey = `pin-pack-${readyDraft.id}-${Date.now()}`;
+    const sourceSnapshot = buildPinSourceSnapshot(readyDraft);
+    const pinContext = {
+      sourceTitle: sourceSnapshot.title,
+      targetKeyword: sourceSnapshot.targetKeyword,
+      excerpt: sourceSnapshot.excerpt,
+      board: readyDraft.recommendedPinterestBoard || "",
+      recipe: sourceSnapshot.recipe
+    };
     try {
       setStatus("Creating one-pin pack: prompt...");
-      const promptResult = await electronAPI.generatePrompt(url, interests, "closeup", jobKey);
+      const promptResult = await electronAPI.generatePrompt(url, interests, `${readyDraft.smartPinStyle || inferSmartIntent(readyDraft).pinStyle}::placement:middle`, jobKey, pinContext);
       if (!promptResult.success) throw new Error(promptResult.error || "Pin prompt failed.");
       setStatus("Creating one-pin pack: title and description...");
-      const titleResult = await electronAPI.generateTitleDescription(url, interests, "closeup", jobKey);
+      const titleResult = await electronAPI.generateTitleDescription(url, interests, readyDraft.smartPinStyle || inferSmartIntent(readyDraft).pinStyle, jobKey, pinContext);
       if (!titleResult.success) throw new Error(titleResult.error || "Pin title and description failed.");
       setStatus("Creating one-pin pack: image...");
-      const imageResult = await electronAPI.generateImage(
-        promptResult.prompt,
-        settings.pinterestPinRatio || "2:3",
-        "ideogram",
-        url,
+      const imageResult = await electronAPI.createPinterestPinAsset({
+        pinId: `pin-${readyDraft.id}`,
+        mode: sourceSnapshot.preferredPortraitImageId ? "reuse-article" : "generate-new",
+        sourceSnapshot,
+        prompt: promptResult.prompt,
+        overlayText: titleResult.overlayText || titleResult.title,
+        placement: "middle",
+        font: "poppins",
+        model: "ideogram",
+        aspectRatio: settings.pinterestPinRatio || "2:3",
+        blogUrl: url,
         jobKey
-      );
+      });
       if (!imageResult.success) throw new Error(imageResult.error || "Pin image failed.");
       const pinPack = {
         createdAt: new Date().toISOString(),
@@ -705,14 +730,51 @@ export default function ArticleEditor({ article, settings, saveSettings, onClose
         prompt: promptResult.prompt,
         title: titleResult.title,
         description: titleResult.description,
-        imageUrl: imageResult.imageUrl,
-        hostedImageUrl: imageResult.imgurUrl || "",
-        board: ""
+        overlayText: titleResult.overlayText || titleResult.title,
+        imageUrl: imageResult.displayUrl || imageResult.imageUrl,
+        hostedImageUrl: imageResult.hostedImageUrl || imageResult.imgurUrl || "",
+        board: readyDraft.recommendedPinterestBoard || "",
+        imageSourceMode: imageResult.imageSourceMode,
+        generationConfig: imageResult.generationConfig,
+        imageQa: imageResult.imageQa
       };
       const next = { ...readyDraft, pinPack };
       await electronAPI.saveArticle(next);
       setDraft(next);
-      await electronAPI.appendPinQueue([{ url, articleId: readyDraft.id, title: readyDraft.generatedTitle || readyDraft.title, excerpt: readyDraft.excerpt || readyDraft.metaDescription || "", targetKeyword: readyDraft.rankMathFocusKeyword || readyDraft.seoBrief?.targetKeyword || "", interests: [readyDraft.seoBrief?.targetKeyword, ...(readyDraft.tags || []), ...String(readyDraft.seoBrief?.secondaryKeywords || "").split(",")].filter(Boolean).slice(0, 15), smartPinStyle: readyDraft.smartPinStyle || inferSmartIntent(readyDraft).pinStyle, csvBoard: readyDraft.recommendedPinterestBoard || "", queueType: "article", addedAt: new Date().toISOString() }]);
+      const savedPins = (await electronAPI.getPinCreatorPins?.())?.pins || [];
+      const completedPin = {
+        id: `pin-${readyDraft.id}`,
+        articleId: readyDraft.id,
+        url,
+        sourceTitle: readyDraft.generatedTitle || readyDraft.title,
+        excerpt: sourceSnapshot.excerpt,
+        targetKeyword: sourceSnapshot.targetKeyword,
+        interests,
+        smartPinStyle: readyDraft.smartPinStyle || inferSmartIntent(readyDraft).pinStyle,
+        sourceSnapshot,
+        prompt: promptResult.prompt,
+        title: titleResult.title,
+        description: titleResult.description,
+        overlayText: titleResult.overlayText || titleResult.title,
+        imageUrl: imageResult.displayUrl || imageResult.imageUrl,
+        displayUrl: imageResult.displayUrl || imageResult.imageUrl,
+        localImageUrl: imageResult.localImageUrl || "",
+        localPath: imageResult.localPath || "",
+        remoteImageUrl: imageResult.remoteImageUrl || "",
+        imgurUrl: imageResult.imgurUrl || "",
+        hostedImageUrl: imageResult.hostedImageUrl || imageResult.imgurUrl || "",
+        imageSourceMode: imageResult.imageSourceMode,
+        sourceImageId: imageResult.sourceImageId || "",
+        overlayFont: imageResult.generationConfig?.font || "poppins",
+        overlayPlacement: imageResult.generationConfig?.placement || "middle",
+        generationConfig: imageResult.generationConfig || {},
+        imageQa: imageResult.imageQa || {},
+        csvBoard: readyDraft.recommendedPinterestBoard || "",
+        csvBoardAuto: true,
+        status: "completed",
+        createdAt: new Date().toISOString()
+      };
+      await electronAPI.savePinCreatorPins?.([completedPin, ...savedPins.filter((pin) => String(pin.articleId) !== String(readyDraft.id))]);
       await electronAPI.openPinCreator?.();
       await refreshArticles();
       setStatus("One-pin pack created and sent to Pin Creator.");
@@ -876,12 +938,12 @@ export default function ArticleEditor({ article, settings, saveSettings, onClose
   }
 
   return createPortal((
-    <div className="fixed inset-0 z-30 overflow-y-auto bg-ink/35 p-4 backdrop-blur-sm">
-      <div className="mx-auto max-w-7xl rounded-lg bg-paper p-5 shadow-panel">
+    <div className="fixed inset-0 z-30 overflow-y-auto bg-ink/45 p-3 backdrop-blur-sm sm:p-4">
+      <div className="mx-auto w-full max-w-[96rem] overflow-hidden rounded-lg bg-paper p-4 shadow-panel ring-1 ring-black/5 dark:bg-slate-950 dark:ring-slate-700 sm:p-5">
         <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
           <div className="min-w-0">
             <div className="text-xs font-black uppercase tracking-[0.18em] text-violet-700">Editor</div>
-            <h3 className="mt-1 truncate text-2xl font-black text-ink">{draft.generatedTitle || draft.title}</h3>
+            <h3 className="mt-1 break-words text-2xl font-black text-ink">{draft.generatedTitle || draft.title}</h3>
             <div className="mt-2 flex flex-wrap gap-2 text-xs font-black uppercase">
               <span className="rounded-full bg-violet-100 px-2.5 py-1 text-violet-700">SEO {draft.seoScore ?? 0}/100</span>
               <span className="rounded-full bg-slate-100 px-2.5 py-1 text-slate-600">{draft.workflowStatus || "needs-review"}</span>
@@ -896,8 +958,8 @@ export default function ArticleEditor({ article, settings, saveSettings, onClose
           </div>
         </div>
 
-        <div className="grid gap-5 xl:grid-cols-[0.9fr_1.1fr]">
-          <div className="space-y-4">
+        <div className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1.55fr)_minmax(20rem,0.85fr)]">
+          <div className="min-w-0 space-y-4">
             <div className="soft-card rounded-lg p-4">
               <div className="mb-3 text-lg font-black text-slate-900">Article</div>
               <div className="space-y-3">
@@ -1225,7 +1287,7 @@ export default function ArticleEditor({ article, settings, saveSettings, onClose
             {status ? <div className={`rounded-md px-3 py-2 text-sm font-bold ring-1 ${/published/i.test(status) ? "bg-emerald-50 text-emerald-700 ring-emerald-100" : "bg-violet-50 text-violet-700 ring-violet-100"}`}>{status}</div> : null}
           </div>
 
-          <div className="space-y-4">
+          <div className="min-w-0 space-y-4">
             <div className="soft-card rounded-lg p-4">
               <div className="mb-3 flex items-center justify-between gap-3">
                 <div>
@@ -1302,7 +1364,7 @@ export default function ArticleEditor({ article, settings, saveSettings, onClose
                           </span>
                         </div>
                         <Field label="Category override">
-                          <select className={inputClass} value={draft.wordpressCategoryId || ""} onChange={(event) => setDraft({ ...draft, wordpressCategoryId: event.target.value, workflowStatus: event.target.value ? "approved" : draft.workflowStatus })}>
+                          <select className={inputClass} value={manualCategoryForSite(draft, site)} onChange={(event) => setDraft({ ...draft, wordpressCategoriesBySite: { ...(draft.wordpressCategoriesBySite || {}), [site.url.replace(/\/+$/, "")]: event.target.value }, workflowStatus: event.target.value ? "approved" : draft.workflowStatus })}>
                             <option value="">Auto: {match.category?.name || "No category"}</option>
                             {(site.categories || []).map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
                           </select>

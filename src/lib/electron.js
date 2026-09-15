@@ -28,6 +28,28 @@ function makeMockApi() {
       writeStore({ ...store, settings });
       return { success: true };
     },
+    async clearStoredCredential({ credential, siteId, siteUrl } = {}) {
+      const store = readStore();
+      const settings = { ...(store.settings || {}) };
+      const keyMap = {
+        replicate: "replicateApiToken",
+        ghl: "ghlApiToken",
+        impact: "impactAuthToken",
+        amazon: "amazonCredentialSecret",
+        pinterest: "pinterestAnalyticsAccessToken",
+        google: "googleClientSecret"
+      };
+      if (credential === "imgbb") settings.pinCreator = { ...(settings.pinCreator || {}), imgbbApiKey: "" };
+      else if (credential === "wordpress") {
+        settings.wordpressSites = (settings.wordpressSites || []).map((site) => (
+          (siteId && String(site.id) === String(siteId)) || (siteUrl && site.url === siteUrl)
+            ? { ...site, apiKey: "" }
+            : site
+        ));
+      } else if (keyMap[credential]) settings[keyMap[credential]] = "";
+      writeStore({ ...store, settings });
+      return { success: true, credential };
+    },
     async connectGoogleSearchConsole() {
       return { success: false, error: "Google connection is available in the desktop app." };
     },
@@ -63,6 +85,44 @@ function makeMockApi() {
       const store = readStore();
       writeStore({ ...store, performanceIntelligence: snapshot });
       return { success: true, snapshot, ghlReceipts: [], recipeAudits: [] };
+    },
+    async getPerformanceSchedule({ count = 0 } = {}) {
+      const start = Date.now() + 60 * 60 * 1000;
+      return {
+        success: true,
+        profile: { mode: "recommended-window", preferredHours: [9, 13, 18, 21], sampleCount: 0 },
+        slots: Array.from({ length: count }, (_, index) => new Date(start + index * 2 * 60 * 60 * 1000).toISOString())
+      };
+    },
+    async getJobCenter() {
+      return { success: true, jobs: readStore().jobCenterJobs || [] };
+    },
+    async clearFinishedJobs() {
+      const store = readStore();
+      const jobs = (store.jobCenterJobs || []).filter((job) => !["completed", "failed", "cancelled"].includes(job.status));
+      writeStore({ ...store, jobCenterJobs: jobs });
+      return { success: true, jobs };
+    },
+    async openJobWorkspace() {
+      return { success: true };
+    },
+    async getMediaStorageStats() {
+      return { success: true, fileCount: 0, unusedCount: 0, totalBytes: 0, unusedBytes: 0, olderThanDays: 30 };
+    },
+    async cleanupUnusedMedia() {
+      return { success: true, deletedCount: 0, deletedBytes: 0, errors: [] };
+    },
+    async getAppUpdateStatus() {
+      return { success: true, state: { status: "disabled", configured: false, message: "Update feed is available in packaged builds." } };
+    },
+    async checkForAppUpdate() {
+      return { success: false, error: "Update checks are available in packaged builds." };
+    },
+    async downloadAppUpdate() {
+      return { success: false, error: "No update is available." };
+    },
+    async installAppUpdate() {
+      return { success: false, error: "No update is ready." };
     },
     async refreshGhlPublishingStatus() {
       return { success: true, receipts: [] };
@@ -281,6 +341,14 @@ function makeMockApi() {
     async openLogsFolder() {
       return { success: false, error: "Logs are available in the desktop app." };
     },
+    async reportRendererError(report) {
+      console.error(report);
+      return { success: true };
+    },
+    async copyText(value) {
+      await navigator.clipboard.writeText(String(value || ""));
+      return { success: true };
+    },
     async openWorkspaceBackups() {
       return { success: true };
     },
@@ -385,8 +453,37 @@ function makeMockApi() {
       return { success: true, prompt: `Pinterest pin image for ${url}` };
     },
     async generateTitleDescription(url) {
-      return { success: true, title: "Fresh Recipe Idea", description: `Save this recipe idea from ${url}.` };
+      return { success: true, title: "Fresh Recipe Idea", description: `Save this recipe idea from ${url}.`, overlayText: "Fresh Recipe Idea" };
     },
+    async createPinterestPinAsset({ pinId, mode = "generate-new", overlayText = "" }) {
+      return {
+        success: true,
+        imageUrl: "",
+        localImageUrl: "",
+        localPath: "",
+        hostedImageUrl: "",
+        imgurUrl: "",
+        durable: false,
+        imageSourceMode: mode,
+        imageQa: { dimensionsVerified: true, overlayVerified: true, safeZoneVerified: true, nonBlankVerified: true },
+        generationConfig: { mode, overlayText, generatedAt: new Date().toISOString() },
+        pinId
+      };
+    },
+    async preparePinterestExport({ pins = [] }) {
+      return { success: true, pins, errors: [], warnings: [] };
+    },
+    async validatePinterestExport() {
+      return { success: true, errors: [], warnings: [] };
+    },
+    async exportPinterestCsv({ rows = [] }) {
+      return { success: false, canceled: false, validation: { valid: false, rowCount: rows.length, errors: [{ field: "Export", message: "Open Content Studio desktop to export the verified Pinterest CSV." }], warnings: [], rows } };
+    },
+    async getPinterestDelivery() { return { account: '', batches: [] }; },
+    async revealPinterestExport() { throw new Error('Open Content Studio desktop to locate exported files.'); },
+    async suggestPinterestResults() { throw new Error('Open Content Studio desktop to record import results.'); },
+    async savePinterestResults() { throw new Error('Open Content Studio desktop to record import results.'); },
+    async getPinterestRetry() { throw new Error('Open Content Studio desktop to retry failed Pins.'); },
     async generateRepurposePack({ article, platforms = [], campaignStyle = "traffic" }) {
       const title = article.generatedTitle || article.title || "Fresh Recipe Idea";
       return {
@@ -483,6 +580,51 @@ function makeMockApi() {
       const history = [research, ...(store.trendWorkspace?.history || [])].slice(0, 25);
       writeStore({ ...store, trendWorkspace: { ...(store.trendWorkspace || {}), history } });
       return { success: true, research, history };
+    },
+    async getPinterestClusterWorkspace() {
+      return { success: true, history: readStore().pinterestClusterHistory || [] };
+    },
+    async buildPinterestClusters({ url = "https://example.com/easy-recipe/", maxClusters = 6 } = {}) {
+      let sourceTitle = "Easy Recipe Ideas";
+      try {
+        sourceTitle = decodeURIComponent(new URL(url).pathname.split("/").filter(Boolean).pop() || "easy recipe")
+          .replace(/[-_]+/g, " ")
+          .replace(/\b\w/g, (letter) => letter.toUpperCase());
+      } catch {}
+      const labels = [
+        sourceTitle,
+        `Quick ${sourceTitle}`,
+        `${sourceTitle} Meal Prep`,
+        `Healthy ${sourceTitle}`,
+        `Budget ${sourceTitle}`,
+        `Seasonal ${sourceTitle}`
+      ].slice(0, Math.max(3, Math.min(10, Number(maxClusters) || 6)));
+      const plan = {
+        id: `pinterest-cluster-${Date.now()}`,
+        createdAt: new Date().toISOString(),
+        topic: sourceTitle,
+        primaryUseCase: labels[0],
+        summary: "Build depth around the source use case, then test distinct adjacent interests.",
+        strategyNotes: ["Keep every Pin aligned with its board and destination.", "Rotate clusters instead of publishing duplicates together."],
+        sourceLabel: "Browser preview cluster planner",
+        source: { requestedUrl: url, canonicalUrl: url, destinationUrl: url, title: sourceTitle, description: "Preview source description", imageUrl: "", sourceType: "destination-page" },
+        clusters: labels.map((label, index) => ({
+          id: `preview-cluster-${index + 1}`,
+          label,
+          role: index < 2 ? "core-depth" : "adjacent-discovery",
+          lifecycle: index === 1 ? "growing" : "established",
+          audienceIntent: "Find a practical recipe worth saving and cooking.",
+          rationale: "This angle serves a distinct planning use case.",
+          keywords: [label.toLowerCase(), sourceTitle.toLowerCase(), "recipe ideas"],
+          board: "Easy Recipe Finds",
+          boardConfidence: 72,
+          pinIdeas: [{ title: `${label}: A Recipe Worth Saving`, overlayText: label, hook: "Lead with a useful outcome.", visualDirection: "Use one bright vertical close-up." }]
+        }))
+      };
+      const store = readStore();
+      const history = [plan, ...(store.pinterestClusterHistory || [])].slice(0, 20);
+      writeStore({ ...store, pinterestClusterHistory: history });
+      return { success: true, plan, history };
     },
     async exportKeywordResearch() {
       return { success: true, filePath: "browser-preview-keyword-research.csv", rowCount: 1 };
@@ -615,17 +757,43 @@ function makeMockApi() {
     async getPinCreatorPins() {
       return { success: true, pins: [] };
     },
-    async createRepurposeImageVariants({ packs }) {
-      return { success: true, packs, missing: [] };
+    async createRepurposeImageVariants({ packs, sourceAsset }) {
+      const sourceUrl = sourceAsset?.publicUrl || sourceAsset?.remoteUrl || sourceAsset?.url || sourceAsset?.localUrl || "";
+      return {
+        success: true,
+        packs: (packs || []).map((pack) => ({
+          ...pack,
+          imageAssets: sourceUrl ? [{
+            id: "meta-social-portrait",
+            platform: "Social",
+            label: "Meta Portrait 4:5",
+            width: 1080,
+            height: 1350,
+            publicUrl: sourceUrl,
+            imageUrl: sourceUrl
+          }] : pack.imageAssets || []
+        })),
+        missing: sourceUrl ? [] : (packs || []).map((pack) => pack.articleTitle || pack.articleId)
+      };
     },
     async exportRepurposePacks() {
       return { success: true, filePath: "browser-preview-ghl-social-upload.csv", rowCount: 0, uploadedImageCount: 0, missingImageCount: 0 };
     },
-    async prepareRepurposeGhlRows() {
+    async prepareRepurposeGhlRows({ packs = [] } = {}) {
+      const pack = packs[0] || {};
+      const imageUrl = pack.imageAssets?.[0]?.publicUrl || pack.imageAssets?.[0]?.imageUrl || "";
+      const destinationUrl = pack.sourceUrl || "https://example.com";
+      const instagram = pack.content?.instagram;
+      const facebook = pack.content?.facebook;
+      const rows = [
+        instagram?.caption ? ["2026-05-28 14:00:00", [instagram.caption, ...(instagram.hashtags || [])].join("\n\n"), destinationUrl, imageUrl, "Instagram", "", "post"] : null,
+        facebook?.pagePost ? ["2026-05-28 16:00:00", facebook.pagePost, destinationUrl, imageUrl, "Facebook", `Full recipe: ${destinationUrl}`, "post"] : null
+      ].filter(Boolean);
       return {
         success: true,
         headers: ["postAtSpecificTime (YYYY-MM-DD HH:mm:ss)", "content", "link (OGmetaUrl)", "imageUrls", "Category", "followUpComment", "type (post/story/reel)"],
-        rows: [["2026-05-28 14:00:00", "Preview caption", "https://example.com", "", "Instagram", "", "post"]]
+        rows,
+        missingImageCount: rows.filter((row) => !row[3]).length
       };
     },
     async exportRepurposeGhlRows() {
@@ -657,6 +825,29 @@ function makeMockApi() {
       const projects = (store.metaStudioProjects || []).filter((item) => item.id !== projectId);
       writeStore({ ...store, metaStudioProjects: projects });
       return { success: true, projects };
+    },
+    async getMetaBulkGhlDraft() {
+      return { success: true, draft: readStore().metaBulkGhlDraft || null };
+    },
+    async prepareMetaBulkGhlRows({ articleIds = [] } = {}) {
+      const store = readStore();
+      const articles = (store.articles || []).filter((article) => !articleIds.length || articleIds.includes(article.id));
+      const projects = store.metaStudioProjects || [];
+      const headers = ["postAtSpecificTime (YYYY-MM-DD HH:mm:ss)", "content", "link (OGmetaUrl)", "imageUrls", "gifUrl", "videoUrls", "thumbnailUrl", "mediaOptimization (true/false)", "applyWatermark (true/false)", "tags (comma-separated)", "Category", "followUpComment", "type (post/story/reel)"];
+      const rows = articles.flatMap((article, index) => {
+        const project = projects.find((item) => String(item.articleId) === String(article.id)) || {};
+        const imageUrl = project.imageAssets?.[0]?.publicUrl || article.featuredImageRemoteUrl || article.featuredImage || "";
+        const start = new Date(Date.now() + (index * 2 + 1) * 60 * 60 * 1000).toISOString().slice(0, 19).replace("T", " ");
+        const instagram = project.content?.instagram?.feedCaption || article.metaDescription || article.generatedTitle || article.title || "";
+        const facebook = project.content?.facebook?.primaryPost || article.metaDescription || article.generatedTitle || article.title || "";
+        return [
+          [start, instagram, article.wordpressPostUrl || article.sourceUrl || "", imageUrl, "", "", "", "True", "False", "Instagram", "Instagram", "", "post"],
+          [start, facebook, article.wordpressPostUrl || article.sourceUrl || "", imageUrl, "", "", "", "True", "False", "Facebook", "Facebook", "", "post"]
+        ];
+      });
+      const draft = { success: true, status: "complete", headers, rows, articleCount: articles.length, postCount: rows.length, failures: [], percent: 100 };
+      writeStore({ ...store, metaBulkGhlDraft: draft });
+      return draft;
     },
     async getGeneratedVideos() {
       return { success: true, videos: readStore().generatedVideos || [] };
@@ -707,7 +898,19 @@ function makeMockApi() {
     onImageProgress() {
       return () => {};
     },
+    onPinProgress() {
+      return () => {};
+    },
     onVideoProgress() {
+      return () => {};
+    },
+    onMetaBulkProgress() {
+      return () => {};
+    },
+    onJobCenterUpdated() {
+      return () => {};
+    },
+    onAppUpdateStatus() {
       return () => {};
     },
     onNavigateSettings() {

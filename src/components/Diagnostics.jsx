@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Clipboard, FolderOpen, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
+import { Clipboard, Download, FolderOpen, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui";
 import { useConfirmDialog } from "@/components/ConfirmDialog";
 import { electronAPI } from "@/lib/electron";
@@ -21,12 +21,15 @@ export default function Diagnostics() {
   const [diagnostics, setDiagnostics] = useState(null);
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState("");
+  const [update, setUpdate] = useState(null);
 
   async function load() {
     setBusy("load");
     try {
       const result = await electronAPI.getDiagnostics();
       setDiagnostics(result);
+      const updateResult = await electronAPI.getAppUpdateStatus?.();
+      setUpdate(updateResult?.state || null);
       setStatus(result?.success ? "Diagnostics refreshed." : result?.error || "Could not load diagnostics.");
     } catch (error) {
       setStatus(error.message || "Could not load diagnostics.");
@@ -37,7 +40,16 @@ export default function Diagnostics() {
 
   useEffect(() => {
     load();
+    return electronAPI.onAppUpdateStatus?.((next) => setUpdate(next));
   }, []);
+
+  async function checkUpdate() {
+    setBusy("update");
+    const result = await electronAPI.checkForAppUpdate?.();
+    setUpdate(result?.state || update);
+    setStatus(result?.success ? "Update check started." : result?.error || "Could not check for updates.");
+    setBusy("");
+  }
 
   async function copyReport() {
     const report = sanitizeErrorDetails(JSON.stringify(diagnostics || {}, null, 2));
@@ -114,6 +126,10 @@ export default function Diagnostics() {
         Latest backup: {diagnostics.latestBackup?.available ? new Date(diagnostics.latestBackup.createdAt).toLocaleString() : "No valid backup found"}
       </div>
 
+      <div className="rounded-md bg-slate-50 px-3 py-3 text-sm font-semibold text-slate-700 ring-1 ring-slate-100">
+        App updates: {update?.message || "Update status is not available."}
+      </div>
+
       <div className="text-sm font-semibold text-slate-600">
         Feature flags: {Object.keys(diagnostics.featureFlags || {}).length
           ? Object.entries(diagnostics.featureFlags).map(([key, value]) => `${key}: ${value ? "on" : "off"}`).join(", ")
@@ -125,6 +141,7 @@ export default function Diagnostics() {
         <Button variant="secondary" onClick={copyReport}><Clipboard className="h-4 w-4" />Copy Sanitized Report</Button>
         <Button variant="secondary" onClick={() => electronAPI.openLogsFolder()}><FolderOpen className="h-4 w-4" />Open Logs Folder</Button>
         <Button variant="secondary" onClick={clearCache} disabled={!!busy}><Trash2 className="h-4 w-4" />Clear Temporary Cache</Button>
+        <Button variant="secondary" onClick={checkUpdate} disabled={!!busy || update?.configured === false}><Download className="h-4 w-4" />Check for Update</Button>
         <Button variant="danger" onClick={restoreBackup} disabled={busy === "restore" || !diagnostics.latestBackup?.available}>
           <RotateCcw className="h-4 w-4" />Restore Latest Backup
         </Button>

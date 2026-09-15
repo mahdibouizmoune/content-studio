@@ -114,7 +114,7 @@ function buildImpactKeywords(product = {}) {
   for (const phrase of phrases) {
     const cleaned = cleanText(phrase, 160);
     if (!cleaned) continue;
-    const parts = [cleaned, ...cleaned.split(/[>\/|,;:]+/)];
+    const parts = [cleaned, ...cleaned.split(/[>/|,;:]+/)];
     for (const part of parts) {
       const keyword = cleanText(part, 100);
       const key = keyword.toLowerCase();

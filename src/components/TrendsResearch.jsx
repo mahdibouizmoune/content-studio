@@ -6,6 +6,7 @@ import { Button, EmptyState, Field, inputClass } from "@/components/ui";
 import { electronAPI } from "@/lib/electron";
 import { buildSmartArticleDefaults } from "@/lib/smartContentEngine";
 import { resolveArticleGenerationSettings } from "@/lib/articleGenerationSettings.mjs";
+import { buildInterestProfile } from "@/lib/pinterestInterestIntelligence.mjs";
 
 const countries = [
   ["US", "United States"],
@@ -62,11 +63,22 @@ export default function TrendsResearch({ settings, articles, refreshArticles, se
     loadWorkspace().catch((error) => setStatus(error.message || "Could not load trend research."));
   }, []);
 
-  const keywords = research?.keywords || [];
+  const keywords = useMemo(() => research?.keywords || [], [research]);
   const summary = analytics?.summary || {};
   const selectedKeywords = useMemo(() => selected.map((index) => keywords[index]).filter(Boolean), [selected, keywords]);
   const visibleKeywordRows = useMemo(() => keywords
-    .map((item, index) => ({ item, index }))
+    .map((item, index) => ({
+      item: {
+        ...item,
+        interestProfile: buildInterestProfile({
+          ...item,
+          title: item.suggestedTitle,
+          targetKeyword: item.keyword,
+          cluster: item.cluster || research?.seed
+        })
+      },
+      index
+    }))
     .filter(({ item }) => intentFilter === "all" || (item.intent || "informational") === intentFilter)
     .filter(({ item }) => evidenceFilter === "all" || (item.evidenceConfidence || "low") === evidenceFilter)
     .filter(({ item }) => !hideOverlap || !item.cannibalization?.title)
@@ -84,7 +96,8 @@ export default function TrendsResearch({ settings, articles, refreshArticles, se
         return (rank[right.item.competition] || 0) - (rank[left.item.competition] || 0) || right.item.opportunityScore - left.item.opportunityScore;
       }
       return right.item.opportunityScore - left.item.opportunityScore;
-    }), [keywords, sortBy, intentFilter, evidenceFilter, hideOverlap]);
+    }), [keywords, research?.seed, sortBy, intentFilter, evidenceFilter, hideOverlap]);
+  const clusterRadar = useMemo(() => [...new Map(visibleKeywordRows.map(({ item }) => [item.interestProfile.primary.id, item.interestProfile])).values()].slice(0, 12), [visibleKeywordRows]);
 
   async function importPinterestData() {
     setWorking("import");
@@ -205,6 +218,7 @@ export default function TrendsResearch({ settings, articles, refreshArticles, se
       const preset = settings.projectPresets?.find((item) => item.id === "preset-pinterest-recipe-traffic") || {};
       const now = Date.now();
       for (const [index, item] of unique.entries()) {
+        const interestProfile = buildInterestProfile({ ...item, title: item.suggestedTitle, targetKeyword: item.keyword, cluster: item.cluster || research?.seed });
         const smart = buildSmartArticleDefaults({
           title: item.suggestedTitle,
           mode: item.contentType === "listicle" ? "listicle" : "article",
@@ -246,6 +260,8 @@ export default function TrendsResearch({ settings, articles, refreshArticles, se
           recipeCardEnabled: resolved.recipeCardEnabled,
           smartIntentId: smart.smartIntentId,
           smartIntentLabel: smart.smartIntentLabel,
+          interestProfile,
+          pinterestRelatedTopics: interestProfile.relatedTopics,
           smartPinStyle: smart.smartPinStyle,
           requireOutlineApproval: resolved.requireOutlineApproval,
           outlineApproved: resolved.outlineApproved,
@@ -347,6 +363,12 @@ export default function TrendsResearch({ settings, articles, refreshArticles, se
                 <ol className="mt-2 space-y-1 text-sm font-semibold text-slate-600">{(research.contentPlan || []).slice(0, 5).map((item, index) => <li key={`${item}-${index}`}>{index + 1}. {item}</li>)}</ol>
               </div>
             </div>
+            <div className="mt-4 rounded-md bg-white p-4 ring-1 ring-slate-200">
+              <div className="text-xs font-black uppercase text-indigo-600">Pinterest Interest Radar</div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {clusterRadar.map((profile) => <span key={profile.primary.id} className="rounded-full bg-violet-50 px-3 py-1.5 text-xs font-black text-violet-700 ring-1 ring-violet-100">{profile.primary.label} / <span className="capitalize">{profile.lifecycle.stage}</span></span>)}
+              </div>
+            </div>
           </div>
 
           <div className="mb-5 overflow-hidden rounded-lg bg-white shadow-panel ring-1 ring-slate-200">
@@ -376,7 +398,7 @@ export default function TrendsResearch({ settings, articles, refreshArticles, se
                       <td className="px-4 py-4 align-top"><input type="checkbox" checked={selected.includes(index)} onChange={() => toggleSelected(index)} aria-label={`Select ${item.keyword}`} /></td>
                       <td className="max-w-md px-3 py-4 align-top"><div className="font-black text-slate-900">{item.keyword}</div><div className="mt-1 font-semibold text-slate-600">{item.suggestedTitle}</div><div className="mt-1 text-xs leading-5 text-slate-500">{item.rationale}</div>{item.cannibalization?.title ? <div className="mt-2 rounded-md bg-violet-100 px-2 py-1 text-xs font-bold text-violet-700">Possible overlap: {item.cannibalization.title}</div> : null}</td>
                       <td className="px-3 py-4 align-top"><span className={`inline-flex min-w-12 justify-center rounded-full px-2.5 py-1 text-xs font-black ${scoreTone(item.opportunityScore)}`}>{item.opportunityScore}</span><div className="mt-2 text-xs font-bold text-slate-500">{item.competition || "unknown"} competition</div></td>
-                      <td className="px-3 py-4 align-top font-bold text-slate-600">{item.intent || "informational"}<div className="mt-1 text-xs text-slate-500">{item.contentType || "article"}</div><div className="mt-2 rounded bg-slate-100 px-2 py-1 text-xs text-slate-600">{item.cluster || research.seed}</div></td>
+                      <td className="px-3 py-4 align-top font-bold text-slate-600">{item.intent || "informational"}<div className="mt-1 text-xs text-slate-500">{item.contentType || "article"}</div><div className="mt-2 rounded bg-violet-50 px-2 py-1 text-xs font-black text-violet-700">{item.interestProfile.primary.label}</div><div className="mt-1 text-xs capitalize text-slate-500">{item.interestProfile.lifecycle.stage} / {item.interestProfile.primary.confidence}% confidence</div><div className="mt-1 max-w-64 text-xs font-medium text-slate-500">Next: {item.interestProfile.adjacent.slice(0, 2).join(", ")}</div></td>
                       <td className="px-3 py-4 align-top"><div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs"><span className="text-slate-500">Outbound</span><strong>{number(item.pinterestEvidence?.outboundClicks)}</strong><span className="text-slate-500">Pin clicks</span><strong>{number(item.pinterestEvidence?.pinClicks)}</strong><span className="text-slate-500">Saves</span><strong>{number(item.pinterestEvidence?.saves)}</strong><span className="text-slate-500">Views</span><strong>{number(item.pinterestEvidence?.impressions)}</strong></div></td>
                       <td className="max-w-56 px-3 py-4 align-top text-xs font-semibold leading-5 text-slate-600"><span className={`inline-flex rounded-full px-2 py-1 font-black ${item.evidenceConfidence === "high" ? "bg-emerald-100 text-emerald-700" : item.evidenceConfidence === "medium" ? "bg-violet-100 text-violet-700" : "bg-slate-100 text-slate-600"}`}>{item.evidenceLabel || item.trendSignal || "Inferred"} / {item.evidenceConfidence || "low"}</span><div className="mt-2">{item.freshnessLabel || "Evidence date unavailable"}</div><div className="mt-1 font-bold text-indigo-600">{item.publishWindow || item.seasonalTiming}</div></td>
                       <td className="max-w-44 px-3 py-4 align-top font-semibold text-slate-600">{item.board || "Auto match"}</td>

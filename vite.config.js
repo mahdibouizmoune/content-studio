@@ -9,6 +9,11 @@ module.exports = defineConfig({
   define: {
     __APP_VERSION__: JSON.stringify(version)
   },
+  build: {
+    minify: "esbuild",
+    sourcemap: false,
+    cssMinify: true
+  },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src")

@@ -16,6 +16,9 @@ function normalizeQueueUrl(value = '') {
 
 function pinQueueItemKey(item = {}) {
   if (item.queueType === 'internal-link') return `url:${normalizeQueueUrl(item.url)}`;
+  if (item.queueType === 'interest-cluster' && item.clusterVariantId) {
+    return `cluster:${normalizeQueueUrl(item.url)}:${String(item.clusterVariantId).trim().toLowerCase()}`;
+  }
   const articleId = item.articleId ? String(item.articleId).trim().toLowerCase() : '';
   if (articleId) return `article:${articleId}`;
   return `url:${normalizeQueueUrl(item.url)}`;
@@ -45,8 +48,16 @@ function dedupePinQueueItems(items = []) {
       excerpt: item.excerpt ? String(item.excerpt).slice(0, 1200) : existing.excerpt || '',
       targetKeyword: item.targetKeyword ? String(item.targetKeyword).slice(0, 180) : existing.targetKeyword || '',
       queueType: item.queueType ? String(item.queueType) : existing.queueType || '',
+      clusterVariantId: item.clusterVariantId ? String(item.clusterVariantId) : existing.clusterVariantId || '',
       smartPinStyle: item.smartPinStyle ? String(item.smartPinStyle) : existing.smartPinStyle || '',
       csvBoard: item.csvBoard ? String(item.csvBoard) : existing.csvBoard || '',
+      interestProfile: item.interestProfile && typeof item.interestProfile === 'object'
+        ? item.interestProfile
+        : existing.interestProfile || {},
+      relatedTopics: Array.isArray(item.relatedTopics) && item.relatedTopics.length ? item.relatedTopics : existing.relatedTopics || [],
+      sourceSnapshot: item.sourceSnapshot && typeof item.sourceSnapshot === 'object'
+        ? item.sourceSnapshot
+        : existing.sourceSnapshot || {},
       interests: Array.isArray(item.interests) && item.interests.length ? item.interests : existing.interests || [],
       addedAt: item.addedAt || existing.addedAt || new Date().toISOString()
     });

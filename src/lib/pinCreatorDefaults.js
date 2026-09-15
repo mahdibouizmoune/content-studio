@@ -1,45 +1,38 @@
+export const PIN_PROMPT_DEFAULTS_VERSION = 15;
+
+export const RETIRED_PIN_STYLE_IDS = [
+  "custom-ingredient-closeup",
+  "custom-recipe-card",
+  "custom-weeknight-solution",
+  "custom-listicle-collage"
+];
+
 export const DEFAULT_PIN_CUSTOM_STYLES = {
-  "custom-ingredient-closeup": {
+  "custom-july-original-ai": {
     name: "Ingredient Closeup Pin",
     prompt: [
-      "Create a vertical 2:3 Pinterest food pin led by ultra-realistic, premium appetite-first editorial photography of the exact finished dish.",
-      "Fill roughly 70-82% of the canvas with one close-up hero serving or fork-ready bite. Use a tight 30-45 degree or overhead angle that clearly identifies the recipe, with enough plate or bowl edge visible for recognition.",
-      "Make the most desirable source-supported texture tack-sharp, such as browned crisp edges, glossy sauce, a tender center, creamy layers, fresh garnish, or melted cheese. Show natural micro-texture and use gentle steam only when the dish should be hot.",
-      "Use bright diffused side-window light, natural shadows, true ingredient colors, realistic portions, and subtle home-cooked imperfections. Avoid plastic-looking food, excessive blur, dark restaurant lighting, or an overstyled table.",
-      "Place exactly one bold 3-7 word headline in the app-supplied placement on a full-width translucent frosted-glass ribbon. Use a premium geometric sans-serif, clean kerning, balanced line breaks, generous padding, and high contrast while keeping the recipe visible beneath it.",
-      "Create click curiosity through a clear delicious result people can imagine making. Do not invent ingredients, garnish, timing, nutrition, or preparation claims."
+      "Create one complete vertical 2:3 recipe Pin with an ultra-realistic, full-bleed close-up of the exact freshly finished dish or drink. Make one generous hero serving and its most delicious source-supported texture instantly recognizable at phone size.",
+      "Use a real full-frame food-photography look, natural close perspective, large diffused side-window light, soft bounce fill, truthful white balance, controlled highlights, and open natural shadows. Preserve believable crumbs, fibers, browning, moisture, sauce viscosity, condensation, or fresh crunch supported by the recipe, with subtle handmade irregularity.",
+      "Render the supplied short recipe headline exactly once in the center, in large bold uppercase white sans-serif lettering inside a compact translucent rounded panel colored from the food.",
+      "Keep the food visible around and through the panel. Add no other words, number, subtitle, CTA, footer, collage, URL, logo, icon, badge, label, packaging, or watermark. Avoid fake steam, excessive glaze, oily pools, plastic perfection, neon saturation, invented garnish, duplicated food, CGI, and illustration."
     ].join("\n")
   },
-  "custom-recipe-card": {
-    name: "Recipe Card Traffic Pin",
+  "custom-modern-recipe-magazine": {
+    name: "Modern Recipe Magazine",
     prompt: [
-      "Create a vertical 2:3 Pinterest recipe traffic pin with one ultra-realistic premium full-bleed close-up of the exact finished dish.",
-      "Fill roughly 70-82% of the canvas with a tack-sharp hero serving. Use bright diffused side-window light, realistic micro-texture, true food color, natural shadows, and a warm lightly styled home-kitchen setting.",
-      "Reserve the app-supplied placement for a refined full-width frosted-glass title ribbon. Keep it translucent enough that the recipe remains visible beneath it and avoid any solid opaque card.",
-      "Render exactly one 4-7 word keyword-led headline that names the dish. Add one short source-verified cue such as 30 Min or One Pan only when it is genuinely supported, and add no other text.",
-      "Use strong mobile contrast, generous safe margins, and a calm visual hierarchy. Keep the appetite-first hero food dominant, recognizable, and unobstructed.",
-      "No invented garnish, fake timing or health claims, multiple badges, tiny text, logos, decorative clutter, or plastic-looking food."
+      "Create a premium vertical 2:3 editorial food photograph of the exact finished recipe, like a modern cooking magazine cover photographed with a real camera.",
+      "Show one generous hero serving from the most flattering close overhead, 30-45 degree, or eye-level angle. Let it fill 72-86% of the frame and leave a calm upper quarter for the app's editorial masthead.",
+      "Use a real full-frame camera look, large diffused side-window light, soft bounce fill, accurate white balance, controlled highlights, and open natural shadows. Keep the hero bite and surrounding food sharp, with recipe-supported browned edges, natural sauce viscosity, moist crumb, creamy layers, fresh crunch, or condensation.",
+      "Use only one or two source-relevant props. Generate no text, labels, panels, logos, or watermarks. Avoid fake steam, excessive gloss, invented garnish, duplicate food, distorted utensils, plastic texture, harsh HDR, muddy shadows, heavy orange casts, neon saturation, CGI, and illustration."
     ].join("\n")
   },
-  "custom-weeknight-solution": {
-    name: "Weeknight Solution Pin",
+  "custom-minimal-editorial": {
+    name: "Minimal Editorial",
     prompt: [
-      "Create a vertical 2:3 Pinterest pin that presents the exact recipe as an achievable weeknight meal.",
-      "Show an ultra-realistic tight hero view of the complete plated serving or serving dish on a real home table, filling roughly 70-82% of the frame. Use a natural 30-45 degree or overhead angle and include one restrained dinner cue without adding unrelated ingredients.",
-      "Use bright side-window light, true food color, realistic portions, crisp source-supported texture, and an approachable lived-in feeling without plastic shine or overprocessing.",
-      "Reserve the placement supplied by the app for exactly one 4-7 word headline focused on a source-supported time, cleanup, make-ahead, or family benefit.",
-      "Use a full-width translucent frosted-glass ribbon, premium bold geometric sans-serif, generous mobile safe margins, and balanced line breaks. Keep the food visible beneath it and add no extra captions or badges.",
-      "Avoid luxury restaurant styling, fake steam, invented ingredients, vague hype, unsupported budget or health claims, and crowded props."
-    ].join("\n")
-  },
-  "custom-listicle-collage": {
-    name: "Recipe Listicle Collage",
-    prompt: [
-      "Create a vertical 2:3 Pinterest collage pin for a recipe roundup or listicle.",
-      "Use two or three ultra-realistic premium close-up food photographs from the exact source theme. Make one appetite-first image dominant and the others supporting, with consistent bright natural lighting, tack-sharp texture, and simple dividers.",
-      "Crop every dish tightly enough to feel immediately appetizing while keeping it recognizable. Use realistic portions and true ingredient colors. Do not repeat the same dish or invent food.",
-      "Place exactly one bold 3-7 word headline using the source list number and main keyword on a full-width translucent frosted-glass ribbon in the app-supplied placement.",
-      "Keep the layout spacious and readable at mobile size with no subtitle, badge, logo, or extra lettering. Avoid equal-size crowded grids and generic stock imagery."
+      "Create a refined vertical 2:3 food-editorial photograph of the exact finished recipe with one unmistakable hero subject and clean visual restraint.",
+      "Crop close enough for appetite and mobile recognition, but preserve purposeful breathing room in the upper quarter for direct local typography. Use a simple neutral surface and no more than one source-relevant prop.",
+      "Use large soft directional daylight, realistic contrast, truthful ingredient color, open natural shadows, crisp focal texture, and gentle background falloff without blurring the important food. Preserve a freshly prepared look and small handmade irregularities.",
+      "Generate no text, panels, ribbons, labels, buttons, logos, or watermarks. Avoid fake steam, excess glaze, invented ingredients, excessive garnish, duplicate food, synthetic symmetry, plastic shine, harsh HDR, dark restaurant lighting, neon saturation, CGI, and illustration."
     ].join("\n")
   }
 };
@@ -52,30 +45,37 @@ export const DEFAULT_PIN_TITLE_DESC_PROMPT = [
   "${interestsNote}",
   "",
   "TITLE RULES:",
-  "- Return one accurate title between 45 and 95 characters.",
+  "- Return one accurate title between 50 and 100 characters.",
   "- Put the exact main searchable recipe phrase naturally within the first 40 characters whenever possible.",
-  "- Add one concrete source-supported differentiator such as method, flavor, texture, occasion, time, or meal use.",
+  "- Add one concrete source-supported differentiator such as method, main flavor, texture, occasion, verified time, or meal use.",
+  "- Align the wording with the selected board and primary Pinterest use case without repeating the board name mechanically.",
   "- Prefer specific search language a cook would use over vague words such as amazing, ultimate, best, or viral.",
   "- Use a verified trend or seasonal phrase only when the supplied evidence directly matches this recipe. Otherwise use evergreen search intent.",
   "- Use natural Title Case and plain text.",
   "- Do not use emojis, clickbait, hashtags, quotation marks, unsupported claims, or em dashes.",
   "",
   "DESCRIPTION RULES:",
-  "- Return one description between 250 and 450 characters in 2-3 natural sentences.",
-  "- Put the main recipe phrase in the first sentence, then weave in 2-3 accurate related phrases without repeating the same wording.",
-  "- Explain what the dish is, what makes this version useful or desirable, and one source-supported cooking, texture, serving, or occasion detail.",
-  "- End with a natural action such as save this recipe or visit for the full ingredients and instructions.",
+  "- Return one description between 300 and 500 characters in 2-3 natural sentences.",
+  "- Make the first 100 characters useful on their own: identify the exact recipe and its strongest verified benefit or use case.",
+  "- Weave in 2-4 accurate related phrases from ingredients, method, flavor, texture, occasion, and board context without repeating the main keyword.",
+  "- Explain what the dish is, why a cook would save it, and one source-supported cooking, serving, storage, or occasion detail.",
+  "- End with a natural action such as save this recipe for later or visit for the complete ingredients and instructions.",
   "- Use current trend evidence only when directly relevant. Never force a trend, year, health promise, time claim, or ingredient that the source does not support.",
+  "- Keep it evergreen. Do not include a URL, price, temporary promotion, first-person aside, or wording that will age quickly.",
   "- Use plain text only. No Markdown bold, hashtags, emojis, keyword lists, keyword stuffing, generic filler, invented metrics, or em dashes.",
   "",
   "OUTPUT FORMAT:",
   "Title: [title]",
-  "Description: [description]"
+  "Description: [description]",
+  "Overlay: [one exact 3-7 word keyword-led phrase naming the dish]"
 ].join("\n");
 
 export function mergePinCustomStyles(customStyles = {}) {
+  const retiredStyles = new Set(RETIRED_PIN_STYLE_IDS);
   const safeCustomStyles = customStyles && typeof customStyles === "object" && !Array.isArray(customStyles)
-    ? Object.fromEntries(Object.entries(customStyles).filter(([, style]) => style && typeof style === "object" && !Array.isArray(style)))
+    ? Object.fromEntries(Object.entries(customStyles).filter(([id, style]) => (
+      !retiredStyles.has(id) && style && typeof style === "object" && !Array.isArray(style)
+    )))
     : {};
   return { ...DEFAULT_PIN_CUSTOM_STYLES, ...safeCustomStyles };
 }
@@ -85,6 +85,6 @@ export function normalizePinCreatorDefaults(pinCreator = {}) {
     ...pinCreator,
     customStyles: mergePinCustomStyles(pinCreator.customStyles),
     titleDescPrompt: pinCreator.titleDescPrompt || DEFAULT_PIN_TITLE_DESC_PROMPT,
-    promptDefaultsVersion: 5
+    promptDefaultsVersion: PIN_PROMPT_DEFAULTS_VERSION
   };
 }

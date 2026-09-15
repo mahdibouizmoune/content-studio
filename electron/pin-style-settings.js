@@ -9,20 +9,25 @@ function validStyles(styles = {}) {
   );
 }
 
-function mergePinStyles(defaultStyles = {}, customStyles = {}) {
+function omitRetiredStyles(styles = {}, retiredStyleIds = []) {
+  const retired = new Set((retiredStyleIds || []).map(String));
+  return Object.fromEntries(Object.entries(validStyles(styles)).filter(([id]) => !retired.has(id)));
+}
+
+function mergePinStyles(defaultStyles = {}, customStyles = {}, retiredStyleIds = []) {
   return {
-    ...validStyles(defaultStyles),
-    ...validStyles(customStyles)
+    ...omitRetiredStyles(defaultStyles, retiredStyleIds),
+    ...omitRetiredStyles(customStyles, retiredStyleIds)
   };
 }
 
-function migratePinStyles(defaultStyles = {}, customStyles = {}, storedVersion = 0, currentVersion = 1) {
+function migratePinStyles(defaultStyles = {}, customStyles = {}, storedVersion = 0, currentVersion = 1, retiredStyleIds = []) {
   if (Number(storedVersion || 0) >= Number(currentVersion || 1)) {
-    return mergePinStyles(defaultStyles, customStyles);
+    return mergePinStyles(defaultStyles, customStyles, retiredStyleIds);
   }
-  const defaults = validStyles(defaultStyles);
+  const defaults = omitRetiredStyles(defaultStyles, retiredStyleIds);
   const extras = Object.fromEntries(
-    Object.entries(validStyles(customStyles)).filter(([id]) => !defaults[id])
+    Object.entries(omitRetiredStyles(customStyles, retiredStyleIds)).filter(([id]) => !defaults[id])
   );
   return { ...defaults, ...extras };
 }
@@ -30,5 +35,6 @@ function migratePinStyles(defaultStyles = {}, customStyles = {}, storedVersion =
 module.exports = {
   mergePinStyles,
   migratePinStyles,
+  omitRetiredStyles,
   validStyles
 };

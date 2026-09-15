@@ -1,3 +1,11 @@
+export function manualCategoryForSite(article = {}, site = {}) {
+  const url = String(site.url || "").replace(/\/+$/, "");
+  const categories = article.wordpressCategoriesBySite || {};
+  if (Object.hasOwn(categories, url)) return categories[url] || "";
+  const owner = String(article.wordpressCategorySiteUrl || article.wordpressSiteUrl || "").replace(/\/+$/, "");
+  return owner === url || (!owner && !article.wordpressPostId) ? article.wordpressCategoryId || "" : "";
+}
+
 function normalize(value = "") {
   return String(value).toLowerCase().replace(/<[^>]+>/g, " ").replace(/[^a-z0-9\s-]/g, " ").replace(/\s+/g, " ").trim();
 }

@@ -2,7 +2,6 @@
 let pins = [];
 let isPaused = false;
 let isCancelled = false;
-let currentJobKey = null;
 let boardNames = [];
 let autoBoardMatching = true;
 let queuedPinMetaByUrl = {};
@@ -302,7 +301,15 @@ function getPinDisplayUrl(pin) {
 }
 
 function getPinPublicMediaUrl(pin) {
-  return pin.imgurUrl || pin.remoteImageUrl || (/^https?:\/\//i.test(pin.imageUrl || '') ? pin.imageUrl : '');
+  if (pin.imageQa?.publicUrlVerified !== true
+    || pin.imageQa?.publicDimensionsVerified !== true
+    || pin.imageQa?.publicIdentityVerified !== true
+    || pin.imageQa?.publicAssetKind !== 'finished-pinterest-pin'
+    || Number(pin.imageQa?.publicWidth || 0) !== 1000
+    || Number(pin.imageQa?.publicHeight || 0) !== 1500) return '';
+  const validatedUrl = String(pin.imageQa?.publicValidatedUrl || '');
+  return [pin.csvMediaUrl, pin.hostedImageUrl, pin.imgurUrl]
+    .find((url) => /^https:\/\//i.test(String(url || '')) && String(url) === validatedUrl) || '';
 }
 
 function getPinDownloadUrl(pin) {
@@ -634,7 +641,7 @@ async function loadCustomStyles() {
     if (customStylesOptgroup) {
       customStylesOptgroup.innerHTML = '';
       // Built-in style IDs - don't show overrides as custom styles
-      const builtInIds = ['custom-ingredient-closeup', 'custom-recipe-card', 'custom-weeknight-solution', 'custom-listicle-collage', 'closeup', 'home-decor', 'mirror-selfie', 'basic-top', 'basic-middle', 'basic-bottom', 'dual-image', 'collage'];
+      const builtInIds = ['custom-july-original-ai', 'custom-modern-recipe-magazine', 'custom-minimal-editorial', 'custom-ingredient-closeup', 'custom-recipe-card', 'custom-weeknight-solution', 'custom-listicle-collage', 'closeup', 'home-decor', 'mirror-selfie', 'basic-top', 'basic-middle', 'basic-bottom', 'dual-image', 'collage'];
       Object.keys(customStyles).forEach(styleId => {
         // Skip built-in style overrides - they already appear in Built-in Styles
         if (builtInIds.includes(styleId)) return;
@@ -644,8 +651,8 @@ async function loadCustomStyles() {
         customStylesOptgroup.appendChild(option);
       });
       const shouldUseCloseupDefault = pinStyle && (!pinStyle.value || pinStyle.value === 'closeup' || pinStyle.value === 'basic-middle');
-      if (customStyles['custom-ingredient-closeup'] && shouldUseCloseupDefault) {
-        pinStyle.value = 'custom-ingredient-closeup';
+      if (customStyles['custom-july-original-ai'] && shouldUseCloseupDefault) {
+        pinStyle.value = 'custom-july-original-ai';
       }
     }
   } catch (error) {
@@ -839,7 +846,6 @@ async function handleGeneratePrompts() {
     updatePin(pin);
 
     const jobKey = `prompt-${pin.id}-${Date.now()}`;
-    currentJobKey = jobKey;
     try {
       const result = await window.electronAPI.generatePrompt(pin.url, pin.interests, selectedStyle, jobKey);
 
@@ -861,7 +867,6 @@ async function handleGeneratePrompts() {
       pin.status = 'error';
       pin.error = error.message;
     }
-    currentJobKey = null;
 
     updatePin(pin);
   }
@@ -949,7 +954,6 @@ async function handleCreateAllTitles() {
     updatePinMinimal(pin); // Use minimal update to reduce DOM work
 
     const jobKey = `title-${pin.id}-${Date.now()}`;
-    currentJobKey = jobKey;
     try {
       const result = await window.electronAPI.generateTitleDescription(pin.url, pin.interests, pinStyle.value, jobKey);
 
@@ -979,7 +983,6 @@ async function handleCreateAllTitles() {
       consecutiveErrors++;
       console.error(`Title generation exception for ${pin.url}:`, error);
     }
-    currentJobKey = null;
 
     completedCount++;
     createTitlesBtn.innerHTML = `<div class="spinner"></div> Creating ${completedCount}/${totalCount}...`;
@@ -1599,33 +1602,35 @@ async function populateCSVEditor() {
   // Generate publish date slots once
   const publishDateSlots = await generatePublishDateSlots();
 
-  pins.forEach((pin, index) => {
+  pins.forEach((pin) => {
     ensurePinBoard(pin);
     const row = document.createElement('tr');
 
     // Remove markdown bold syntax from description (if exists)
-    const cleanDescription = pin.description ? pin.description.replace(/\*\*(.*?)\*\*/g, '$1') : '';
+    const cleanDescription = String(pin.csvDescription ?? pin.description ?? '').replace(/\*\*(.*?)\*\*/g, '$1');
     const mediaUrl = getPinPublicMediaUrl(pin);
-    if (!pin.csvKeywords) pin.csvKeywords = pinterestSeoKeywords(pin);
+    if (pin.csvKeywords === undefined) pin.csvKeywords = pinterestSeoKeywords(pin);
 
     // Build publish date dropdown options
-    const publishDateOptions = publishDateSlots.map(slot =>
-      `<option value="${slot}" ${pin.csvPublishDate === slot ? 'selected' : ''}>${slot}</option>`
+    const availableSlots = pin.csvPublishDate && !publishDateSlots.includes(pin.csvPublishDate)
+      ? [pin.csvPublishDate, ...publishDateSlots] : publishDateSlots;
+    const publishDateOptions = availableSlots.map(slot =>
+      `<option value="${escapeHtml(slot)}" ${pin.csvPublishDate === slot ? 'selected' : ''}>${escapeHtml(slot)}</option>`
     ).join('');
 
     row.innerHTML = `
-      <td><input type="text" data-pin-id="${pin.id}" data-field="title" value="${escapeHtml(pin.title || '')}" /></td>
-      <td><textarea data-pin-id="${pin.id}" data-field="description">${escapeHtml(cleanDescription)}</textarea></td>
+      <td><input type="text" data-pin-id="${pin.id}" data-field="title" value="${escapeHtml(pin.csvTitle || pin.title || '')}" /></td>
       <td><input type="text" data-pin-id="${pin.id}" data-field="mediaUrl" value="${escapeHtml(mediaUrl)}" placeholder="ImgBB URL (auto-filled)" /></td>
-      <td><input type="text" data-pin-id="${pin.id}" data-field="link" value="${escapeHtml(pin.url || '')}" /></td>
       <td>${boardFieldHtml(pin)}</td>
+      <td><input type="text" data-pin-id="${pin.id}" data-field="thumbnail" value="${escapeHtml(pin.csvThumbnail || '')}" placeholder="Optional" /></td>
+      <td><textarea data-pin-id="${pin.id}" data-field="description">${escapeHtml(cleanDescription)}</textarea></td>
+      <td><input type="text" data-pin-id="${pin.id}" data-field="link" value="${escapeHtml(pin.csvLink ?? pin.url ?? '')}" /></td>
       <td>
         <select data-pin-id="${pin.id}" data-field="publishDate" style="width: 100%; background: var(--input-bg); border: 1px solid var(--input-border); border-radius: 6px; padding: 8px 12px; font-size: 13px; color: var(--text-input); cursor: pointer;">
           <option value="">Select date/time...</option>
           ${publishDateOptions}
         </select>
       </td>
-      <td><input type="text" data-pin-id="${pin.id}" data-field="thumbnail" value="${escapeHtml(pin.csvThumbnail || '')}" placeholder="Optional" /></td>
       <td><input type="text" data-pin-id="${pin.id}" data-field="keywords" value="${escapeHtml(pin.csvKeywords || '')}" placeholder="e.g., healthy, recipes" /></td>
     `;
 
@@ -1893,7 +1898,6 @@ async function autoIncrementPublishDates(changedSelect) {
 
 
   // Update all rows below this one
-  let updatedCount = 0;
   for (let i = changedRowIndex + 1; i < allRows.length; i++) {
     // Add interval
     currentDate = new Date(currentDate.getTime() + intervalMinutes * 60 * 1000);
@@ -1923,8 +1927,6 @@ async function autoIncrementPublishDates(changedSelect) {
     if (selectElement) {
       ensureSelectHasOption(selectElement, formatted);
       selectElement.value = formatted;
-      updatedCount++;
-
       // Update the pin data
       const pinId = Number(selectElement.dataset.pinId); // Convert string to number
       const pin = pins.find(p => p.id === pinId);
@@ -1953,12 +1955,12 @@ function ensureSelectHasOption(selectElement, value) {
 
 const csvFieldIndex = {
   title: 0,
-  description: 1,
-  mediaUrl: 2,
-  link: 3,
-  board: 4,
-  publishDate: 5,
-  thumbnail: 6,
+  mediaUrl: 1,
+  board: 2,
+  thumbnail: 3,
+  description: 4,
+  link: 5,
+  publishDate: 6,
   keywords: 7
 };
 
@@ -2077,34 +2079,6 @@ function setCsvRecordValue(record, fieldName, value) {
   }
 }
 
-function enforceSavedBoardRecord(record) {
-  if (!boardNames.length) return;
-  const pin = pins.find(p => p.id === record.pinId);
-  if (pin) {
-    ensurePinBoard(pin);
-    const board = exactSavedBoard(pin.csvBoard) || chooseBestBoard(pin);
-    if (board) {
-      setCsvRecordValue(record, 'board', board);
-      return;
-    }
-  }
-
-  const currentBoard = record.values[csvFieldIndex.board];
-  const exactBoard = exactSavedBoard(currentBoard);
-  if (exactBoard) {
-    setCsvRecordValue(record, 'board', exactBoard);
-    return;
-  }
-
-  const fallbackBoard = chooseBestBoard({
-    title: record.values[csvFieldIndex.title],
-    description: record.values[csvFieldIndex.description],
-    url: record.values[csvFieldIndex.link],
-    interests: [record.values[csvFieldIndex.keywords]]
-  });
-  if (fallbackBoard) setCsvRecordValue(record, 'board', fallbackBoard);
-}
-
 function autoFixPinterestDuplicates(records, validation) {
   validation.duplicateLinks.forEach((group) => {
     group.forEach((record, index) => {
@@ -2179,41 +2153,29 @@ async function handleExportCSV() {
   }
 
   // CSV headers for Pinterest bulk upload
-  const headers = ['Title', 'Description', 'Media URL', 'Link', 'Pinterest board', 'Publish date', 'Thumbnail', 'Keywords'];
   const records = getCsvEditorRecords(tableBody);
-  records.forEach(enforceSavedBoardRecord);
   savePins();
   if (!runPinterestDuplicateProtection(records)) return;
 
-  // Build CSV rows from table data
-  const csvRows = [headers];
-
-  records.forEach(record => {
-    csvRows.push(record.fields.map(field => field.value.trim()));
+  const csvRows = records.map(record => {
+    const cells = record.fields.map(field => field.value.trim());
+    const local = cells[6];
+    if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(local)) {
+      const date = new Date(local.replace(' ', 'T') + ':00');
+      const parts = [date.getFullYear(), date.getMonth() + 1, date.getDate(), date.getHours(), date.getMinutes()];
+      if (parts.every((part, index) => part === Number(local.match(/\d+/g)[index]))) cells[6] = date.toISOString().slice(0, 19);
+    }
+    return cells;
   });
-
-  // Convert to CSV format
-  const csvContent = csvRows.map(row => {
-    return row.map(cell => {
-      // Escape quotes and wrap in quotes if contains comma, newline, or quote
-      const cellStr = String(cell || '');
-      if (cellStr.includes(',') || cellStr.includes('\n') || cellStr.includes('"')) {
-        return '"' + cellStr.replace(/"/g, '""') + '"';
-      }
-      return cellStr;
-    }).join(',');
-  }).join('\n');
-
-  // Create blob and download
-  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = `pinterest-bulk-upload-${Date.now()}.csv`;
-  link.click();
-  URL.revokeObjectURL(url);
-
-  showToast(`Exported ${rows.length} pins to CSV!`);
+  try {
+    const result = await window.electronAPI.exportPinterestCsv({ rows: csvRows, boardNames });
+    if (result.canceled) return;
+    if (!result.success) {
+      alert((result.validation?.errors || []).map(error => `Row ${error.rowIndex || '?'} "${error.title || ''}" ${error.field}: ${error.message}`).join('\n'));
+      return;
+    }
+    showToast(`Exported ${result.rowCount} pins to CSV.`);
+  } catch (error) { alert(error.message || 'Pinterest CSV export failed.'); }
 }
 
 // Clear all

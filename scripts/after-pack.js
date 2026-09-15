@@ -1,8 +1,10 @@
 const fs = require('fs');
 const fsp = require('fs/promises');
+const crypto = require('crypto');
 const os = require('os');
 const path = require('path');
 const pe = require('pe-library');
+const plist = require('plist');
 const ResEdit = require('resedit');
 const asar = require('@electron/asar');
 const JavaScriptObfuscator = require('javascript-obfuscator');
@@ -62,8 +64,11 @@ async function writeFileWithRetry(filePath, data, attempts = 8) {
 }
 
 async function obfuscateAppAsar(context) {
-  const appAsar = path.join(context.appOutDir, 'resources', 'app.asar');
-  if (!fs.existsSync(appAsar)) return;
+  const resourcesDir = context.electronPlatformName === 'darwin'
+    ? path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`, 'Contents', 'Resources')
+    : path.join(context.appOutDir, 'resources');
+  const appAsar = path.join(resourcesDir, 'app.asar');
+  if (!fs.existsSync(appAsar)) return null;
 
   const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'content-studio-asar-'));
   try {
@@ -84,18 +89,65 @@ async function obfuscateAppAsar(context) {
       }
     }
 
+    const packagedFiles = await walk(tempDir);
+    await Promise.all(packagedFiles
+      .filter((filePath) => filePath.endsWith('.map'))
+      .map((filePath) => fsp.rm(filePath, { force: true })));
+
     await fsp.rm(appAsar, { force: true });
     await asar.createPackageWithOptions(tempDir, appAsar, {
       unpackDir: 'node_modules/{sharp,@img}'
     });
+    const { headerString } = asar.getRawHeader(appAsar);
+    return {
+      appAsar,
+      hash: crypto.createHash('sha256').update(headerString).digest('hex')
+    };
   } finally {
     await fsp.rm(tempDir, { recursive: true, force: true });
   }
 }
 
+async function updateMacAsarIntegrity(context, hash) {
+  const appBundle = path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`);
+  const infoPath = path.join(appBundle, 'Contents', 'Info.plist');
+  if (!fs.existsSync(infoPath) || !hash) return;
+  const info = plist.parse(await fsp.readFile(infoPath, 'utf8'));
+  info.ElectronAsarIntegrity = {
+    'Resources/app.asar': { algorithm: 'SHA256', hash }
+  };
+  await fsp.writeFile(infoPath, plist.build(info), 'utf8');
+}
+
+function updateWindowsAsarIntegrity(entries, hash, language = 1033) {
+  if (!hash) return;
+  const payload = Buffer.from(JSON.stringify([{
+    file: 'resources\\app.asar',
+    alg: 'SHA256',
+    value: hash
+  }]));
+  const existing = entries.find((entry) => (
+    String(entry.type).toUpperCase() === 'INTEGRITY'
+    && String(entry.id).toUpperCase() === 'ELECTRONASAR'
+  ));
+  if (existing) {
+    existing.bin = payload;
+    return;
+  }
+  entries.push({ type: 'INTEGRITY', id: 'ELECTRONASAR', bin: payload, lang: language, codepage: 1200 });
+}
+
 exports.default = async function afterPack(context) {
+  // Obfuscate application-owned JavaScript on every packaged platform. Native
+  // dependencies remain unpacked so Sharp can load normally.
+  const integrity = await obfuscateAppAsar(context);
+
+  if (context.electronPlatformName === 'darwin') {
+    await updateMacAsarIntegrity(context, integrity?.hash);
+    return;
+  }
+
   if (context.electronPlatformName !== 'win32') return;
-  await obfuscateAppAsar(context);
 
   const exePath = path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.exe`);
   const iconPath = path.join(context.packager.projectDir, 'build-resources', 'icon.ico');
@@ -112,6 +164,7 @@ exports.default = async function afterPack(context) {
     group.lang || 1033,
     iconFile.icons.map((item) => item.data)
   );
+  updateWindowsAsarIntegrity(res.entries, integrity?.hash, group.lang || 1033);
   res.outputResource(exe);
   await writeFileWithRetry(exePath, Buffer.from(exe.generate()));
 };

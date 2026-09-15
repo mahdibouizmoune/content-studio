@@ -1,8 +1,8 @@
-const SETTINGS_SCHEMA_VERSION = 2;
+const SETTINGS_SCHEMA_VERSION = 5;
 
 const imageRatioDefaults = Object.freeze({
   featuredImageRatio: '3:2',
-  intextImageRatio: '4:3',
+  intextImageRatio: '9:16',
   pinterestPinRatio: '2:3',
   instagramPortraitRatio: '4:5',
   instagramStoryRatio: '9:16',
@@ -64,6 +64,53 @@ function migrateSettings(input = {}) {
     delete settings.youtubeArticlePrompt;
     version = 2;
     applied.push('workflow-defaults-v2');
+  }
+
+  if (version < 3) {
+    settings = {
+      ...settings,
+      intextImageRatio: !settings.intextImageRatio || settings.intextImageRatio === '4:3'
+        ? imageRatioDefaults.intextImageRatio
+        : settings.intextImageRatio,
+      settingsSchemaVersion: 3
+    };
+    version = 3;
+    applied.push('pinterest-portrait-image-v3');
+  }
+
+  if (version < 4) {
+    settings = {
+      ...settings,
+      featureFlags: {
+        ...(settings.featureFlags && typeof settings.featureFlags === 'object' ? settings.featureFlags : {}),
+        contentCalendar: true,
+        campaignRecords: true,
+        contentUpdateQueue: true,
+        revenueAttribution: true,
+        runHistory: true,
+        modelRegistry: true
+      },
+      performanceSchedulingEnabled: settings.performanceSchedulingEnabled !== false,
+      postPublishQaEnabled: settings.postPublishQaEnabled !== false,
+      mediaRetentionDays: Math.max(7, Number(settings.mediaRetentionDays || 30)),
+      settingsSchemaVersion: 4
+    };
+    version = 4;
+    applied.push('operations-workspaces-v4');
+  }
+
+  if (version < 5) {
+    const existingRetention = Number(settings.mediaRetentionDays || 0);
+    settings = {
+      ...settings,
+      automaticMediaCleanupEnabled: settings.automaticMediaCleanupEnabled !== false,
+      mediaRetentionDays: !existingRetention || existingRetention === 30
+        ? 7
+        : Math.max(7, Math.min(365, Math.round(existingRetention))),
+      settingsSchemaVersion: 5
+    };
+    version = 5;
+    applied.push('automatic-media-cleanup-v5');
   }
 
   const migrated = {

@@ -21,7 +21,7 @@ export const SYSTEM_ARTICLE_GENERATION_DEFAULTS = Object.freeze({
   aiModel: "gpt5nano",
   imageModel: "z-image-turbo",
   featuredImageRatio: "3:2",
-  intextImageRatio: "4:3",
+  intextImageRatio: "9:16",
   pinterestPinRatio: "2:3",
   instagramPortraitRatio: "4:5",
   instagramStoryRatio: "9:16",
@@ -40,6 +40,7 @@ export const SYSTEM_ARTICLE_GENERATION_DEFAULTS = Object.freeze({
   internalLinkCount: 3,
   affiliateEnabled: true,
   affiliateProvider: "impact",
+  affiliateProviderFallback: true,
   affiliateMaxLinks: 3,
   callToAction: ""
 });
@@ -283,6 +284,7 @@ export function resolveArticleGenerationSettings({
     internalLinkMaxPosts: Number(resolveValue(article, selectedPreset, smartRecommendations, globalSettings, systemDefaults, "internalLinkMaxPosts") || 500),
     affiliateEnabled: resolveBoolean(article, selectedPreset, smartRecommendations, globalSettings, systemDefaults, "affiliateEnabled") !== false,
     affiliateProvider: resolveValue(article, selectedPreset, smartRecommendations, globalSettings, systemDefaults, "affiliateProvider"),
+    affiliateProviderFallback: resolveBoolean(article, selectedPreset, smartRecommendations, globalSettings, systemDefaults, "affiliateProviderFallback") !== false,
     affiliateMaxLinks: Number(resolveValue(article, selectedPreset, smartRecommendations, globalSettings, systemDefaults, "affiliateMaxLinks")),
     customPrompts,
     seoBrief,

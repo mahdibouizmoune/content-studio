@@ -1,5 +1,5 @@
-import { Clipboard, ExternalLink, Image as ImageIcon, Search } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { Clipboard, ExternalLink, HardDrive, Image as ImageIcon, Search, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import SectionHeader from "@/components/SectionHeader";
 import { Button, EmptyState, inputClass } from "@/components/ui";
 import { electronAPI } from "@/lib/electron";
@@ -61,12 +61,25 @@ function packImages(pack) {
   }));
 }
 
-export default function ImageLibrary({ articles }) {
+function bytes(value) {
+  const amount = Number(value || 0);
+  if (amount < 1024 * 1024) return `${Math.round(amount / 1024)} KB`;
+  return `${(amount / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+export default function ImageLibrary({ articles, settings }) {
   const [pins, setPins] = useState([]);
   const [packs, setPacks] = useState([]);
   const [query, setQuery] = useState("");
   const [source, setSource] = useState("all");
   const [status, setStatus] = useState("");
+  const [storage, setStorage] = useState(null);
+  const [cleanupReady, setCleanupReady] = useState(false);
+
+  const loadStorage = useCallback(async () => {
+    const result = await electronAPI.getMediaStorageStats?.({ olderThanDays: settings?.mediaRetentionDays || 7 });
+    if (result?.success) setStorage(result);
+  }, [settings?.mediaRetentionDays]);
 
   useEffect(() => {
     let active = true;
@@ -78,9 +91,10 @@ export default function ImageLibrary({ articles }) {
       if (!active) return;
       setPins(pinResult?.pins || []);
       setPacks(packResult?.packs || []);
+      await loadStorage();
     })().catch((error) => setStatus(error.message || "Could not load image library."));
     return () => { active = false; };
-  }, []);
+  }, [loadStorage]);
 
   const images = useMemo(() => [
     ...(articles || []).flatMap(articleImages),
@@ -102,6 +116,19 @@ export default function ImageLibrary({ articles }) {
     setStatus("Copied image reference.");
   }
 
+  async function cleanUnused() {
+    if (!cleanupReady) {
+      const preview = await electronAPI.cleanupUnusedMedia?.({ olderThanDays: settings?.mediaRetentionDays || 7, dryRun: true });
+      setCleanupReady(true);
+      setStatus(preview?.unusedCount ? `${preview.unusedCount} unreferenced file${preview.unusedCount === 1 ? "" : "s"} can be removed. Click Clean Unused again to confirm.` : "No old unreferenced media was found.");
+      return;
+    }
+    const result = await electronAPI.cleanupUnusedMedia?.({ olderThanDays: settings?.mediaRetentionDays || 7, dryRun: false });
+    setCleanupReady(false);
+    setStatus(result?.success ? `Removed ${result.deletedCount || 0} unused file${result.deletedCount === 1 ? "" : "s"} and freed ${bytes(result.deletedBytes)}.` : result?.errors?.[0] || "Media cleanup could not finish.");
+    await loadStorage();
+  }
+
   return (
     <section className="animate-fade-in">
       <SectionHeader eyebrow="Media" title="Image Library">
@@ -109,6 +136,7 @@ export default function ImageLibrary({ articles }) {
       </SectionHeader>
 
       <div className="mb-5 soft-card rounded-lg p-4">
+        {storage ? <div className="mb-3 flex flex-col gap-3 rounded-md bg-slate-50 p-3 sm:flex-row sm:items-center sm:justify-between"><div className="flex items-center gap-3"><HardDrive className="h-5 w-5 text-violet-600" /><div><div className="text-sm font-black text-slate-900">{storage.fileCount} managed files, {bytes(storage.totalBytes)}</div><div className="text-xs font-semibold text-slate-500">{storage.unusedCount} unreferenced files older than {storage.olderThanDays} days</div></div></div><Button variant={cleanupReady ? "danger" : "secondary"} onClick={cleanUnused} disabled={!storage.unusedCount}><Trash2 className="h-4 w-4" />{cleanupReady ? "Confirm Cleanup" : "Clean Unused"}</Button></div> : null}
         <div className="grid gap-3 md:grid-cols-[1fr_220px]">
           <label className="relative block">
             <Search className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" />

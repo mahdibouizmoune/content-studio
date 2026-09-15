@@ -1,4 +1,4 @@
-import { stripHtml, sanitizeTitleText } from "@/lib/articlePostProcess.mjs";
+import { stripHtml, sanitizeTitleText } from "./articlePostProcess.mjs";
 
 const STOP_WORDS = new Set([
   "a", "an", "and", "are", "as", "at", "be", "best", "but", "by", "can", "easy", "for", "from", "how", "in", "into", "is", "it", "make", "of", "on", "or", "recipe", "recipes", "that", "the", "this", "to", "with", "you", "your"
@@ -130,18 +130,29 @@ export function applyInternalLinksToHtml(html = "", suggestions = []) {
   const candidates = suggestions.filter((suggestion) => suggestion?.url && suggestion?.anchor && !hasLink(next, suggestion.url));
   if (!candidates.length) return { html: next, applied: [] };
 
-  const paragraphs = [...next.matchAll(/<p\b[^>]*>[\s\S]*?<\/p>/gi)]
-    .filter((match) => !/<a\s/i.test(match[0]) && !/jump-to-recipe|recipe-card/i.test(match[0]));
   const applied = [];
+  const usedParagraphs = new Set();
 
   candidates.forEach((suggestion, index) => {
     const currentParagraphs = [...next.matchAll(/<p\b[^>]*>[\s\S]*?<\/p>/gi)]
       .filter((match) => !/<a\s/i.test(match[0]) && !/jump-to-recipe|recipe-card/i.test(match[0]));
-    const paragraph = currentParagraphs[index % Math.max(1, currentParagraphs.length)] || paragraphs[index % Math.max(1, paragraphs.length)];
+    const suggestionTokens = tokens([suggestion.title, suggestion.anchor, (suggestion.categories || []).join(" ")].join(" "));
+    const selected = currentParagraphs
+      .map((match, paragraphIndex) => ({
+        match,
+        key: normalizeText(match[0]).slice(0, 220),
+        score: overlapScore(tokens(match[0]), suggestionTokens) * 20
+          + (paragraphIndex > 0 ? 4 : 0)
+          - (paragraphIndex < 2 ? 2 : 0)
+      }))
+      .filter((item) => !usedParagraphs.has(item.key))
+      .sort((a, b) => b.score - a.score)[0];
+    const paragraph = selected?.match;
     const sentence = `<p>${linkSentence(suggestion, index)}</p>`;
     if (paragraph?.index !== undefined) {
       const insertAt = paragraph.index + paragraph[0].length;
       next = `${next.slice(0, insertAt)}\n${sentence}\n${next.slice(insertAt)}`;
+      usedParagraphs.add(selected.key);
     } else {
       next = `${next}\n${sentence}`;
     }
