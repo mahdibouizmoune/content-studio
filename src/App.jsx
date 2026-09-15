@@ -18,7 +18,7 @@ import {
 
 const Settings = lazy(() => import("@/components/Settings"));
 const PinCreatorView = lazy(() => import("@/components/PinCreatorView"));
-const RepurposeStudio = lazy(() => import("@/components/RepurposeStudio"));
+const JobCenter = lazy(() => import("@/components/JobCenter"));
 const MetaStudio = lazy(() => import("@/components/MetaStudio"));
 const VideoStudio = lazy(() => import("@/components/VideoStudio"));
 const TrendsResearch = lazy(() => import("@/components/TrendsResearch"));
@@ -210,7 +210,7 @@ function fillPromptDefaults(settings) {
       aiModel: "gpt5nano",
       imageModel: "z-image-turbo",
       featuredImageRatio: "3:2",
-      intextImageRatio: "4:3",
+      intextImageRatio: "9:16",
       pinterestPinRatio: "2:3",
       instagramPortraitRatio: "4:5",
       instagramStoryRatio: "9:16",
@@ -278,13 +278,18 @@ function fillPromptDefaults(settings) {
       googleSearchConsoleConnected: false,
       pinterestAnalyticsAccessToken: "",
       featureFlags: {
-        contentCalendar: false,
-        campaignRecords: false,
-        contentUpdateQueue: false,
-        revenueAttribution: false,
-        runHistory: false,
-        modelRegistry: false
+        contentCalendar: true,
+        campaignRecords: true,
+        contentUpdateQueue: true,
+        revenueAttribution: true,
+        runHistory: true,
+        modelRegistry: true
       },
+      performanceSchedulingEnabled: true,
+      postPublishQaEnabled: true,
+      automaticMediaCleanupEnabled: true,
+      mediaRetentionDays: 7,
+      updateFeedUrl: "",
       replicateApiToken: "",
       pinCreator: {
         imgbbApiKey: "",
@@ -440,6 +445,7 @@ export default function App() {
   }, [articles]);
 
   const screenProps = {
+    activeScreen,
     mode,
     setMode,
     settings,
@@ -459,7 +465,7 @@ export default function App() {
   };
 
   const screens = {
-    repurpose: <RepurposeStudio {...screenProps} />,
+    jobs: <JobCenter {...screenProps} />,
     "cluster-planner": <ClusterPlanner {...screenProps} />,
     "image-library": <ImageLibrary {...screenProps} />,
     performance: <PerformanceIntelligence {...screenProps} />,
@@ -503,7 +509,7 @@ export default function App() {
             Browser preview mode is for UI testing only. Launch the Electron app to call Replicate, generate images, save files, and publish.
           </div>
         ) : null}
-        <ErrorBoundary key={activeScreen} onReturnArticles={() => setActiveScreen("articles")}>
+        <ErrorBoundary onReturnArticles={() => setActiveScreen("articles")}>
           <Suspense fallback={
             <div className="glass rounded-lg p-6 text-sm font-black text-slate-700 shadow-panel">
               Loading screen...

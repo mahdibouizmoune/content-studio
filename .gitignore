@@ -1,9 +1,10 @@
 node_modules
 dist
 release*/
-*-smoke-data/
+*-smoke-data*/
 ui-smoke-data/
 tmp/
+artifacts/
 .codex-tools
 .agents/
 hse-assistant/
@@ -17,3 +18,4 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+debug.log

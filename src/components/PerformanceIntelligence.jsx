@@ -15,6 +15,7 @@ import SectionHeader from "@/components/SectionHeader";
 import { Button } from "@/components/ui";
 import { electronAPI } from "@/lib/electron";
 import { isArticlePublished } from "@/lib/articlePublication.mjs";
+import { aggregatePinterestClusters } from "@/lib/pinterestInterestIntelligence.mjs";
 
 const tabs = [
   ["overview", "Overview"],
@@ -89,6 +90,7 @@ export default function PerformanceIntelligence({ articles = [], refreshArticles
     counts[status] = (counts[status] || 0) + 1;
     return counts;
   }, {}), [ghlReceipts]);
+  const pinterestClusters = useMemo(() => aggregatePinterestClusters(snapshot?.pinterest?.topPins || []), [snapshot?.pinterest?.topPins]);
 
   async function load() {
     try {
@@ -275,6 +277,18 @@ export default function PerformanceIntelligence({ articles = [], refreshArticles
                 <Metric label="Saves" value={number(pinterestSummary.saves)} icon={CheckCircle2} />
               </div>
               {pinterest.error ? <div className="rounded-md bg-rose-50 px-4 py-3 text-sm font-bold text-rose-700 ring-1 ring-rose-100">{pinterest.error}</div> : null}
+              <div className="soft-card overflow-hidden rounded-lg">
+                <div className="border-b border-slate-100 px-4 py-3"><div className="font-black text-slate-900">Interest Cluster Performance</div><div className="mt-1 text-xs font-semibold text-slate-500">Performance is grouped by the specific use case each Pin serves, not only by broad recipe category.</div></div>
+                <div className="overflow-x-auto">
+                  <table className="min-w-full text-sm">
+                    <thead className="bg-slate-50 text-left text-xs font-black uppercase text-slate-500"><tr><th className="px-4 py-3">Use case</th><th className="px-4 py-3">Pins</th><th className="px-4 py-3">Impressions</th><th className="px-4 py-3">Save rate</th><th className="px-4 py-3">Outbound rate</th><th className="px-4 py-3">Habit score</th></tr></thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {pinterestClusters.slice(0, 30).map((cluster) => <tr key={cluster.id}><td className="px-4 py-3 font-black text-slate-900">{cluster.label}</td><td className="px-4 py-3">{number(cluster.pins)}</td><td className="px-4 py-3">{number(cluster.impressions)}</td><td className="px-4 py-3">{percent(cluster.saveRate)}</td><td className="px-4 py-3">{percent(cluster.outboundRate)}</td><td className="px-4 py-3 font-black text-violet-700">{number(cluster.habitScore)}</td></tr>)}
+                      {!pinterestClusters.length ? <tr><td colSpan="6" className="px-4 py-8 text-center font-medium text-slate-500">Import or refresh Pin-level analytics to build cluster performance.</td></tr> : null}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
               <div className="soft-card overflow-hidden rounded-lg">
                 <div className="border-b border-slate-100 px-4 py-3 font-black text-slate-900">Top Pins</div>
                 <div className="divide-y divide-slate-100">

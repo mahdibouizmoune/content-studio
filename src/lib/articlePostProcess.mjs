@@ -56,6 +56,10 @@ const recipeCardInstruction = [
   "<p>[useful notes]</p>",
   "</section>",
   "",
+  "Use explicit quantities for every ingredient. Include Prep Time, Cook Time, Total Time, and Servings or Yield.",
+  "Write at least 3 complete instructions. At least 2 steps must include a timing, temperature, texture, aroma, or observable doneness cue.",
+  "Keep every ingredient, quantity, time, yield, temperature, and instruction consistent with the article body.",
+  "",
   "If the topic includes multiple recipes, make the card for the first or primary recipe in the article."
 ].join("\n");
 
@@ -154,7 +158,7 @@ export function buildSeoImageFilename(article = {}, image = {}, index = 0, kind 
   return `${base || "recipe-image"}.webp`;
 }
 
-export function buildSeoImageAlt(article = {}, image = {}, index = 0, kind = "image") {
+export function buildSeoImageAlt(article = {}, image = {}, _index = 0, kind = "image") {
   const title = sanitizeTitleText(article.generatedTitle || article.title || "recipe");
   const keyword = sanitizeTitleText(article.rankMathFocusKeyword || article.seoBrief?.targetKeyword || title);
   const promptText = stripHtml(image.prompt || "").replace(/\s+/g, " ").trim();
@@ -258,17 +262,32 @@ function buildFallbackRecipeCard(title) {
 }
 
 function enhanceRecipeCard(html = "") {
-  return String(html).replace(/<section([^>]*id=["']recipe-card["'][^>]*)>/i, (match, attrs) => {
-    let nextAttrs = attrs;
-    const isFallback = /data-recipe-fallback=["']true["']|recipe-card-fallback/i.test(nextAttrs);
-    if (!/class=/i.test(nextAttrs)) nextAttrs += ' class="recipe-card"';
-    if (!isFallback && !/itemscope/i.test(nextAttrs)) nextAttrs += " itemscope";
-    if (!isFallback && !/itemtype=/i.test(nextAttrs)) nextAttrs += ' itemtype="https://schema.org/Recipe"';
-    if (!/style=/i.test(nextAttrs)) {
-      nextAttrs += ' style="margin:36px 0;padding:24px;border:1px solid #e5e7eb;border-radius:16px;background:#ffffff;box-shadow:0 12px 30px rgba(17,24,39,.08);"';
+  const addStyle = (attrs = "", style = "") => (
+    /style=/i.test(attrs) ? attrs : `${attrs} style="${style}"`
+  );
+  return String(html).replace(
+    /<section([^>]*id=["']recipe-card["'][^>]*)>([\s\S]*?)<\/section>/i,
+    (match, attrs, inner) => {
+      let nextAttrs = attrs;
+      const isFallback = /data-recipe-fallback=["']true["']|recipe-card-fallback/i.test(nextAttrs);
+      if (!/class=/i.test(nextAttrs)) nextAttrs += ' class="recipe-card"';
+      if (!/aria-label=/i.test(nextAttrs)) nextAttrs += ' aria-label="Recipe card"';
+      if (!isFallback && !/itemscope/i.test(nextAttrs)) nextAttrs += " itemscope";
+      if (!isFallback && !/itemtype=/i.test(nextAttrs)) nextAttrs += ' itemtype="https://schema.org/Recipe"';
+      nextAttrs = addStyle(
+        nextAttrs,
+        "margin:32px 0;padding:clamp(20px,4vw,30px);border:1px solid #ddd6fe;border-top:5px solid #7c3aed;border-radius:8px;background:#ffffff;color:#1f2937;font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;box-shadow:0 8px 24px rgba(31,41,55,.07);"
+      );
+      const body = inner
+        .replace(/<h2([^>]*)>/i, (tag, headingAttrs) => `<h2${addStyle(headingAttrs, "margin:0 0 8px;color:#4c1d95;font-size:clamp(24px,4vw,32px);line-height:1.2;")}>`)
+        .replace(/<ul([^>]*)>/i, (tag, listAttrs) => `<ul${addStyle(listAttrs, "display:grid;grid-template-columns:repeat(auto-fit,minmax(135px,1fr));gap:8px 18px;margin:18px 0;padding:14px 18px 14px 34px;border:1px solid #ede9fe;border-radius:7px;background:#faf9ff;")}>`)
+        .replace(/<h3([^>]*)>/gi, (tag, headingAttrs) => `<h3${addStyle(headingAttrs, "margin:24px 0 10px;color:#111827;font-size:20px;line-height:1.3;")}>`)
+        .replace(/<(ol|ul)([^>]*itemprop=["'](?:recipeInstructions|recipeIngredient)["'][^>]*)>/gi, (tag, name, listAttrs) => (
+          `<${name}${addStyle(listAttrs, "margin:8px 0 0;padding-left:24px;line-height:1.65;")}>`
+        ));
+      return `<section${nextAttrs}>${body}</section>`;
     }
-    return `<section${nextAttrs}>`;
-  });
+  );
 }
 
 export function ensureRecipeCard(html = "", title = "") {

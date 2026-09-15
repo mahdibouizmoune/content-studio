@@ -73,7 +73,7 @@ The renderer never receives Node.js access. Privileged operations are exposed th
 
 ### Requirements
 
-- Node.js 20.19 or newer
+- Node.js 22.13 or newer (Node.js 24 recommended; the workspace uses built-in SQLite)
 - npm
 - A Replicate API token for AI generation
 - Optional WordPress, ImgBB, Impact, Amazon, and GoHighLevel credentials

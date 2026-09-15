@@ -14,26 +14,44 @@ function buildRecipeChunkRanges(itemCount, chunkSize = 5) {
   return ranges;
 }
 
+function numberedRecipeHeadingMatches(html = '') {
+  const pattern = /<h2\b([^>]*)>\s*(?:<strong\b[^>]*>\s*)?(?:(?:recipe|idea|option)\s*)?#?\s*(\d+)\s*(?:[.):#]\s*|\s+-\s+|\s+)([\s\S]*?)(?:\s*<\/strong>)?\s*<\/h2>/gi;
+  return [...String(html).matchAll(pattern)];
+}
+
 function extractNumberedH2s(html = '') {
-  return [...String(html).matchAll(/<h2\b[^>]*>\s*(\d+)\s*[.)-]\s*([\s\S]*?)<\/h2>/gi)]
+  return numberedRecipeHeadingMatches(html)
     .map((match) => ({
-      number: Number(match[1]),
-      title: String(match[2]).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
+      number: Number(match[2]),
+      title: String(match[3]).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
     }));
 }
 
 function extractRecipeSections(html = '') {
   const source = String(html);
-  const headings = [...source.matchAll(/<h2\b[^>]*>\s*(\d+)\s*[.)-]\s*([\s\S]*?)<\/h2>/gi)];
+  const headings = numberedRecipeHeadingMatches(source);
   return headings.map((heading, index) => {
     const start = heading.index;
     const end = headings[index + 1]?.index ?? source.length;
     return {
-      number: Number(heading[1]),
-      title: String(heading[2]).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim(),
+      number: Number(heading[2]),
+      title: String(heading[3]).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim(),
       html: source.slice(start, end)
     };
   });
+}
+
+function canonicalizeNumberedRecipeHeadings(html = '') {
+  return String(html).replace(
+    /<h2\b([^>]*)>\s*(?:<strong\b[^>]*>\s*)?(?:(?:recipe|idea|option)\s*)?#?\s*(\d+)\s*(?:[.):#]\s*|\s+-\s+|\s+)([\s\S]*?)(?:\s*<\/strong>)?\s*<\/h2>/gi,
+    (_match, attributes, number, title) => `<h2${attributes}>${Number(number)}. ${String(title).trim()}</h2>`
+  );
+}
+
+function buildRecipeRetryPrompt(prompt = '', validationIssue = '') {
+  const issue = String(validationIssue || '').replace(/\s+/g, ' ').trim();
+  if (!issue) return String(prompt || '');
+  return `${String(prompt || '').trim()}\n\nCORRECTION REQUIRED AFTER VALIDATION:\n${issue}\nReturn the entire requested HTML again, corrected. Preserve every required section and item. Do not explain the correction.`;
 }
 
 function listItemsAfterHeading(section = '', heading = '') {
@@ -95,7 +113,7 @@ function usesCompactRecipeCollection(itemCount = 0, articleLength = '900-1200') 
   return articleLengthMaximum(articleLength) < fullRecipeMinimum;
 }
 
-function validateRecipeCard(html = '') {
+function validateRecipeCardLegacy(html = '') {
   const card = String(html).match(/<section[^>]*id=["']recipe-card["'][^>]*>([\s\S]*?)<\/section>/i)?.[1] || '';
   const ingredients = listItemsAfterHeading(card, 'Ingredients');
   const instructions = listItemsAfterHeading(card, 'Instructions');
@@ -115,6 +133,37 @@ function validateRecipeCard(html = '') {
   return { ok: issues.length === 0, issues, ingredients, instructions };
 }
 
+function validateRecipeCard(html = '') {
+  const legacy = validateRecipeCardLegacy(html);
+  const measuredIngredients = legacy.ingredients.filter((ingredient) => (
+    /(?:\b\d+(?:\s+\d+\/\d+|[./]\d+)?\b|\u00bc|\u00bd|\u00be|\u2153|\u2154|\u215b|\u215c|\u215d|\u215e|\b(?:pinch|dash|to taste)\b)/i.test(ingredient)
+  ));
+  const instructionCues = legacy.instructions.filter((step) => (
+    /(?:\b\d+(?:\s*-\s*\d+)?\s*(?:seconds?|minutes?|mins?|hours?|hrs?)\b|\b\d{2,3}\s*(?:\u00b0|degrees?)\s*[cf]\b|until|golden|browned|tender|crisp|thick|set|opaque|bubbling|fragrant|coats? (?:a )?spoon|internal temperature)/i.test(step)
+  ));
+  const issues = legacy.issues
+    .filter((item) => item !== 'Most recipe card ingredients need explicit quantities')
+    .filter((item) => item !== 'Recipe card is missing prep time, total time, or yield');
+  if (legacy.ingredients.length && measuredIngredients.length < Math.ceil(legacy.ingredients.length * 0.7)) {
+    issues.push('Most recipe card ingredients need explicit quantities');
+  }
+  const card = String(html).match(/<section[^>]*id=["']recipe-card["'][^>]*>([\s\S]*?)<\/section>/i)?.[1] || '';
+  if (!/Prep Time:/i.test(card) || !/Cook Time:/i.test(card) || !/Total Time:/i.test(card) || !/(Servings|Yield):/i.test(card)) {
+    issues.push('Recipe card is missing prep time, cook time, total time, or yield');
+  }
+  if (legacy.instructions.length && instructionCues.length < Math.min(2, legacy.instructions.length)) {
+    issues.push('Recipe instructions need timing, temperature, texture, or doneness cues');
+  }
+  return {
+    ok: issues.length === 0,
+    issues,
+    ingredients: legacy.ingredients,
+    instructions: legacy.instructions,
+    measuredIngredients,
+    instructionCues
+  };
+}
+
 function replaceRecipeCard(html = '', recipeCard = '') {
   const source = String(html);
   const card = String(recipeCard).match(/<section[^>]*id=["']recipe-card["'][^>]*>[\s\S]*?<\/section>/i)?.[0] || '';
@@ -128,6 +177,8 @@ function replaceRecipeCard(html = '', recipeCard = '') {
 module.exports = {
   articleLengthMaximum,
   buildRecipeChunkRanges,
+  buildRecipeRetryPrompt,
+  canonicalizeNumberedRecipeHeadings,
   extractNumberedH2s,
   extractRecipeSections,
   listItemsAfterHeading,

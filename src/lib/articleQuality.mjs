@@ -67,7 +67,24 @@ export function buildArticleQualityReport(article = {}, options = {}) {
   const metadataDescription = String(article.rankMathDescription || article.metaDescription || "").trim();
   const slug = String(article.slug || "").trim();
   const links = [...content.matchAll(/<a\s+[^>]*href=["']([^"']+)["']/gi)].map((match) => match[1]);
-  const internalLinks = links.filter((url) => /^\/|^https?:\/\//i.test(url));
+  const siteOrigin = (() => {
+    try {
+      return new URL(options.site?.url || article.wordpressPostUrl || article.canonicalUrl || article.sourceUrl || "").origin;
+    } catch {
+      return "";
+    }
+  })();
+  const linkedRecords = (Array.isArray(article.internalLinks) ? article.internalLinks : [])
+    .map((item) => item?.url)
+    .filter(Boolean);
+  const internalLinks = [...new Set([...links, ...linkedRecords].filter((url) => {
+    if (String(url).startsWith("/")) return true;
+    try {
+      return Boolean(siteOrigin) && new URL(url).origin === siteOrigin;
+    } catch {
+      return false;
+    }
+  }))];
   const duplicateLinks = internalLinks.filter((url, index) => internalLinks.indexOf(url) !== index);
   const affiliateLinks = Array.isArray(article.affiliateLinks) ? article.affiliateLinks : [];
   const disclosureReady = !affiliateLinks.length || article.affiliateDisclosureApplied === true || /affiliate|commission/i.test(content);

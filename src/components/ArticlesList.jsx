@@ -7,11 +7,12 @@ import { Button, EmptyState, inputClass } from "@/components/ui";
 import { electronAPI } from "@/lib/electron";
 import { buildMetadata, buildRankMathMeta, buildRecipeSchema, buildSeoImageAlt, buildSeoImageFilename, insertArticleImages, qaArticleImages, scoreArticle } from "@/lib/articlePostProcess.mjs";
 import { inferSmartIntent } from "@/lib/smartContentEngine";
-import { categoryNeedsReview, matchWordPressCategory } from "@/lib/wordpressCategories";
+import { matchWordPressCategory, manualCategoryForSite } from "@/lib/wordpressCategories";
 import { applyAffiliateLinksToArticle } from "@/lib/affiliateLinks.mjs";
 import { isArticlePublished } from "@/lib/articlePublication.mjs";
 import { buildArticleQualityReport } from "@/lib/articleQuality.mjs";
 import { applyReaderRetentionElements } from "@/lib/readerRetention.mjs";
+import { buildPinSourceSnapshot } from "@/lib/pinterestSource.mjs";
 
 function wordsFromHtml(html = "") {
   return html.replace(/<[^>]+>/g, " ").trim().split(/\s+/).filter(Boolean).length;
@@ -56,7 +57,7 @@ function articleImageSrc(article) {
   return article.featuredImageDisplay || article.featuredImageLocalUrl || article.featuredImage || "";
 }
 
-export default function ArticlesList({ articles, settings, saveSettings, refreshArticles, embedded = false, publicationFilter = "all" }) {
+export default function ArticlesList({ articles, settings, saveSettings, refreshArticles, publicationFilter = "all" }) {
   const confirmAction = useConfirmDialog();
   const [query, setQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState("all");
@@ -142,21 +143,23 @@ export default function ArticlesList({ articles, settings, saveSettings, refresh
     }
 
     let published = 0;
-    let skipped = 0;
+    let needsReview = 0;
     const failures = [];
     const warnings = [];
     if (categorySyncWarning) warnings.push(categorySyncWarning);
     for (const article of selectedArticles) {
       const readyArticle = publishReadyArticle(article, settings);
-      const itemNumber = published + skipped + failures.length + 1;
-      const match = readyArticle.wordpressCategoryId
-        ? { category: siteForPublish.categories?.find((category) => String(category.id) === String(readyArticle.wordpressCategoryId)), confidence: 100, reason: "Manual category" }
+      const itemNumber = published + needsReview + failures.length + 1;
+      const manualCategory = manualCategoryForSite(readyArticle, siteForPublish);
+      const match = manualCategory
+        ? { category: siteForPublish.categories?.find((category) => String(category.id) === String(manualCategory)), confidence: 100, reason: "Manual category" }
         : matchWordPressCategory(readyArticle, siteForPublish);
       try {
         setBulkStatus(`Publishing ${itemNumber}/${selectedArticles.length}: ${readyArticle.generatedTitle || readyArticle.title}`);
         setBulkProgress({ active: true, current: itemNumber - 1, total: selectedArticles.length, label: readyArticle.generatedTitle || readyArticle.title });
-        const articleForPublish = { ...readyArticle, wordpressCategoryId: readyArticle.wordpressCategoryId || match.category?.id, autoCategory: match };
+        const articleForPublish = { ...readyArticle, wordpressCategoryId: manualCategory || match.category?.id, wordpressCategorySiteUrl: siteForPublish.url.replace(/\/+$/, ""), autoCategory: match };
         const result = await electronAPI.pushToWordPress({ article: articleForPublish, site: siteForPublish });
+        if (!result?.success) throw new Error(result?.error || 'WordPress did not confirm the publication.');
         const isPublic = result.status === "publish";
         const publicPostUrl = isPublic ? (result.postUrl || readyArticle.wordpressPostUrl) : readyArticle.wordpressPostUrl;
         await electronAPI.saveArticle({
@@ -164,6 +167,7 @@ export default function ArticlesList({ articles, settings, saveSettings, refresh
           workflowStatus: result.success ? (isPublic ? "published" : "needs-review") : readyArticle.workflowStatus,
           wordpressPublishStatus: result.status || readyArticle.wordpressPublishStatus || "",
           wordpressPostId: result.postId || readyArticle.wordpressPostId,
+          wordpressSiteUrl: siteForPublish.url.replace(/\/+$/, ""),
           wordpressPostUrl: publicPostUrl,
           wordpressDraftUrl: isPublic ? "" : (result.postUrl || readyArticle.wordpressDraftUrl || ""),
           sourceUrl: publicPostUrl || readyArticle.sourceUrl,
@@ -178,7 +182,8 @@ export default function ArticlesList({ articles, settings, saveSettings, refresh
         if (result.rankMathWarning || result.mediaWarnings?.length) {
           warnings.push(`${readyArticle.generatedTitle || readyArticle.title}: ${[result.rankMathWarning, ...(result.mediaWarnings || [])].filter(Boolean).join(" ")}`);
         }
-        published++;
+        if (isPublic) published++;
+        else needsReview++;
       } catch (error) {
         failures.push(`${readyArticle.generatedTitle || readyArticle.title}: ${error.message}`);
       } finally {
@@ -186,8 +191,8 @@ export default function ArticlesList({ articles, settings, saveSettings, refresh
       }
     }
     await refreshArticles();
-    setBulkStatus(`Published ${published}. Warnings ${warnings.length}. Failed ${failures.length}${failures.length ? ` - ${failures[0]}` : warnings.length ? ` - ${warnings[0]}` : ""}`);
-    setBulkProgress({ active: false, current: selectedArticles.length, total: selectedArticles.length, label: failures.length ? "Finished with errors" : warnings.length ? "Published with warnings" : "Publishing finished" });
+    setBulkStatus(`Published ${published}. Needs review ${needsReview}. Warnings ${warnings.length}. Failed ${failures.length}${failures.length ? ` - ${failures[0]}` : warnings.length ? ` - ${warnings[0]}` : ""}`);
+    setBulkProgress({ active: false, current: selectedArticles.length, total: selectedArticles.length, label: failures.length ? "Finished with errors" : needsReview ? "Finished with posts needing review" : warnings.length ? "Published with warnings" : "Publishing finished" });
     setBulkWorking("");
   }
 
@@ -207,6 +212,9 @@ export default function ArticlesList({ articles, settings, saveSettings, refresh
         interests: [article.seoBrief?.targetKeyword, ...(article.tags || []), ...String(article.seoBrief?.secondaryKeywords || "").split(",")].filter(Boolean).slice(0, 15),
         smartPinStyle: article.smartPinStyle || inferSmartIntent(article).pinStyle,
         csvBoard: article.recommendedPinterestBoard || "",
+        interestProfile: article.interestProfile || {},
+        relatedTopics: article.pinterestRelatedTopics || article.interestProfile?.relatedTopics || [],
+        sourceSnapshot: buildPinSourceSnapshot(article),
         queueType: "article",
         addedAt: new Date().toISOString()
       }))

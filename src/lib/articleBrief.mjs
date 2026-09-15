@@ -138,7 +138,7 @@ export function buildArticleBrief({
     },
     imageRequirements: {
       featuredRatio: resolvedSettings.featuredImageRatio || "3:2",
-      inTextRatio: resolvedSettings.intextImageRatio || "4:3",
+      inTextRatio: resolvedSettings.intextImageRatio || "9:16",
       inTextCount: resolvedSettings.enableIntextImages === false ? 0 : Number(resolvedSettings.intextImageCount ?? 1),
       descriptiveAltText: true,
       noTextOverlay: true
@@ -198,4 +198,3 @@ export function articleBriefPrompt(brief = {}) {
     "Use this brief as planning guidance. Do not mention the brief, SEO instructions, or verification notes in the published article."
   ].filter(Boolean).join("\n");
 }
-

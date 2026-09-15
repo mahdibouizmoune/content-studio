@@ -11,6 +11,7 @@ import {
   FolderSearch,
   ImageIcon,
   ImagePlus,
+  ListTodo,
   Menu,
   Moon,
   Repeat2,
@@ -48,8 +49,7 @@ function navigationGroups(flags = {}) {
     label: "Distribute",
     items: [
       { id: "pin-creator", label: "Pinterest", icon: ImagePlus },
-      { id: "meta-studio", label: "Facebook and Instagram", icon: Facebook },
-      { id: "repurpose", label: "Repurpose", icon: Repeat2 },
+      { id: "meta-studio", label: "Meta", icon: Facebook },
       ...(flags.campaignRecords ? [{ id: "campaigns", label: "Campaigns", icon: FolderKanban }] : [])
     ]
   },
@@ -67,6 +67,7 @@ function navigationGroups(flags = {}) {
     label: "System",
     items: [
       { id: "connections", label: "Connections", icon: SlidersHorizontal },
+      { id: "jobs", label: "Job Center", icon: ListTodo },
       { id: "settings", label: "Settings", icon: Settings },
       { id: "diagnostics", label: "Diagnostics", icon: ShieldCheck },
       ...(flags.runHistory ? [{ id: "run-history", label: "Run History", icon: FileClock }] : []),

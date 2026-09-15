@@ -10,7 +10,7 @@ export const DEFAULT_ARTICLE_PROMPT = `Write a people-first recipe blog article 
 Use the article size, search intent, audience, and SEO brief supplied by the app. Satisfy the reader's main task before adding supporting detail.
 
 STRUCTURE:
-1. Do not include an H1. Start with a short, specific introduction that identifies the dish, flavor and texture, practical benefit, and who it suits. Put the clearest answer in the first paragraph. Avoid generic openings like "In today's world", "Food lovers rejoice", or "If you are looking for".
+1. Do not include an H1. Start with a short, specific introduction that identifies the dish, flavor and texture, practical benefit, and who it suits. Within the first 100 words, give the clearest answer, expected result, and one specific reason to keep reading. Avoid generic openings like "In today's world", "Food lovers rejoice", or "If you are looking for".
 
 2. Add clear <h2> sections that fit the topic. Prioritize what a real cook needs: why it works, exact ingredients and their roles, step-by-step method, visual and temperature doneness cues, troubleshooting, safe substitutions, serving ideas, storage, reheating, and make-ahead notes.
 
@@ -32,6 +32,7 @@ TONE & STYLE:
 - Sound like a careful recipe editor who understands the method and wants the reader to succeed.
 - Do not claim personal testing, credentials, awards, reviews, or first-hand experience that was not supplied.
 - Use active voice, short paragraphs, clear cooking cues, and sensory details.
+- Keep most paragraphs to one clear idea. Use descriptive transition sentences so a reader can quickly choose what to read next without feeling pushed through a template.
 - Explain doneness signs, texture, flavor, timing, substitutions, and common mistakes.
 - Keep ingredient amounts, servings, prep time, cook time, total time, and instructions internally consistent. Every listed ingredient must be used in the method. Do not introduce undeclared ingredients in the steps.
 - Use precise quantities, ingredient preparation states, pan or appliance settings, and temperatures where the recipe needs them. Add metric weights for baking ingredients and other precision-sensitive amounts when practical.
@@ -49,6 +50,7 @@ FORMATTING:
 - Use proper HTML: <h2> for main sections, <h3> for subsections.
 - Use lists when appropriate: <ul> with <li> for bullets, <ol> with <li> for numbered steps.
 - Keep the article scannable for mobile readers.
+- Use descriptive phrases for techniques, ingredients, and related dishes so useful internal links can be added naturally.
 - NO Markdown, code fences, backticks, or explanatory preamble.
 - No extraneous preamble before content starts.
 
@@ -173,7 +175,7 @@ Article content (first 1500 chars):
 Requirements:
 - Capture the finished dish or main food idea clearly
 - Match the recipe's actual ingredients, cooking method, texture, and serving style
-- Make it useful as a blog hero image and Pinterest source image
+- Compose it as a landscape-friendly blog hero and thumbnail image
 - Include composition, lens angle, natural lighting, background, texture, realistic portions, and restrained styling
 - Keep the main dish unobstructed and recognizable at mobile thumbnail size
 - Avoid text overlays, logos, labels, extra hands unless useful, and unrealistic food

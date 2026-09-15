@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Settings (secrets auto-encrypted in main process)
   getSettings: () => ipcRenderer.invoke('get-settings'),
   saveSettings: (settings) => ipcRenderer.invoke('save-settings', settings),
+  clearStoredCredential: (params) => ipcRenderer.invoke('clear-stored-credential', params),
   testImpactConnection: (params) => ipcRenderer.invoke('test-impact-connection', params),
   searchImpactProducts: (params) => ipcRenderer.invoke('search-impact-products', params),
   createImpactAffiliateLink: (params) => ipcRenderer.invoke('create-impact-affiliate-link', params),
@@ -17,6 +18,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   testPinterestAnalytics: () => ipcRenderer.invoke('test-pinterest-analytics'),
   getPerformanceIntelligence: () => ipcRenderer.invoke('get-performance-intelligence'),
   refreshPerformanceIntelligence: (params) => ipcRenderer.invoke('refresh-performance-intelligence', params),
+  getPerformanceSchedule: (params) => ipcRenderer.invoke('get-performance-schedule', params),
   refreshGhlPublishingStatus: () => ipcRenderer.invoke('refresh-ghl-publishing-status'),
   auditRecipeSeo: (params) => ipcRenderer.invoke('audit-recipe-seo', params),
 
@@ -31,8 +33,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
   restoreLatestWorkspaceBackup: () => ipcRenderer.invoke('restore-latest-workspace-backup'),
   openWorkspaceBackups: () => ipcRenderer.invoke('open-workspace-backups'),
   getDiagnostics: () => ipcRenderer.invoke('get-diagnostics'),
+  getMediaStorageStats: (params) => ipcRenderer.invoke('get-media-storage-stats', params),
+  cleanupUnusedMedia: (params) => ipcRenderer.invoke('cleanup-unused-media', params),
+  getJobCenter: () => ipcRenderer.invoke('get-job-center'),
+  clearFinishedJobs: () => ipcRenderer.invoke('clear-finished-jobs'),
+  openJobWorkspace: (params) => ipcRenderer.invoke('open-job-workspace', params),
+  getAppUpdateStatus: () => ipcRenderer.invoke('get-app-update-status'),
+  checkForAppUpdate: () => ipcRenderer.invoke('check-for-app-update'),
+  downloadAppUpdate: () => ipcRenderer.invoke('download-app-update'),
+  installAppUpdate: () => ipcRenderer.invoke('install-app-update'),
   clearTemporaryMediaCache: () => ipcRenderer.invoke('clear-temporary-media-cache'),
   openLogsFolder: () => ipcRenderer.invoke('open-logs-folder'),
+  reportRendererError: (report) => ipcRenderer.invoke('report-renderer-error', report),
+  copyText: (value) => ipcRenderer.invoke('copy-text', value),
   getGrowthWorkspace: () => ipcRenderer.invoke('get-growth-workspace'),
   upsertGrowthRecord: (params) => ipcRenderer.invoke('upsert-growth-record', params),
   deleteGrowthRecord: (params) => ipcRenderer.invoke('delete-growth-record', params),
@@ -52,11 +65,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
   importPinterestAnalytics: () => ipcRenderer.invoke('import-pinterest-analytics'),
   clearPinterestAnalytics: () => ipcRenderer.invoke('clear-pinterest-analytics'),
   researchKeywords: (params) => ipcRenderer.invoke('research-keywords', params),
+  getPinterestClusterWorkspace: () => ipcRenderer.invoke('get-pinterest-cluster-workspace'),
+  buildPinterestClusters: (params) => ipcRenderer.invoke('build-pinterest-clusters', params),
   exportKeywordResearch: (research) => ipcRenderer.invoke('export-keyword-research', research),
   deleteKeywordResearch: (researchId) => ipcRenderer.invoke('delete-keyword-research', researchId),
   generateMetaContent: (params) => ipcRenderer.invoke('generate-meta-content', params),
   generatePrompt: (url, interests, style, jobKey, context) => ipcRenderer.invoke('generate-prompt', url, interests, style, jobKey, context),
   generateTitleDescription: (url, interests, style, jobKey, context) => ipcRenderer.invoke('generate-title-description', url, interests, style, jobKey, context),
+  createPinterestPinAsset: (params) => ipcRenderer.invoke('create-pinterest-pin-asset', params),
+  preparePinterestExport: (params) => ipcRenderer.invoke('prepare-pinterest-export', params),
+  validatePinterestExport: (params) => ipcRenderer.invoke('validate-pinterest-export', params),
+  exportPinterestCsv: (params) => ipcRenderer.invoke('export-pinterest-csv', params),
+  getPinterestDelivery: () => ipcRenderer.invoke('get-pinterest-delivery'),
+  revealPinterestExport: (params) => ipcRenderer.invoke('reveal-pinterest-export', params),
+  suggestPinterestResults: (params) => ipcRenderer.invoke('suggest-pinterest-results', params),
+  savePinterestResults: (params) => ipcRenderer.invoke('save-pinterest-results', params),
+  getPinterestRetry: (params) => ipcRenderer.invoke('get-pinterest-retry', params),
   generateRepurposePack: (params) => ipcRenderer.invoke('generate-repurpose-pack', params),
 
   // Cancel in-flight jobs
@@ -105,6 +129,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getMetaProjects: () => ipcRenderer.invoke('get-meta-projects'),
   saveMetaProject: (project) => ipcRenderer.invoke('save-meta-project', project),
   deleteMetaProject: (projectId) => ipcRenderer.invoke('delete-meta-project', projectId),
+  getMetaBulkGhlDraft: () => ipcRenderer.invoke('get-meta-bulk-ghl-draft'),
+  prepareMetaBulkGhlRows: (params) => ipcRenderer.invoke('prepare-meta-bulk-ghl-rows', params),
 
   // Progress events
   onImageProgress: (callback) => {
@@ -112,10 +138,30 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('image-generation-progress', handler);
     return () => ipcRenderer.removeListener('image-generation-progress', handler);
   },
+  onPinProgress: (callback) => {
+    const handler = (e, data) => callback(data);
+    ipcRenderer.on('pin-generation-progress', handler);
+    return () => ipcRenderer.removeListener('pin-generation-progress', handler);
+  },
   onVideoProgress: (callback) => {
     const handler = (e, data) => callback(data);
     ipcRenderer.on('video-generation-progress', handler);
     return () => ipcRenderer.removeListener('video-generation-progress', handler);
+  },
+  onMetaBulkProgress: (callback) => {
+    const handler = (e, data) => callback(data);
+    ipcRenderer.on('meta-bulk-progress', handler);
+    return () => ipcRenderer.removeListener('meta-bulk-progress', handler);
+  },
+  onJobCenterUpdated: (callback) => {
+    const handler = (e, data) => callback(data);
+    ipcRenderer.on('job-center-updated', handler);
+    return () => ipcRenderer.removeListener('job-center-updated', handler);
+  },
+  onAppUpdateStatus: (callback) => {
+    const handler = (e, data) => callback(data);
+    ipcRenderer.on('app-update-status', handler);
+    return () => ipcRenderer.removeListener('app-update-status', handler);
   },
   onNavigateSettings: (callback) => {
     const handler = (e, data) => callback(data);

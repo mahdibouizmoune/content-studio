@@ -39,12 +39,9 @@ function fallbackPinPrompt(context = {}, placement = 'middle') {
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 120);
-  const overlay = topic.replace(/^\d+\s+/, '').slice(0, 60) || 'Easy Recipe Idea';
   const position = ['top', 'bottom'].includes(placement) ? placement : 'middle';
-  const panel = position === 'middle'
-    ? 'a full-width translucent frosted-glass center ribbon that keeps the recipe visible beneath it'
-    : `a translucent frosted-glass ${position} ribbon`;
-  return `Ultra-realistic premium vertical 2:3 editorial food photograph of ${topic}. Show an appetite-first close-up hero serving from a natural 30-45 degree angle, filling about 70-82% of the frame with tack-sharp truthful texture, bright diffused side-window light, true ingredient colors, and subtle homemade imperfections. Place the exact headline "${overlay}" in ${panel}, using a bold premium geometric sans-serif, clean kerning, balanced line breaks, and generous mobile-safe margins. No extra text, opaque box, logos, packaging, unrelated ingredients, plastic texture, or generic stock-photo styling.`;
+  const reserved = position === 'middle' ? 'center band' : `${position} third`;
+  return `Real premium vertical 2:3 food-blog photograph of ${topic}, never AI art, CGI, illustration, or generic stock imagery. Fill 72-86% of the frame with one appetite-first close-up hero serving using the most truthful angle for the recipe, leaving useful breathing room around the subject, with tack-sharp pores, fibers, crumbs, browned edges, moisture, or sauce texture. Use bright directional side-window light, soft white fill, controlled highlights, vivid but natural color, and an f/4-like depth of field that keeps the hero sharp while only the distant background falls off. Keep the ${reserved} visually calm for a later local title overlay while continuing recognizable food texture through the area. Generate no text, letters, numbers, labels, panels, logos, packaging, watermarks, unrelated ingredients, duplicated food, distorted utensils, plastic shine, harsh HDR, muddy shadows, or excessive blur.`;
 }
 
 module.exports = { extractCleanPinPrompt, fallbackPinPrompt, hasReasoningLeak };
