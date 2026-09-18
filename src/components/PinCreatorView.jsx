@@ -1,5 +1,6 @@
 import { Clipboard, Download, Image as ImageIcon, Link2, Pause, Play, RefreshCw, Save, Send, Sparkles, Trash2, Upload, UploadCloud } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import JSZip from "jszip";
 import SectionHeader from "@/components/SectionHeader";
 import { Button, EmptyState, Field, inputClass } from "@/components/ui";
 import { electronAPI } from "@/lib/electron";
@@ -14,6 +15,161 @@ const styles = [
   ["custom-listicle-collage", "Listicle Collage"]
 ];
 const defaultStyleIds = styles.map(([id]) => id);
+
+const creativeTypes = [
+  ["standard", "Standard Pin"],
+  ["carousel", "5-Card Carousel"],
+  ["collage", "Collage Pin"]
+];
+
+function normalizeCreativeType(value = "") {
+  return ["standard", "carousel", "collage"].includes(value) ? value : "standard";
+}
+
+function creativeTypeLabel(value = "") {
+  return creativeTypes.find(([id]) => id === normalizeCreativeType(value))?.[1] || "Standard Pin";
+}
+
+function stripHtml(value = "") {
+  return String(value || "")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extractCarouselTopics(article = {}) {
+  const html = String(article.content || article.html || article.body || "");
+  const headings = [...html.matchAll(/<h2[^>]*>([\s\S]*?)<\/h2>/gi)]
+    .map((match) => stripHtml(match[1]))
+    .filter((heading) => heading && heading.length >= 4)
+    .filter((heading) => !/^(ingredients?|instructions?|directions?|recipe card|faq|faqs|frequently asked|conclusion|final thoughts|storage|nutrition|notes?)\b/i.test(heading));
+  return [...new Set(headings)].slice(0, 3);
+}
+
+function cleanOverlay(value = "", maxWords = 7) {
+  return stripHtml(value)
+    .replace(/[|•]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(/\s+/)
+    .slice(0, maxWords)
+    .join(" ");
+}
+
+function carouselSlideBlueprints(pin = {}) {
+  const title = pin.title || pin.sourceTitle || "Easy Recipe Ideas";
+  const topics = Array.isArray(pin.carouselTopics) ? pin.carouselTopics.filter(Boolean).slice(0, 3) : [];
+  const fallbackTopics = ["Close-Up Flavor", "Easy Serving Idea", "Worth Saving"];
+  const listNumber = String(title).match(/\b(\d{1,3})\b/)?.[1];
+  return [
+    {
+      role: "hook",
+      overlay: cleanOverlay(title, 7),
+      focus: "Lead with the strongest finished-dish hero image and make the recipe topic instantly clear."
+    },
+    ...Array.from({ length: 3 }, (_, index) => ({
+      role: `idea-${index + 1}`,
+      overlay: cleanOverlay(topics[index] || fallbackTopics[index], 6),
+      focus: topics[index]
+        ? `Feature this source-supported listicle item or section: "${topics[index]}".`
+        : [
+            "Show a different close-up crop that emphasizes the most appetizing source-supported texture.",
+            "Show a useful serving or meal-context angle without inventing ingredients.",
+            "Show another distinct source-supported finished-dish angle that creates save-worthy variety."
+          ][index]
+    })),
+    {
+      role: "cta",
+      overlay: listNumber ? `See All ${listNumber} Ideas` : "See The Full Recipe",
+      focus: "Return to a clean hero-food composition with obvious negative space for the final call to action."
+    }
+  ];
+}
+
+function carouselSlidePrompt(pin, slide, placement = "middle") {
+  const source = pin.sourceTitle || pin.title || pin.url || "recipe";
+  const base = String(pin.prompt || "").trim();
+  return `${base}
+
+PINTEREST NATIVE CAROUSEL CARD:
+- This is one card in a 5-card Pinterest carousel for: ${source}
+- Create ONE standalone vertical 2:3 image, never a collage, grid, contact sheet, or multi-panel layout.
+- ${slide.focus}
+- Use only food, ingredients, garnishes, methods, and benefits supported by the source context.
+- Text overlay must read exactly: "${slide.overlay}".
+- Keep the overlay large, minimal, mobile-readable, and in the ${placement} safe zone.
+- Keep the food dominant, photorealistic, appetizing, and visually distinct from the other cards.
+- Do not print card numbers, URLs, logos, watermarks, extra captions, or unsupported claims.`;
+}
+
+function slideDisplayImage(slide = {}) {
+  return slide.displayUrl || slide.localImageUrl || slide.imageUrl || slide.imgurUrl || slide.remoteImageUrl || "";
+}
+
+function slidePublicImage(slide = {}) {
+  return slide.imgurUrl || slide.remoteImageUrl || (/^https?:\/\//i.test(slide.imageUrl || "") ? slide.imageUrl : "");
+}
+
+function createCreativeSet(pin = {}) {
+  const baseId = String(pin.sourcePinId || pin.id || `${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  const base = {
+    ...pin,
+    id: baseId,
+    sourcePinId: baseId,
+    creativeType: "standard",
+    carouselSlides: Array.isArray(pin.carouselSlides) ? pin.carouselSlides : []
+  };
+  const cleanClone = (type, extra = {}) => ({
+    ...base,
+    ...extra,
+    id: `${baseId}-${type}`,
+    sourcePinId: baseId,
+    creativeType: type,
+    prompt: "",
+    imageUrl: "",
+    displayUrl: "",
+    localImageUrl: "",
+    localPath: "",
+    remoteImageUrl: "",
+    imgurUrl: "",
+    carouselSlides: [],
+    status: "loaded",
+    error: ""
+  });
+  return [
+    base,
+    cleanClone("carousel", { smartPinStyle: "custom-recipe-card" }),
+    cleanClone("collage", { smartPinStyle: "custom-listicle-collage" })
+  ];
+}
+
+async function fetchPinterestJpeg(url = "") {
+  if (!url) throw new Error("Missing carousel image URL.");
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Could not fetch carousel image (${response.status}).`);
+  const blob = await response.blob();
+  const bitmap = await createImageBitmap(blob);
+  const canvas = document.createElement("canvas");
+  canvas.width = bitmap.width;
+  canvas.height = bitmap.height;
+  const context = canvas.getContext("2d");
+  context.drawImage(bitmap, 0, 0);
+  bitmap.close?.();
+  const jpeg = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.92));
+  if (!jpeg) throw new Error("Could not convert carousel card to JPEG.");
+  return jpeg;
+}
+
+function safeFilename(value = "") {
+  const cleaned = stripHtml(value).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  return cleaned.slice(0, 70) || "pinterest-carousel";
+}
 
 const textPlacements = [
   ["middle", "Middle"],
@@ -68,16 +224,22 @@ function dedupePins(items = []) {
   const map = new Map();
   for (const item of Array.isArray(items) ? items : []) {
     if (!item?.url) continue;
-    const key = item.queueType === "internal-link"
+    const creativeType = normalizeCreativeType(item.creativeType);
+    const baseKey = item.queueType === "internal-link"
       ? `url:${String(item.url || "").trim().replace(/\/+$/, "").toLowerCase()}`
       : item.articleId
       ? `article:${String(item.articleId).trim().toLowerCase()}`
       : `url:${String(item.url || "").trim().replace(/\/+$/, "").toLowerCase()}`;
-    if (!key || key === "url:") continue;
+    if (!baseKey || baseKey === "url:") continue;
+    const key = `${baseKey}:creative:${creativeType}`;
     const existing = map.get(key) || {};
     map.set(key, {
       ...existing,
       ...item,
+      creativeType,
+      sourcePinId: item.sourcePinId || existing.sourcePinId || item.id || existing.id || "",
+      carouselTopics: Array.isArray(item.carouselTopics) ? item.carouselTopics : (existing.carouselTopics || []),
+      carouselSlides: Array.isArray(item.carouselSlides) ? item.carouselSlides : (existing.carouselSlides || []),
       url: bestPinUrl(existing.url, item.url),
       prompt: item.prompt || existing.prompt || "",
       title: item.title || existing.title || "",
@@ -177,11 +339,15 @@ function displayImage(pin) {
 }
 
 function isPinComplete(pin) {
+  if (normalizeCreativeType(pin?.creativeType) === "carousel") {
+    const slides = Array.isArray(pin?.carouselSlides) ? pin.carouselSlides : [];
+    return Boolean(pin?.prompt && pin?.title && pin?.description && slides.length >= 2 && slides.every((slide) => slideDisplayImage(slide)));
+  }
   return Boolean(pin?.prompt && pin?.title && pin?.description && displayImage(pin));
 }
 
 function formatSlot(date) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}T${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}:00`;
 }
 
 function parseSlot(value = "") {
@@ -204,7 +370,7 @@ function slotTime(value = "") {
 }
 
 function composeSlot(date, time) {
-  return `${date || formatSlot(new Date()).slice(0, 10)} ${time || "09:00"}`;
+  return `${date || formatSlot(new Date()).slice(0, 10)}T${time || "09:00"}:00`;
 }
 
 function dateTimeLocalFromSlot(value = "") {
@@ -388,7 +554,9 @@ function pinAiContext(pin = {}) {
     description: pin.description || "",
     targetKeyword: pin.targetKeyword || "",
     excerpt: pin.excerpt || "",
-    board: pin.csvBoard || ""
+    board: pin.csvBoard || "",
+    creativeType: normalizeCreativeType(pin.creativeType),
+    carouselTopics: Array.isArray(pin.carouselTopics) ? pin.carouselTopics : []
   };
 }
 
@@ -460,21 +628,29 @@ export default function PinCreatorView({ settings }) {
   async function loadPinCreatorData({ silent = false } = {}) {
     const saved = await electronAPI.getPinCreatorPins?.();
     const queued = await electronAPI.getPinQueue?.();
-    const savedPins = dedupePins(saved?.pins || pinsRef.current || []);
-    const queuedPins = dedupePins((queued?.items || []).map((item) => ({
-      id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-      url: item.url,
-      articleId: item.articleId || "",
-      queueType: item.queueType || "",
-      sourceTitle: item.title || "",
-      excerpt: item.excerpt || "",
-      targetKeyword: item.targetKeyword || "",
-      smartPinStyle: item.smartPinStyle || "",
-      csvBoard: item.csvBoard || "",
-      interests: item.interests || [],
-      status: "loaded",
-      createdAt: item.addedAt || new Date().toISOString()
-    })));
+    const articles = await electronAPI.getArticles?.();
+    const articleById = new Map((Array.isArray(articles) ? articles : []).map((article) => [String(article.id || ""), article]));
+    const savedPins = dedupePins((saved?.pins || pinsRef.current || []).map((pin) => ({ ...pin, creativeType: normalizeCreativeType(pin.creativeType) })));
+    const queuedPins = dedupePins((queued?.items || []).flatMap((item) => {
+      const article = articleById.get(String(item.articleId || "")) || {};
+      const base = {
+        id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        url: item.url,
+        articleId: item.articleId || "",
+        queueType: item.queueType || "",
+        sourceTitle: item.title || article.title || "",
+        excerpt: item.excerpt || article.excerpt || "",
+        targetKeyword: item.targetKeyword || article.targetKeyword || "",
+        smartPinStyle: item.smartPinStyle || "",
+        csvBoard: item.csvBoard || "",
+        interests: item.interests || [],
+        carouselTopics: extractCarouselTopics(article),
+        creativeType: "standard",
+        status: "loaded",
+        createdAt: item.addedAt || new Date().toISOString()
+      };
+      return createCreativeSet(base);
+    }));
     const next = dedupePins([...savedPins, ...queuedPins]);
     pinsRef.current = next;
     setPins(next);
@@ -540,10 +716,11 @@ export default function PinCreatorView({ settings }) {
     const nextPins = dedupePins(urlText.split(/\r?\n/)
       .map(cleanUrlLine)
       .filter(Boolean)
-      .map((item) => ({
+      .flatMap((item) => createCreativeSet({
         id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
         ...item,
         interests: [],
+        creativeType: "standard",
         status: "loaded",
         createdAt: new Date().toISOString()
       })));
@@ -554,6 +731,15 @@ export default function PinCreatorView({ settings }) {
     savePins(dedupePins([...nextPins, ...pinsRef.current]));
     setUrlText("");
     setStatus(`Loaded ${nextPins.length} URL${nextPins.length === 1 ? "" : "s"}.`);
+  }
+
+  function addCreativeSetsForLoaded() {
+    const expanded = dedupePins(pinsRef.current.flatMap((pin) => normalizeCreativeType(pin.creativeType) === "standard" ? createCreativeSet(pin) : [pin]));
+    const added = expanded.length - pinsRef.current.length;
+    savePins(expanded);
+    setStatus(added > 0
+      ? `Added ${added} carousel/collage creative${added === 1 ? "" : "s"} to the loaded recipes.`
+      : "All loaded recipes already have Standard, Carousel, and Collage variants.");
   }
 
   async function waitWhilePaused() {
@@ -624,7 +810,13 @@ export default function PinCreatorView({ settings }) {
   function generatePrompts(pinIds = null) {
     const selectedIds = Array.isArray(pinIds) ? new Set(pinIds) : null;
     return runStep("Generating prompts", (pin) => !pin.prompt && (!selectedIds || selectedIds.has(pin.id)), async (pin) => {
-      const styleWithPlacement = `${pin.smartPinStyle || selectedStyle}::placement:${textPlacement}`;
+      const creativeType = normalizeCreativeType(pin.creativeType);
+      const creativeStyle = creativeType === "collage"
+        ? "custom-listicle-collage"
+        : creativeType === "carousel"
+        ? "custom-recipe-card"
+        : (pin.smartPinStyle || selectedStyle);
+      const styleWithPlacement = `${creativeStyle}::placement:${textPlacement}`;
       const result = await electronAPI.generatePrompt(pin.url, pin.interests || [], styleWithPlacement, `native-prompt-${pin.id}`, pinAiContext(pin));
       if (!result.success) throw new Error(result.error || "Prompt generation failed.");
       return { ...pin, prompt: result.prompt, status: "ready" };
@@ -641,15 +833,53 @@ export default function PinCreatorView({ settings }) {
     });
   }
 
+  async function renderPinImages(pin, jobPrefix = "native-image") {
+    if (normalizeCreativeType(pin.creativeType) === "carousel") {
+      const slides = [];
+      const blueprints = carouselSlideBlueprints(pin);
+      for (let index = 0; index < blueprints.length; index++) {
+        await waitWhilePaused();
+        if (cancelRef.current) throw new Error("Cancelled by user");
+        const blueprint = blueprints[index];
+        setStatus(`Generating carousel card ${index + 1}/${blueprints.length}: ${pin.sourceTitle || pin.url}`);
+        const prompt = carouselSlidePrompt(pin, blueprint, textPlacement);
+        const result = await electronAPI.generateImage(prompt, "2:3", imageModel, pin.url, `${jobPrefix}-${pin.id}-card-${index + 1}`);
+        if (!result.success) throw new Error(result.error || `Carousel card ${index + 1} failed.`);
+        const imageUrl = result.displayUrl || result.localImageUrl || result.imgurUrl || result.imageUrl || "";
+        slides.push({
+          ...blueprint,
+          imageUrl,
+          displayUrl: imageUrl,
+          localImageUrl: result.localImageUrl || "",
+          localPath: result.localPath || "",
+          remoteImageUrl: result.remoteImageUrl || result.imageUrl || "",
+          imgurUrl: result.imgurUrl || ""
+        });
+      }
+      const hero = slides[0] || {};
+      return {
+        ...pin,
+        carouselSlides: slides,
+        imageUrl: slideDisplayImage(hero),
+        displayUrl: slideDisplayImage(hero),
+        localImageUrl: hero.localImageUrl || "",
+        localPath: hero.localPath || "",
+        remoteImageUrl: hero.remoteImageUrl || "",
+        imgurUrl: hero.imgurUrl || "",
+        status: "completed"
+      };
+    }
+
+    const prompt = `${pin.prompt}\n\n${placementImageInstruction(textPlacement)}`;
+    const result = await electronAPI.generateImage(prompt, aspectRatio, imageModel, pin.url, `${jobPrefix}-${pin.id}`);
+    if (!result.success) throw new Error(result.error || "Image generation failed.");
+    const imageUrl = result.displayUrl || result.localImageUrl || result.imgurUrl || result.imageUrl || "";
+    return { ...pin, imageUrl, displayUrl: imageUrl, localImageUrl: result.localImageUrl || "", localPath: result.localPath || "", remoteImageUrl: result.remoteImageUrl || result.imageUrl || "", imgurUrl: result.imgurUrl || "", status: "completed" };
+  }
+
   function generateImages(pinIds = null) {
     const selectedIds = Array.isArray(pinIds) ? new Set(pinIds) : null;
-    return runStep("Generating images", (pin) => pin.prompt && !displayImage(pin) && (!selectedIds || selectedIds.has(pin.id)), async (pin) => {
-      const prompt = `${pin.prompt}\n\n${placementImageInstruction(textPlacement)}`;
-      const result = await electronAPI.generateImage(prompt, aspectRatio, imageModel, pin.url, `native-image-${pin.id}`);
-      if (!result.success) throw new Error(result.error || "Image generation failed.");
-      const imageUrl = result.displayUrl || result.localImageUrl || result.imgurUrl || result.imageUrl || "";
-      return { ...pin, imageUrl, displayUrl: imageUrl, localImageUrl: result.localImageUrl || "", localPath: result.localPath || "", remoteImageUrl: result.remoteImageUrl || result.imageUrl || "", imgurUrl: result.imgurUrl || "", status: "completed" };
-    });
+    return runStep("Generating images", (pin) => pin.prompt && !isPinComplete(pin) && (!selectedIds || selectedIds.has(pin.id)), async (pin) => renderPinImages(pin));
   }
 
   async function generateFullPack() {
@@ -709,11 +939,8 @@ export default function PinCreatorView({ settings }) {
     setProgress({ active: true, label: "Regenerating image", current: 0, total: 1 });
     setStatus("Regenerating pin image...");
     try {
-      const prompt = `${pin.prompt}\n\n${placementImageInstruction(textPlacement)}`;
-      const result = await electronAPI.generateImage(prompt, aspectRatio, imageModel, pin.url, `native-regen-${pin.id}`);
-      if (!result.success) throw new Error(result.error || "Image generation failed.");
-      const imageUrl = result.displayUrl || result.localImageUrl || result.imgurUrl || result.imageUrl || "";
-      await savePins(pinsRef.current.map((item) => item.id === pinId ? { ...item, imageUrl, displayUrl: imageUrl, localImageUrl: result.localImageUrl || "", localPath: result.localPath || "", remoteImageUrl: result.remoteImageUrl || result.imageUrl || "", imgurUrl: result.imgurUrl || "", status: "completed", error: "" } : item));
+      const regenerated = await renderPinImages(pin, "native-regen");
+      await savePins(pinsRef.current.map((item) => item.id === pinId ? { ...regenerated, error: "" } : item));
       setProgress({ active: true, label: "Regenerating image", current: 1, total: 1 });
       setStatus("Pin image regenerated.");
     } catch (error) {
@@ -734,7 +961,13 @@ export default function PinCreatorView({ settings }) {
     setProgress({ active: true, label: "Regenerating prompt", current: 0, total: 1 });
     setStatus("Regenerating pin prompt...");
     try {
-      const styleWithPlacement = `${pin.smartPinStyle || selectedStyle}::placement:${textPlacement}`;
+      const creativeType = normalizeCreativeType(pin.creativeType);
+      const creativeStyle = creativeType === "collage"
+        ? "custom-listicle-collage"
+        : creativeType === "carousel"
+        ? "custom-recipe-card"
+        : (pin.smartPinStyle || selectedStyle);
+      const styleWithPlacement = `${creativeStyle}::placement:${textPlacement}`;
       const result = await electronAPI.generatePrompt(pin.url, pin.interests || [], styleWithPlacement, `native-reprompt-${pin.id}`, pinAiContext(pin));
       if (!result.success) throw new Error(result.error || "Prompt generation failed.");
       await savePins(pinsRef.current.map((item) => item.id === pinId ? { ...item, prompt: result.prompt, status: "ready", error: "" } : item));
@@ -792,14 +1025,18 @@ export default function PinCreatorView({ settings }) {
   }
 
   function buildCsvRows(sourcePins = pinsRef.current) {
-    const slots = scheduleSlots(sourcePins.length, csvScheduleSettings);
+    const csvPins = sourcePins.filter((pin) => normalizeCreativeType(pin.creativeType) !== "carousel");
+    const slots = scheduleSlots(csvPins.length, csvScheduleSettings);
     const headers = ["Title", "Description", "Media URL", "Link", "Pinterest board", "Publish date", "Thumbnail", "Keywords"];
-    const rows = sourcePins.map((pin, index) => {
+    const rows = csvPins.map((pin, index) => {
       const board = pin.csvBoard || chooseBoard(pin, boardNames);
       const keywords = pin.csvKeywords || seoKeywords(pin, board);
-      return [pin.title || "", (pin.description || "").replace(/\*\*(.*?)\*\*/g, "$1"), publicImage(pin), trackedPinUrl(pin, index, "pinterest", "pin"), board, pin.csvPublishDate || slots[index], pin.csvThumbnail || "", keywords];
+      const title = String(pin.title || "").replace(/\*\*(.*?)\*\*/g, "$1").slice(0, 100).trim();
+      const description = String(pin.description || "").replace(/\*\*(.*?)\*\*/g, "$1").slice(0, 500).trim();
+      const prefix = normalizeCreativeType(pin.creativeType) === "collage" ? "collage" : "pin";
+      return [title, description, publicImage(pin), trackedPinUrl(pin, index, "pinterest", prefix), board, pin.csvPublishDate || slots[index], pin.csvThumbnail || "", keywords];
     });
-    return { headers, rows };
+    return { headers, rows, csvPins };
   }
 
   function applyPinterestSchedule() {
@@ -824,7 +1061,7 @@ export default function PinCreatorView({ settings }) {
   }
 
   function exportPinterestCsv() {
-    const { headers, rows } = buildCsvRows(pinsRef.current);
+    const { headers, rows, csvPins } = buildCsvRows(pinsRef.current);
     const missing = rows.flatMap((row, index) => [
       !row[0] ? `Row ${index + 1}: missing title` : "",
       !row[1] ? `Row ${index + 1}: missing description` : "",
@@ -857,7 +1094,78 @@ export default function PinCreatorView({ settings }) {
       ];
     });
     downloadCsv([headers, ...fixedRows], `pinterest-bulk-upload-${Date.now()}.csv`);
-    setStatus(`Exported ${rows.length} Pinterest CSV row${rows.length === 1 ? "" : "s"}.`);
+    const carouselCount = pinsRef.current.filter((pin) => normalizeCreativeType(pin.creativeType) === "carousel").length;
+    setStatus(`Exported ${rows.length} Pinterest CSV row${rows.length === 1 ? "" : "s"} for Standard/Collage Pins.${carouselCount ? ` ${carouselCount} carousel${carouselCount === 1 ? "" : "s"} stay in the separate Carousel Pack.` : ""}`);
+  }
+
+  async function exportCarouselPack() {
+    const carouselPins = pinsRef.current.filter((pin) =>
+      normalizeCreativeType(pin.creativeType) === "carousel" &&
+      Array.isArray(pin.carouselSlides) &&
+      pin.carouselSlides.length >= 2 &&
+      pin.carouselSlides.every((slide) => slidePublicImage(slide))
+    );
+    if (!carouselPins.length) {
+      setStatus("Generate the carousel images first. A native carousel needs 2-5 completed cards.");
+      return;
+    }
+
+    setWorking(true);
+    setProgress({ active: true, label: "Building carousel pack", current: 0, total: carouselPins.length });
+    try {
+      const zip = new JSZip();
+      const root = zip.folder("pinterest-carousel-pack");
+      for (let pinIndex = 0; pinIndex < carouselPins.length; pinIndex++) {
+        const pin = carouselPins[pinIndex];
+        const folderName = `${String(pinIndex + 1).padStart(2, "0")}-${safeFilename(pin.title || pin.sourceTitle)}`;
+        const folder = root.folder(folderName);
+        const board = pin.csvBoard || chooseBoard(pin, boardNames);
+        const destination = trackedPinUrl(pin, pinIndex, "pinterest", "carousel");
+        folder.file("metadata.txt", [
+          "Pinterest Native Carousel",
+          `Title: ${String(pin.title || "").slice(0, 100)}`,
+          `Description: ${String(pin.description || "").slice(0, 500)}`,
+          `Board: ${board}`,
+          `Destination URL: ${destination}`,
+          "Creative type: CAROUSEL",
+          "Card order: 01 through 05",
+          "Aspect ratio: 2:3",
+          "",
+          "Pinterest: create the carousel on desktop in Ads Manager/Pin Builder or Bulk Editor and upload these cards in order."
+        ].join("\n"));
+
+        for (let slideIndex = 0; slideIndex < pin.carouselSlides.length; slideIndex++) {
+          const slide = pin.carouselSlides[slideIndex];
+          const imageUrl = slidePublicImage(slide);
+          const jpeg = await fetchPinterestJpeg(imageUrl);
+          folder.file(`${String(slideIndex + 1).padStart(2, "0")}-${safeFilename(slide.role || `card-${slideIndex + 1}`)}.jpg`, jpeg);
+        }
+        setProgress({ active: true, label: "Building carousel pack", current: pinIndex + 1, total: carouselPins.length });
+      }
+
+      root.file("README.txt", [
+        "Gourmet Gather Pinterest Carousel Pack",
+        "",
+        "Each folder contains 5 ordered JPEG cards plus title, description, board, and destination metadata.",
+        "Use Pinterest desktop Carousel creation or Bulk Editor. Standard Import Content CSV does not create native multi-card carousels.",
+        "Keep the five cards in numeric order."
+      ].join("\n"));
+
+      const zipBytes = await zip.generateAsync({ type: "uint8array" });
+      const result = await electronAPI.saveZipFile?.(Array.from(zipBytes));
+      if (result?.success) {
+        setStatus(`Saved ${carouselPins.length} native carousel pack${carouselPins.length === 1 ? "" : "s"}: ${result.filePath}`);
+      } else if (result?.canceled) {
+        setStatus("Carousel export canceled.");
+      } else {
+        throw new Error(result?.error || "Could not save carousel ZIP.");
+      }
+    } catch (error) {
+      setStatus(error.message || "Could not export carousel pack.");
+    } finally {
+      setWorking(false);
+      setProgress((current) => ({ ...current, active: false }));
+    }
   }
 
   async function prepareGhlEditor(packsToPrepare = repurposePacks) {
@@ -1009,11 +1317,14 @@ export default function PinCreatorView({ settings }) {
   const titled = pins.filter((pin) => pin.title && pin.description).length;
   const progressPercent = progress.total ? Math.round((progress.current / progress.total) * 100) : 0;
   const { headers, rows } = useMemo(() => buildCsvRows(pins), [pins, csvScheduleSettings, boardNames]);
+  const standardCount = pins.filter((pin) => normalizeCreativeType(pin.creativeType) === "standard").length;
+  const carouselCount = pins.filter((pin) => normalizeCreativeType(pin.creativeType) === "carousel").length;
+  const collageCount = pins.filter((pin) => normalizeCreativeType(pin.creativeType) === "collage").length;
 
   return (
     <section className="animate-fade-in">
       <SectionHeader eyebrow="Pinterest" title="Pin Creator">
-        Create Pinterest pins, match each pin to your saved boards, export Pinterest CSV, and build GHL social posts from the same tab.
+        Generate a Standard Pin, a 5-card native Carousel, and a Collage Pin for each Gourmet Gather recipe, then export each format through the Pinterest workflow it supports.
       </SectionHeader>
 
       <div className="mb-5 grid gap-4 xl:grid-cols-[1fr_360px]">
@@ -1022,7 +1333,8 @@ export default function PinCreatorView({ settings }) {
             <textarea className={`${inputClass} min-h-40 resize-y leading-6`} value={urlText} onChange={(event) => setUrlText(event.target.value)} placeholder="https://yourblog.com/easy-weeknight-dinner/" />
           </Field>
           <div className="mt-4 flex flex-wrap gap-2">
-            <Button onClick={loadUrls}><Upload className="h-4 w-4" />Load URLs</Button>
+            <Button onClick={loadUrls}><Upload className="h-4 w-4" />Load URLs × 3 Formats</Button>
+            <Button variant="secondary" onClick={addCreativeSetsForLoaded} disabled={working || !pins.length}><Sparkles className="h-4 w-4" />Add Creative Sets</Button>
             <Button variant="secondary" onClick={generatePrompts} disabled={working || !pins.length}><Sparkles className="h-4 w-4" />Prompts</Button>
             <Button variant="secondary" onClick={generateTitles} disabled={working || !pins.length}><Save className="h-4 w-4" />Titles</Button>
             <Button onClick={generateImages} disabled={working || !ready}><ImageIcon className="h-4 w-4" />Images</Button>
@@ -1033,10 +1345,11 @@ export default function PinCreatorView({ settings }) {
 
         <div className="soft-card rounded-lg p-4">
           <div className="grid grid-cols-3 gap-2 text-center">
-            <div className="rounded-md bg-white p-3 ring-1 ring-slate-200"><div className="text-xl font-black">{pins.length}</div><div className="text-xs font-bold text-slate-500">Loaded</div></div>
-            <div className="rounded-md bg-white p-3 ring-1 ring-slate-200"><div className="text-xl font-black">{titled}</div><div className="text-xs font-bold text-slate-500">Titles</div></div>
-            <div className="rounded-md bg-white p-3 ring-1 ring-slate-200"><div className="text-xl font-black">{completed}</div><div className="text-xs font-bold text-slate-500">Images</div></div>
+            <div className="rounded-md bg-white p-3 ring-1 ring-slate-200"><div className="text-xl font-black">{standardCount}</div><div className="text-xs font-bold text-slate-500">Standard</div></div>
+            <div className="rounded-md bg-white p-3 ring-1 ring-slate-200"><div className="text-xl font-black">{carouselCount}</div><div className="text-xs font-bold text-slate-500">Carousel</div></div>
+            <div className="rounded-md bg-white p-3 ring-1 ring-slate-200"><div className="text-xl font-black">{collageCount}</div><div className="text-xs font-bold text-slate-500">Collage</div></div>
           </div>
+          <div className="mt-2 text-center text-xs font-bold text-slate-500">{completed}/{pins.length} creatives complete · {titled} with copy</div>
           <div className="mt-4 grid gap-3">
             <Field label="Pin style">
               <select className={inputClass} value={selectedStyle} onChange={(event) => setSelectedStyle(event.target.value)}>
@@ -1064,7 +1377,8 @@ export default function PinCreatorView({ settings }) {
           </div>
           <div className="mt-4 grid gap-2">
             <Button variant="secondary" onClick={() => setCsvOpen((value) => !value)} disabled={!pins.length}><Link2 className="h-4 w-4" />{csvOpen ? "Hide" : "Edit"} Pinterest CSV</Button>
-            <Button variant="secondary" onClick={exportPinterestCsv} disabled={!pins.length}><Download className="h-4 w-4" />Export Pinterest CSV</Button>
+            <Button variant="secondary" onClick={exportPinterestCsv} disabled={!rows.length}><Download className="h-4 w-4" />Export Standard + Collage CSV</Button>
+            <Button variant="secondary" onClick={exportCarouselPack} disabled={working || !carouselCount}><Download className="h-4 w-4" />Export Carousel Pack</Button>
             <Button variant="secondary" onClick={sendRepurpose} disabled={!titled}><Send className="h-4 w-4" />Repurpose Social</Button>
             <div className="flex gap-2">
               <Button variant="secondary" className="flex-1" onClick={togglePause} disabled={!working}>{paused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}{paused ? "Resume" : "Pause"}</Button>
@@ -1266,7 +1580,10 @@ export default function PinCreatorView({ settings }) {
             <article key={pin.id} className="soft-card rounded-lg p-4">
               <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <div className="truncate text-xs font-black uppercase text-indigo-600">{pin.status || "loaded"}</div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="truncate text-xs font-black uppercase text-indigo-600">{pin.status || "loaded"}</div>
+                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-black uppercase tracking-wide text-slate-600">{creativeTypeLabel(pin.creativeType)}</span>
+                  </div>
                   <h2 className="mt-1 line-clamp-2 text-lg font-black leading-6 text-slate-900">{pin.title || pin.sourceTitle || pin.url}</h2>
                   <p className="mt-1 truncate text-sm font-medium text-slate-500">{trackedPinUrl(pin, index, "pinterest", "pin") || pin.url}</p>
                 </div>
@@ -1282,8 +1599,19 @@ export default function PinCreatorView({ settings }) {
                 </div>
               ) : null}
               <div className="grid gap-4 md:grid-cols-[180px_1fr]">
-                <div className="overflow-hidden rounded-md bg-slate-100 ring-1 ring-slate-200">
-                  {displayImage(pin) ? <img src={displayImage(pin)} alt={pin.title || "Generated pin"} className="aspect-[2/3] w-full object-cover" /> : <div className="grid aspect-[2/3] place-items-center text-slate-400"><ImageIcon className="h-10 w-10" /></div>}
+                <div>
+                  <div className="overflow-hidden rounded-md bg-slate-100 ring-1 ring-slate-200">
+                    {displayImage(pin) ? <img src={displayImage(pin)} alt={pin.title || "Generated pin"} className="aspect-[2/3] w-full object-cover" /> : <div className="grid aspect-[2/3] place-items-center text-slate-400"><ImageIcon className="h-10 w-10" /></div>}
+                  </div>
+                  {normalizeCreativeType(pin.creativeType) === "carousel" && pin.carouselSlides?.length ? (
+                    <div className="mt-2 grid grid-cols-5 gap-1">
+                      {pin.carouselSlides.map((slide, slideIndex) => (
+                        <div key={`${pin.id}-slide-${slideIndex}`} className="overflow-hidden rounded bg-slate-100 ring-1 ring-slate-200" title={slide.overlay || slide.role}>
+                          {slideDisplayImage(slide) ? <img src={slideDisplayImage(slide)} alt={slide.overlay || `Carousel card ${slideIndex + 1}`} className="aspect-[2/3] w-full object-cover" /> : null}
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
                 <div className="space-y-3">
                   <Field label="Title"><input className={inputClass} value={pin.title || ""} onChange={(event) => updatePin(pin.id, { title: event.target.value })} /></Field>
