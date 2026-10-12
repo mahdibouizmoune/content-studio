@@ -49,6 +49,7 @@ function navigationGroups(flags = {}) {
     label: "Distribute",
     items: [
       { id: "pin-creator", label: "Pinterest", icon: ImagePlus },
+      { id: "pin-publishing", label: "Pinterest Workspace", icon: CalendarDays },
       { id: "meta-studio", label: "Meta", icon: Facebook },
       ...(flags.campaignRecords ? [{ id: "campaigns", label: "Campaigns", icon: FolderKanban }] : [])
     ]
@@ -86,6 +87,7 @@ const mobileControls = [
 ];
 
 function screenIsActive(activeScreen, itemId) {
+  if (itemId === 'pin-publishing') return activeScreen.startsWith('pin-publishing');
   if (itemId === "diagnostics") return activeScreen === "diagnostics";
   return activeScreen === itemId;
 }

@@ -18,6 +18,7 @@ import {
 
 const Settings = lazy(() => import("@/components/Settings"));
 const PinCreatorView = lazy(() => import("@/components/PinCreatorView"));
+const PinPublishingWorkspace = lazy(() => import("@/components/PinPublishingWorkspace"));
 const JobCenter = lazy(() => import("@/components/JobCenter"));
 const MetaStudio = lazy(() => import("@/components/MetaStudio"));
 const VideoStudio = lazy(() => import("@/components/VideoStudio"));
@@ -470,6 +471,8 @@ export default function App() {
     "image-library": <ImageLibrary {...screenProps} />,
     performance: <PerformanceIntelligence {...screenProps} />,
     connections: <Connections {...screenProps} />,
+    "pin-publishing": <PinPublishingWorkspace {...screenProps} />,
+    "pin-publishing-research": <PinPublishingWorkspace {...screenProps} initialTab="Research" />,
     onboarding: <OnboardingChecklist {...screenProps} />,
     settings: <Settings {...screenProps} initialOpenSection={settingsSection} />,
     diagnostics: <Settings {...screenProps} initialOpenSection="diagnostics" />,
