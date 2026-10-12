@@ -2,6 +2,7 @@ const path = require('path');
 const { DatabaseSync } = require('node:sqlite');
 
 const WORKSPACE_ROOTS = new Set([
+  'pinWorkspace',
   'articles',
   'generatedVideos',
   'growthWorkspace',

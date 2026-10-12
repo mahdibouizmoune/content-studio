@@ -113,6 +113,8 @@ test('WordPress-first batch preparation is serial and preserves all twenty rows'
   let active = 0;
   let maximum = 0;
   const context = vm.createContext({
+    pinterestBatches: () => [],
+    schedulePinterestPins: require('../electron/pinterest-schedule').schedulePinterestPins,
     store: { get: () => ({ wordpressSites: [configuredSite] }) }, resolvePinterestExportHost,
     secureIpcHandle: (_channel, callback) => { handler = callback; },
     ensureDurablePinImage: async (item) => {

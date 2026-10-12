@@ -1,6 +1,7 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
+  pinWorkspace: (action, params = {}) => ipcRenderer.invoke('pin-workspace', { action, params }),
   // Settings (secrets auto-encrypted in main process)
   getSettings: () => ipcRenderer.invoke('get-settings'),
   saveSettings: (settings) => ipcRenderer.invoke('save-settings', settings),

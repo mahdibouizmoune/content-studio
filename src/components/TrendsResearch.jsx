@@ -300,7 +300,7 @@ export default function TrendsResearch({ settings, articles, refreshArticles, se
 
   return (
     <section className="animate-fade-in">
-      <SectionHeader eyebrow="Search intelligence" title="Trends Research">
+      <SectionHeader eyebrow="Search intelligence" title="Trends Research" action={<button type="button" className="inline-flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-800" onClick={()=>setActiveScreen('pin-publishing-research')}><Search className="h-4 w-4" />Live Pinterest Research</button>}>
         Separate live search surges from proven Pinterest clicks and evergreen ideas before building the article queue.
       </SectionHeader>
 
