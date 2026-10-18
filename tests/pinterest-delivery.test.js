@@ -24,7 +24,8 @@ function harness(overrides = {}) {
     getBatches: () => batches,
     saveBatch: (value) => { batches = [structuredClone(value), ...batches.filter((item) => item.id !== value.id)]; },
     saveAccount: () => {}, pickPath: async () => 'C:/test/batch.csv',
-    writeFiles: async (files, { onCommitted }) => {
+    writeFiles: async (files, { onCommitted, beforeCommit }) => {
+      await beforeCommit?.();
       writes++;
       const done = [];
       for (const file of files) { await file.verify(file.bytes); done.push(file.path); await onCommitted([...done]); }
@@ -33,6 +34,98 @@ function harness(overrides = {}) {
   return { run: createPinterestExportService(dependencies), getBatches: () => batches, saveBatch: dependencies.saveBatch, writes: () => writes };
 }
 const request = () => ({ rows: [row()], pinIds: ['1'], account: 'Gourmet Gather' });
+
+test('the last precommit guard preserves an existing file and removes staged partials', async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'cs-audit-csv-'));
+  try {
+    const target = path.join(directory, 'pins.csv'); await fs.writeFile(target, 'original');
+    await assert.rejects(writeVerifiedFiles([{ path: target, bytes: Buffer.from('replacement') }], { beforeCommit: async () => { throw new Error('Receipt changed'); } }), /Receipt changed/);
+    assert.equal(await fs.readFile(target, 'utf8'), 'original');
+    assert.deepEqual(await fs.readdir(directory), ['pins.csv']);
+  } finally { await fs.rm(directory, { recursive: true, force: true }); }
+});
+
+test('retry eligibility is rechecked after the save dialog, before writing another CSV', async () => {
+  let service, changed = false;
+  service = harness({ pickPath: async () => {
+    if (changed) {
+      const original = service.getBatches().find(item => !item.parentBatchId);
+      service.saveBatch(updateDeliveryOutcomes(original, { revision: original.revision, updates: [{ number: 1, status: 'confirmed' }] }));
+    }
+    return 'C:/test/batch.csv';
+  } });
+  await service.run(request());
+  const original = updateDeliveryOutcomes(service.getBatches()[0], { revision: 0, updates: [{ number: 1, status: 'failed' }] });
+  service.saveBatch(original); changed = true;
+  const retry = await service.run({ ...request(), retryBatchId: original.id });
+  assert.equal(retry.success, false); assert.match(retry.error, /results changed/); assert.equal(service.writes(), 1);
+});
+
+test('result changes while files are staged prevent committing a retry', async () => {
+  let service, changeDuringStage = false;
+  service = harness({ writeFiles: async (_files, { beforeCommit }) => {
+    if (changeDuringStage) {
+      const original = service.getBatches().find(item => !item.parentBatchId);
+      service.saveBatch(updateDeliveryOutcomes(original, { revision: original.revision, updates: [{ number: 1, status: 'confirmed' }] }));
+    }
+    await beforeCommit();
+  } });
+  await service.run(request());
+  const original = updateDeliveryOutcomes(service.getBatches()[0], { revision: 0, updates: [{ number: 1, status: 'failed' }] });
+  service.saveBatch(original); changeDuringStage = true;
+  const retry = await service.run({ ...request(), retryBatchId: original.id });
+  assert.equal(retry.success, false); assert.match(retry.error, /results changed/);
+  assert.equal(service.getBatches().find(item => item.parentBatchId)?.fileStatus, 'failed');
+});
+
+test('file progress never overwrites receipt outcomes reported during the download', async () => {
+  let service;
+  service = harness({ writeFiles: async (files, { beforeCommit, onCommitted }) => {
+    await beforeCommit();
+    const current = service.getBatches()[0];
+    service.saveBatch(updateDeliveryOutcomes(current, { revision: current.revision, updates: [{ number: 1, status: 'confirmed' }] }));
+    await onCommitted(files.map(file => file.path));
+  } });
+  assert.equal((await service.run(request())).success, true);
+  assert.equal(service.getBatches()[0].outcomes[1].status, 'confirmed');
+  assert.equal(service.getBatches()[0].revision, 1);
+});
+
+for (const failure of ['media', 'link']) {
+  test(`${failure} failures produce a rejected file without marking failed Pins exported`, async () => {
+    let written;
+    const service = harness({
+      getPins: () => ['1', '2'].map(makePin),
+      validateMedia: async (url) => failure === 'media' && url.endsWith('/2.jpg')
+        ? { valid: false, status: 200, contentType: 'image/webp', error: 'JPEG URL returned WebP' }
+        : { valid: true, status: 200, contentType: 'image/jpeg', width: 1000, height: 1500, sha256: hash },
+      validateLink: async (url) => ({ valid: !(failure === 'link' && url.endsWith('/2')), status: url.endsWith('/2') ? 404 : 200, networkChecked: true, error: 'Destination returned HTTP 404' }),
+      writeFiles: async (files) => { written = files; }
+    });
+    const result = await service.run({ ...request(), rows: ['1', '2'].map(row), pinIds: ['1', '2'] });
+    assert.equal(result.success, true);
+    assert.equal(result.rowCount, 1);
+    assert.equal(result.rejectedCount, 1);
+    assert.deepEqual(result.pinIds, ['1']);
+    assert.equal(service.getBatches()[0].rows.length, 1);
+    const rejected = written.find((file) => file.path.endsWith('-REJECTED.csv'));
+    assert.ok(rejected);
+    assert.match(rejected.bytes.toString(), /Soup 2/);
+    const report = JSON.parse(written.find((file) => file.path.endsWith('.json')).bytes);
+    assert.equal(report.summary.rowsRejected, 1);
+    assert.equal(report.pinterestAcceptedRows, null);
+  });
+}
+
+test('all rejected rows write reports only, without creating a delivery batch', async () => {
+  let files;
+  const service = harness({ validateLink: async () => ({ valid: false, status: 404, error: 'Missing page' }), writeFiles: async (value) => { files = value; } });
+  const result = await service.run(request());
+  assert.equal(result.success, false);
+  assert.deepEqual(service.getBatches(), []);
+  assert.equal(files.length, 2);
+  assert.ok(files.every((file) => /(?:-REJECTED.csv|validation.json)$/.test(file.path)));
+});
 
 test('blank optional account exports all twenty Pins in one standard CSV', async () => {
   const ids = Array.from({ length: 20 }, (_, index) => String(index + 1));
@@ -88,6 +181,82 @@ test('twenty Pins produce one CSV containing all twenty rows', async () => {
   assert.equal(service.getBatches()[0].rows.length, 20);
 });
 
+for (const failure of ['fields', 'image', 'network', 'preflight', 'save-dialog']) {
+  test(`one ${failure} failure exports the other nineteen Pins unchanged`, async () => {
+    const ids = Array.from({ length: 20 }, (_, index) => String(index + 1));
+    const pins = ids.map(makePin);
+    const input = ids.map(row);
+    input.forEach((cells, index) => { cells[6] = new Date(Date.now() + (index + 2) * 3600000).toISOString().slice(0, 19); });
+    if (failure === 'fields') input[7][1] = '';
+    const before = structuredClone(pins);
+    let changed = false;
+    let files;
+    const service = harness({
+      getPins: () => pins,
+      identity: async (pin) => {
+        if (failure === 'network' && pin.id === '8') throw new Error('Connection failed');
+        return { sha256: changed && pin.id === '8' ? 'b'.repeat(64) : hash };
+      },
+      validateMedia: async (url) => ({ valid: true, width: 1000, height: 1500, sha256: failure === 'image' && url.endsWith('/8.jpg') ? 'b'.repeat(64) : hash }),
+      pickPath: async () => { changed = failure === 'save-dialog'; return 'C:/test/batch.csv'; },
+      writeFiles: async (value) => { files = value; for (const file of value) await file.verify(file.bytes); }
+    });
+    const result = await service.run({ rows: input, pinIds: ids, skipRows: failure === 'preflight' ? [{ row: 8, reason: 'Hosting failed' }] : [] });
+    assert.equal(result.success, true, result.error);
+    assert.equal(result.rowCount, 19);
+    assert.equal(result.rejectedCount, 1);
+    assert.deepEqual(result.pinIds, ids.filter((id) => id !== '8'));
+    assert.deepEqual(pins, before);
+    assert.deepEqual(service.getBatches()[0].rows.map((item) => item.cells[6]), input.filter((_, index) => index !== 7).map((cells) => cells[6]));
+    const report = JSON.parse(files.find((file) => file.path.endsWith('.json')).bytes);
+    assert.equal(report.summary.inputRows, 20);
+    assert.equal(report.rejected[0].row, 8);
+    assert.ok(files.some((file) => file.path.endsWith('-REJECTED.csv')));
+  });
+}
+
+test('a date expiring in the save dialog skips only that row', async () => {
+  const clock = Date.now;
+  const now = clock();
+  let time = now;
+  Date.now = () => time;
+  try {
+    const input = ['1', '2'].map(row);
+    input[0][6] = new Date(now + 3600000).toISOString().slice(0, 19);
+    input[1][6] = new Date(now + 7200000).toISOString().slice(0, 19);
+    const service = harness({ getPins: () => ['1', '2'].map(makePin), pickPath: async () => { time = now + 5400000; return 'C:/test/batch.csv'; } });
+    const result = await service.run({ rows: input, pinIds: ['1', '2'] });
+    assert.equal(result.success, true, result.error);
+    assert.deepEqual(result.pinIds, ['2']);
+    assert.equal(result.rejectedCount, 1);
+    assert.equal(service.getBatches()[0].rows[0].cells[6], input[1][6]);
+  } finally { Date.now = clock; }
+});
+
+test('mixed previous exports are skipped without blocking fresh Pins', async () => {
+  const ids = ['1', '2', '3'];
+  const service = harness({ getPins: () => ids.map(makePin) });
+  assert.equal((await service.run(request())).success, true);
+  const result = await service.run({ ...request(), rows: ids.map(row), pinIds: ids });
+  assert.equal(result.success, true, result.error);
+  assert.deepEqual(result.pinIds, ['2', '3']);
+  assert.equal(result.rejectedCount, 1);
+  assert.equal(service.getBatches().length, 2);
+});
+
+test('a failed-only retry can skip an invalid row without retrying unresolved Pins', async () => {
+  const ids = ['1', '2', '3'];
+  const service = harness({ getPins: () => ids.map(makePin) });
+  await service.run({ ...request(), rows: ids.map(row), pinIds: ids });
+  const parent = updateDeliveryOutcomes(service.getBatches()[0], { revision: 0, updates: [{ number: 1, status: 'failed' }, { number: 2, status: 'failed' }] });
+  service.saveBatch(parent);
+  const bad = row('2'); bad[1] = '';
+  const result = await service.run({ ...request(), rows: [row('1'), bad], pinIds: ['1', '2'], retryBatchId: parent.id });
+  assert.equal(result.success, true, result.error);
+  assert.deepEqual(result.pinIds, ['1']);
+  assert.equal(result.rejectedCount, 1);
+});
+
 test('failed-only export records a new attempt without confirmed or unresolved rows', async () => {
   const service = harness({ getPins: () => ['1', '2', '3'].map(makePin) });
   await service.run({ ...request(), rows: ['1', '2', '3'].map(row), pinIds: ['1', '2', '3'] });
@@ -135,19 +304,21 @@ test('receipt suggestions do not downgrade previously confirmed rows', () => {
   assert.deepEqual(suggestFailedRows(confirmed, "| Upload didn't work | Soup 2 | Dinner |").updates, []);
 });
 
-test('final exporter rejects changed same-size images without writing files', async () => {
+test('final exporter writes rejection reports, never an upload CSV, for changed same-size images', async () => {
   const service = harness({ validateMedia: async () => ({ valid: true, width: 1000, height: 1500, sha256: 'b'.repeat(64) }) });
   const result = await service.run(request());
   assert.equal(result.success, false);
   assert.match(result.error, /does not match/);
-  assert.equal(service.writes(), 0);
+  assert.equal(service.writes(), 1);
+  assert.deepEqual(service.getBatches(), []);
 });
 
 test('final exporter fails closed for a missing saved Pin or a mismatched URL', async () => {
   for (const getPins of [() => [], () => [{ ...makePin(), imageQa: { publicValidatedUrl: 'https://other.example/a.jpg' } }]]) {
     const service = harness({ getPins });
     assert.equal((await service.run(request())).success, false);
-    assert.equal(service.writes(), 0);
+    assert.equal(service.writes(), 1);
+    assert.deepEqual(service.getBatches(), []);
   }
 });
 
@@ -167,8 +338,22 @@ test('export manifests remain unconfirmed, account-bound and complete after file
 test('repeated export is blocked while a previous result is unresolved', async () => {
   const service = harness();
   assert.equal((await service.run(request())).success, true);
-  assert.equal((await service.run(request())).success, false);
+  const blocked = await service.run(request());
+  assert.equal(blocked.success, false);
+  assert.equal(blocked.duplicateDownloadAvailable, true);
   assert.equal(service.writes(), 1);
+});
+
+test('an existing export can be downloaded again without creating another delivery attempt', async () => {
+  const service = harness();
+  const first = await service.run(request());
+  const copy = await service.run({ ...request(), redownloadExisting: true });
+  assert.equal(first.success, true);
+  assert.equal(copy.success, true);
+  assert.equal(copy.redownloaded, true);
+  assert.equal(copy.batchId, first.batchId);
+  assert.equal(service.writes(), 2);
+  assert.equal(service.getBatches().length, 1);
 });
 
 test('a different account is not blocked by another account export', async () => {

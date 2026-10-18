@@ -196,6 +196,7 @@ export default function PerformanceIntelligence({ articles = [], refreshArticles
               <option value={90}>90 days</option>
             </select>
             <Button onClick={refreshAll} disabled={!!busy}><RefreshCw className={`h-4 w-4 ${busy === "refresh" ? "animate-spin" : ""}`} />Refresh</Button>
+            <Button onClick={()=>setActiveScreen('pin-publishing-research')}><Search className="h-4 w-4" />Pinterest Profile Audit</Button>
           </div>
         }
       >

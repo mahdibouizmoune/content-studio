@@ -5,8 +5,8 @@ const path = require('path');
 const { createHash } = require('crypto');
 const opentype = require('opentype.js');
 
-const PIN_WIDTH = 1000;
-const PIN_HEIGHT = 1500;
+const PIN_WIDTH = 1080;
+const PIN_HEIGHT = 1920;
 
 const FONT_DEFINITIONS = {
   'serif-sans': {
@@ -279,13 +279,13 @@ function buildOverlaySvg({ text, placement = 'middle', font = 'serif-sans', font
   const ctaPath = ctaTypeface.getPath(ctaText, ctaTextX, ctaTextBaseline, ctaFontSize, { kerning: true }).toPathData(2);
 
   const panelMarkup = isMagazine
-    ? `<rect x="0" y="0" width="${PIN_WIDTH}" height="${Math.min(410, top + panelHeight + 22)}" fill="#fffaf2"/><rect x="422" y="${Math.min(382, top + panelHeight - 2)}" width="156" height="6" rx="3" fill="#7d9a68"/>`
+    ? `<rect x="0" y="0" width="${PIN_WIDTH}" height="${Math.min(410, top + panelHeight + 22)}" fill="#fffaf2"/><rect x="${(PIN_WIDTH - 156) / 2}" y="${Math.min(382, top + panelHeight - 2)}" width="156" height="6" rx="3" fill="#7d9a68"/>`
     : isOriginalJulyCenter
     ? `<rect x="${panelX}" y="${top}" width="${panelWidth}" height="${panelHeight}" rx="32" fill="${panelColor}" fill-opacity="0.56" stroke="#fffdf8" stroke-opacity="0.88" stroke-width="4"/>`
     : isIngredientCloseup
     ? `<rect x="${panelX}" y="${top}" width="${panelWidth}" height="${panelHeight}" rx="34" fill="${panelColor}" fill-opacity="0.58" stroke="#fffdf8" stroke-opacity="0.90" stroke-width="4"/>`
     : isRecipeCard
-    ? `<rect x="60" y="${top}" width="880" height="${panelHeight}" rx="28" fill="#fffaf2" fill-opacity="0.93" stroke="#ffffff" stroke-opacity="0.96" stroke-width="4"/><rect x="420" y="${top + panelHeight - 34}" width="160" height="6" rx="3" fill="#7d9a68"/>`
+    ? `<rect x="${panelX}" y="${top}" width="880" height="${panelHeight}" rx="28" fill="#fffaf2" fill-opacity="0.93" stroke="#ffffff" stroke-opacity="0.96" stroke-width="4"/><rect x="${(PIN_WIDTH - 160) / 2}" y="${top + panelHeight - 34}" width="160" height="6" rx="3" fill="#7d9a68"/>`
     : isListicle
     ? `<rect x="${panelX}" y="${top}" width="${panelWidth}" height="${panelHeight}" rx="20" fill="${panelColor}" fill-opacity="0.64" stroke="#fffdf8" stroke-opacity="0.86" stroke-width="4"/>`
     : usesEditorialTop

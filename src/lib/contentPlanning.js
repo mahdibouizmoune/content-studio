@@ -1,53 +1,8 @@
-const stopWords = new Set([
-  "a", "an", "and", "are", "as", "at", "be", "best", "by", "for", "from", "how", "in", "into", "is", "it", "of", "on", "or", "that", "the", "this", "to", "with", "you", "your"
-]);
-
-export function normalizeTopic(value = "") {
-  return String(value)
-    .toLowerCase()
-    .replace(/https?:\/\/\S+/g, " ")
-    .replace(/[^a-z0-9\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-export function topicTokens(value = "") {
-  return normalizeTopic(value)
-    .split(" ")
-    .map((token) => token.trim())
-    .filter((token) => token.length > 2 && !stopWords.has(token));
-}
+import { normalizeTopic, topicTokens } from "../../electron/article-intake.mjs";
+export { normalizeTopic, topicTokens, detectCannibalization } from "../../electron/article-intake.mjs";
 
 function unique(items = []) {
   return [...new Set(items.map((item) => String(item || "").trim()).filter(Boolean))];
-}
-
-function overlapScore(left = [], right = []) {
-  if (!left.length || !right.length) return 0;
-  const rightSet = new Set(right);
-  const overlap = left.filter((token) => rightSet.has(token)).length;
-  return Math.round((overlap / Math.max(left.length, right.length)) * 100);
-}
-
-export function detectCannibalization(title = "", articles = [], options = {}) {
-  const threshold = Number(options.threshold || 62);
-  const sourceTokens = topicTokens(title);
-  const normalizedTitle = normalizeTopic(title);
-  return (articles || [])
-    .map((article) => {
-      const existingTitle = article.generatedTitle || article.title || "";
-      const score = normalizedTitle && normalizeTopic(existingTitle) === normalizedTitle
-        ? 100
-        : overlapScore(sourceTokens, topicTokens(existingTitle));
-      return {
-        article,
-        score,
-        reason: score === 100 ? "Exact title match" : "Topic overlap"
-      };
-    })
-    .filter((match) => match.score >= threshold)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 5);
 }
 
 export function buildClusterPlan(seedTopic = "", settings = {}, count = 10) {

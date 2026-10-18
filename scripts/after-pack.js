@@ -76,8 +76,8 @@ async function obfuscateAppAsar(context) {
     const electronDir = path.join(tempDir, 'electron');
     if (fs.existsSync(electronDir)) {
       const electronFiles = await walk(electronDir);
-      for (const filePath of electronFiles.filter((file) => file.endsWith('.js'))) {
-        await obfuscateFile(filePath, { renameGlobals: true, reservedNames: [] });
+      for (const filePath of electronFiles.filter((file) => /\.(?:js|mjs)$/.test(file))) {
+        await obfuscateFile(filePath, { renameGlobals: !filePath.endsWith('.mjs'), reservedNames: [] });
       }
     }
 
@@ -96,7 +96,7 @@ async function obfuscateAppAsar(context) {
 
     await fsp.rm(appAsar, { force: true });
     await asar.createPackageWithOptions(tempDir, appAsar, {
-      unpackDir: 'node_modules/{sharp,@img}'
+      unpackDir: 'node_modules/{sharp,@img,tesseract.js,tesseract.js-core,@tesseract.js-data}'
     });
     const { headerString } = asar.getRawHeader(appAsar);
     return {

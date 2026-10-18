@@ -28,6 +28,7 @@ import { applyAffiliateLinksToArticle } from "@/lib/affiliateLinks.mjs";
 import { buildListiclePrompt, parseItemCountFromTitle, parsePromisedRecipeCount } from "@/prompts";
 import { buildArticleBrief } from "@/lib/articleBrief.mjs";
 import { buildArticleQualityReport } from "@/lib/articleQuality.mjs";
+import { checkpointArticleDraft, checkpointParallelTasks } from "@/lib/generationCheckpoint.mjs";
 import { detectCannibalization } from "@/lib/contentPlanning";
 import { applyReaderRetentionElements } from "@/lib/readerRetention.mjs";
 
@@ -393,6 +394,7 @@ export default function Queue({ articles, settings, refreshArticles, setActiveSc
     const jobKey = `article:${article.id}:gen`;
     let workingArticle = { ...article, articleBrief: settingsForGen.articleBrief };
     let checkpoint = { ...(article.generationCheckpoint || {}) };
+    const resumingSavedDraft = Boolean(checkpoint.content);
 
     if (isRecipeCollection) {
       const listicleItemCount = promisedRecipeCount || parseItemCountFromTitle(article.title);
@@ -404,8 +406,11 @@ export default function Queue({ articles, settings, refreshArticles, setActiveSc
     settingsForGen.articleType = isRecipeCollection ? "listicle" : (article.type || "article");
     settingsForGen.articlePrompt = preparePrompt(settingsForGen.articlePrompt, settingsForGen);
 
-    const affiliateProvider = settingsForGen.affiliateProvider || "impact";
-    const impactReady = Boolean(settingsForGen.impactAccountSid && settingsForGen.impactAuthToken);
+    settingsForGen.affiliateProvider = "amazon";
+    settingsForGen.affiliateProviderFallback = false;
+    settingsForGen.affiliateLinks = (settingsForGen.affiliateLinks || []).filter((item) => item.source !== "impact");
+    const affiliateProvider = "amazon";
+    const impactReady = false;
     const exactAmazonProductReady = (settingsForGen.affiliateLinks || []).some((item) =>
       item?.enabled !== false
       && item?.source === "amazon"
@@ -441,7 +446,7 @@ export default function Queue({ articles, settings, refreshArticles, setActiveSc
       };
       const workflowStatus = workflowStatusForGenerationStep(stage);
       workingArticle = {
-        ...workingArticle,
+        ...checkpointArticleDraft(workingArticle, checkpoint),
         queueStatus: deriveLegacyQueueStatus(workflowStatus),
         workflowStatus,
         generationStep: stage,
@@ -453,7 +458,7 @@ export default function Queue({ articles, settings, refreshArticles, setActiveSc
 
     try {
       let baseContent = checkpoint.content || "";
-      if (!baseContent) {
+      if (!baseContent || checkpoint.collectionQualityWarning) {
         setGenerationStage(`Generating article: ${article.title} (1/${totalStages})`, 1, totalStages);
         await waitWhilePaused(() => saveCheckpoint("paused-before-article"));
         const generated = await electronAPI.generateArticle({ title: article.title, settings: settingsForGen, jobKey });
@@ -463,12 +468,25 @@ export default function Queue({ articles, settings, refreshArticles, setActiveSc
           recipeCollection: generated.recipeCollection || null,
           qualityPassApplied: !!generated.qualityPassApplied,
           recipeCardRepairApplied: !!generated.recipeCardRepairApplied,
-          recipeCardQualityWarning: generated.recipeCardQualityWarning || ""
+          recipeCardQualityWarning: generated.recipeCardQualityWarning || "",
+          collectionQualityWarning: generated.collectionQualityWarning || "",
+          editorialChecks: generated.editorialChecks || null
         });
       }
+      if (checkpoint.collectionQualityWarning) throw new Error(`Saved draft needs the promised recipe collection repaired: ${checkpoint.collectionQualityWarning}`);
 
-      const affiliateDiscoveryTask = affiliateDiscoveryEnabled
-        ? electronAPI.discoverAffiliates({
+      const recipeReady = await electronAPI.prepareArticleRecipe({ article: { ...article, content: baseContent }, settings: settingsForGen, repair: resumingSavedDraft || !checkpoint.recipeCardQualityWarning, jobKey: `${jobKey}:recipe-validation` });
+      baseContent = finalizeArticleContent(recipeReady.patch.content, article.title, settingsForGen);
+      await saveCheckpoint("recipe-validation", {
+        content: baseContent,
+        recipeCardRepairApplied: recipeReady.repaired || checkpoint.recipeCardRepairApplied,
+        recipeCardQualityWarning: recipeReady.patch.recipeCardQualityWarning || ""
+      });
+      if (!recipeReady.success) throw new Error(recipeReady.patch.recipeCardQualityWarning || "Recipe needs review before images are generated.");
+
+      const affiliateDiscoveryTask = async () => {
+        if (checkpoint.affiliateDiscoveryResult) return checkpoint.affiliateDiscoveryResult;
+        const result = await electronAPI.discoverAffiliates({
             article: { ...article, content: baseContent },
             settings: settingsForGen,
             jobKey: `article:${article.id}:affiliate`
@@ -476,8 +494,10 @@ export default function Queue({ articles, settings, refreshArticles, setActiveSc
             success: false,
             affiliates: [],
             error: error.message || "Affiliate discovery failed."
-          }))
-        : null;
+          }));
+        if (result.success) await saveCheckpoint("affiliate-planning", { affiliateDiscoveryResult: result });
+        return result;
+      };
 
       let generatedTitle = checkpoint.generatedTitle || "";
       let featuredImagePrompt = checkpoint.featuredImagePrompt || "";
@@ -502,8 +522,9 @@ export default function Queue({ articles, settings, refreshArticles, setActiveSc
               settings: settingsForGen,
               jobKey: `${jobKey}:featured-prompt`
             });
-        [generatedTitle, featuredImagePrompt] = await Promise.all([titleTask, featuredPromptTask]);
-        await saveCheckpoint("content-planning", { generatedTitle, featuredImagePrompt });
+        const planned = await checkpointParallelTasks({ generatedTitle: titleTask, featuredImagePrompt: featuredPromptTask },
+          (patch) => saveCheckpoint("content-planning", patch));
+        ({ generatedTitle, featuredImagePrompt } = planned);
       }
 
       let featured = checkpoint.featured || null;
@@ -533,9 +554,11 @@ export default function Queue({ articles, settings, refreshArticles, setActiveSc
               jobKey: `${jobKey}:image-prompts`
             })
           : Promise.resolve(prompts);
-        [featured, prompts] = await Promise.all([featuredTask, imagePromptsTask]);
+        const planned = await checkpointParallelTasks({ featured: featuredTask, imagePrompts: imagePromptsTask },
+          (patch) => saveCheckpoint("media-planning", patch));
+        featured = planned.featured;
+        prompts = planned.imagePrompts;
         if (featured?.ratioNotice) setProgress(featured.ratioNotice);
-        await saveCheckpoint("media-planning", { featured, imagePrompts: prompts });
       }
 
       let images = Array.isArray(checkpoint.images) ? [...checkpoint.images] : [];
@@ -644,7 +667,7 @@ export default function Queue({ articles, settings, refreshArticles, setActiveSc
         const affiliateStage = totalStages;
         setGenerationStage(`Finding the best affiliate products: ${article.title} (${affiliateStage}/${totalStages})`, affiliateStage, totalStages);
         await waitWhilePaused();
-        const discovery = await affiliateDiscoveryTask;
+        const discovery = await affiliateDiscoveryTask();
         if (!discovery.success && /cancelled/i.test(discovery.error || "")) throw new Error("Cancelled by user");
         affiliateDiscovery = {
           status: discovery.success ? (discovery.affiliates?.length ? "applied" : "no-match") : "error",
@@ -688,6 +711,8 @@ export default function Queue({ articles, settings, refreshArticles, setActiveSc
         settingsForGen
       ).content;
 
+      const finalRecipe = await electronAPI.prepareArticleRecipe({ article: { ...article, content: baseContent, generatedTitle }, settings: settingsForGen, repair: false });
+      if (!finalRecipe.success) throw new Error(finalRecipe.patch.recipeCardQualityWarning || "Final recipe validation failed.");
       const completedArticle = {
         ...workingArticle,
         content: baseContent,
@@ -715,12 +740,14 @@ export default function Queue({ articles, settings, refreshArticles, setActiveSc
             notice: image.ratioNotice,
             model: settingsForGen.imageModel
           })),
-        queueStatus: "completed",
+        queueStatus: checkpoint.recipeCardQualityWarning ? "error" : "completed",
         workflowStatus: "needs-review",
+        recipeRequired: true,
         editorialQualityPassApplied: !!checkpoint.qualityPassApplied,
         recipeCardRepairApplied: !!checkpoint.recipeCardRepairApplied,
-        recipeCardQualityWarning: checkpoint.recipeCardQualityWarning || "",
-        errorMessage: "",
+        recipeCardQualityWarning: "",
+        recipeValidation: finalRecipe.patch.recipeValidation,
+        errorMessage: checkpoint.recipeCardQualityWarning || "",
         generationStep: "",
         generationCheckpoint: null,
         internalLinks,

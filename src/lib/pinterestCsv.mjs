@@ -3,7 +3,7 @@ export const PINTEREST_SAFE_KEYWORD_CHARACTERS = 300;
 export const PINTEREST_SCHEDULE_WINDOW_DAYS = 30;
 export const PINTEREST_SCHEDULE_WINDOW_MS = PINTEREST_SCHEDULE_WINDOW_DAYS * 24 * 60 * 60 * 1000;
 export const PINTEREST_MIN_SCHEDULE_SPACING_MS = 15 * 60 * 1000;
-export const PINTEREST_SCHEDULE_LEAD_MS = 6 * 60 * 60 * 1000;
+export const PINTEREST_SCHEDULE_LEAD_MS = 10 * 60 * 1000;
 const PINTEREST_SCHEDULE_SAFETY_MS = 5 * 60 * 1000;
 
 export function isWithinPinterestScheduleWindow(value, now = Date.now()) {
@@ -27,15 +27,15 @@ export function boundPinterestScheduleDates(values = [], now = Date.now()) {
   };
 }
 
-export function fitPinterestSchedule({ count = 0, start = null, intervalMinutes = 120, now = Date.now() } = {}) {
+export function fitPinterestSchedule({ count = 0, start = null, intervalMinutes = 90, now = Date.now() } = {}) {
   const total = Math.max(0, Math.min(2000, Math.floor(Number(count) || 0)));
   const current = now instanceof Date ? now.getTime() : Number(now);
   if (!total || !Number.isFinite(current)) {
     return { dates: [], intervalMinutes: 0, startAdjusted: false, intervalAdjusted: false };
   }
-  const earliest = current + PINTEREST_SCHEDULE_LEAD_MS;
+  const earliest = Math.ceil((current + PINTEREST_SCHEDULE_LEAD_MS) / 60000) * 60000;
   const latest = current + PINTEREST_SCHEDULE_WINDOW_MS - PINTEREST_SCHEDULE_SAFETY_MS;
-  const requestedInterval = Math.max(PINTEREST_MIN_SCHEDULE_SPACING_MS, Math.round(Number(intervalMinutes || 120) * 60 * 1000));
+  const requestedInterval = Math.max(PINTEREST_MIN_SCHEDULE_SPACING_MS, Math.round(Number(intervalMinutes || 90) * 60 * 1000));
   const maximumInterval = total > 1
     ? Math.max(PINTEREST_MIN_SCHEDULE_SPACING_MS, Math.floor(((latest - earliest) / (total - 1)) / PINTEREST_MIN_SCHEDULE_SPACING_MS) * PINTEREST_MIN_SCHEDULE_SPACING_MS)
     : requestedInterval;

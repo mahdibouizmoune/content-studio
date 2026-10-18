@@ -1,5 +1,5 @@
-import { FileText, ListOrdered } from "lucide-react";
-import SectionHeader from "@/components/SectionHeader";
+import { ArrowRight, Check, FileText, ListOrdered } from "lucide-react";
+import { Button } from "@/components/ui";
 
 const modes = [
   { id: "article", title: "Article", icon: FileText, copy: "Classic single-topic articles with featured and optional in-text images." },
@@ -13,9 +13,7 @@ export default function ModeSelector({ mode, setMode, settings, saveSettings, se
 
   return (
     <section className="animate-fade-in">
-      <SectionHeader eyebrow="Generation mode" title="Choose the writing flow">
-        Pick the default content shape for new queued titles.
-      </SectionHeader>
+      <h3 className="mb-4 text-base font-semibold text-ink">Writing format</h3>
 
       <div className="grid gap-4 lg:grid-cols-2">
         {modes.map((item) => {
@@ -26,25 +24,21 @@ export default function ModeSelector({ mode, setMode, settings, saveSettings, se
               key={item.id}
               type="button"
               onClick={() => setMode(item.id)}
-              className={`glass rounded-lg p-6 text-left shadow-panel transition hover:-translate-y-0.5 ${
-                active ? "ring-4 ring-violet-200" : "hover:bg-white"
-              }`}
+              aria-pressed={active}
+              className={`writing-format ${active ? "is-selected" : ""}`}
             >
-              <div className={`mb-5 grid h-12 w-12 place-items-center rounded-md ${active ? "bg-gradient-to-br from-indigo-500 to-purple-600 text-white" : "bg-violet-50 text-violet-600"}`}>
-                <Icon className="h-6 w-6" />
-              </div>
-              <h3 className="text-2xl font-black text-ink">{item.title}</h3>
-              <p className="mt-2 text-sm leading-6 text-ink/65">{item.copy}</p>
-              <div className="mt-5 text-sm font-bold text-violet-700">{active ? "Selected" : "Select mode"}</div>
+              <div className="mb-3 flex items-center justify-between"><Icon size={21} className="text-slate-500" /><span className="format-check">{active ? <Check size={13} /> : null}</span></div>
+              <h3 className="text-base font-semibold text-ink">{item.title}</h3>
+              <p className="mt-1 text-sm leading-6 text-slate-500">{item.copy}</p>
             </button>
           );
         })}
       </div>
 
-      <div className="mt-5 grid gap-4 lg:grid-cols-[1fr_auto]">
-        <div className="glass rounded-lg p-5 shadow-panel">
-          <h3 className="text-lg font-black text-ink">Listicle category</h3>
-          <div className="mt-4 grid gap-2 sm:grid-cols-4">
+      <div className="mt-6 flex flex-wrap items-end justify-between gap-5 border-t border-slate-200 pt-5">
+        <div className="min-w-0">
+          <h3 className="mb-3 text-sm font-semibold text-ink">Listicle category</h3>
+          <div className="category-segments flex flex-wrap gap-1" role="group" aria-label="Listicle category">
             {[
               ["default", "Default"],
               ["food", "Food"],
@@ -55,23 +49,20 @@ export default function ModeSelector({ mode, setMode, settings, saveSettings, se
                 key={id}
                 type="button"
                 onClick={() => setCategory(id)}
-                className={`rounded-md border px-3 py-2 text-sm font-bold transition ${
-                  settings.listicleCategory === id ? "border-violet-500 bg-gradient-to-r from-indigo-500 via-violet-500 to-purple-600 text-white" : "border-slate-200 bg-white text-slate-800 hover:bg-slate-50"
-                }`}
+                aria-pressed={settings.listicleCategory === id}
+                className={`category-segment ${settings.listicleCategory === id ? "is-selected" : ""}`}
               >
                 {label}
               </button>
             ))}
           </div>
         </div>
-        <button
-          type="button"
+        <Button
           onClick={() => openArticlesStage ? openArticlesStage("add") : setActiveScreen("articles")}
-          className="rounded-lg bg-ink px-6 py-4 text-left font-black text-white shadow-panel transition hover:bg-ink/90 lg:min-w-56"
         >
           Add titles
-          <span className="mt-1 block text-sm font-semibold text-white/70">Queue the next batch</span>
-        </button>
+          <ArrowRight size={16} />
+        </Button>
       </div>
     </section>
   );

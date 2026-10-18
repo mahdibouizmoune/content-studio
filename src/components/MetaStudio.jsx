@@ -51,6 +51,8 @@ function hasReusableMetaAsset(asset = {}) {
 function hasPlatformMetaAssets(assets = []) {
   return (Array.isArray(assets) ? assets : []).some((asset) => (
     hasReusableMetaAsset(asset)
+    && asset.sourceKind === "pin"
+    && Boolean(asset.sourcePinId && asset.sourceSha256 && asset.sourceFingerprint)
     && asset.id === "meta-social-portrait"
     && Number(asset.width || 0) === 1080
     && Number(asset.height || 0) === 1350
@@ -116,30 +118,14 @@ function pinterestImageSource(pin = {}) {
 
 function metaSourceCandidates(article, pins = []) {
   if (!article) return [];
-  const copySource = pinterestCopySource(article, pins);
-  const featured = {
-    id: "article:featured",
-    kind: "article-featured",
-    label: "Article Featured Image",
-    localPath: article.featuredImageLocalPath || "",
-    localUrl: article.featuredImageDisplay || article.featuredImageLocalUrl || "",
-    url: article.featuredImageDisplay || article.featuredImageLocalUrl || article.featuredImage || article.featuredImageRemoteUrl || "",
-    publicUrl: article.featuredImageRemoteUrl || article.featuredImage || "",
-    remoteUrl: article.featuredImageRemoteUrl || article.featuredImage || "",
-    pinterestTitle: copySource?.pinterestTitle || "",
-    pinterestDescription: copySource?.pinterestDescription || "",
-    pinterestKeywords: copySource?.pinterestKeywords || ""
-  };
   const seen = new Set();
-  return [
-    ...matchingPinsForArticle(article, pins).map(pinterestImageSource),
-    featured
-  ].filter((source) => source.localPath || displaySourceImage(source)).filter((source) => {
-    const key = String(source.publicUrl || source.remoteUrl || source.url || source.localUrl || source.localPath || source.id).toLowerCase();
-    if (!key || seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+  return matchingPinsForArticle(article, pins).map(pinterestImageSource)
+    .filter((source) => source.localPath || displaySourceImage(source))
+    .filter((source) => {
+      if (seen.has(source.pinId)) return false;
+      seen.add(source.pinId);
+      return true;
+    });
 }
 
 function sourceContext(source, article) {
@@ -153,50 +139,10 @@ function sourceContext(source, article) {
   };
 }
 
-function freeMetaContent(source, article, goal = "traffic") {
-  const context = sourceContext(source, article);
-  const title = context.title || "Recipe idea";
-  const description = context.description || "Find the complete recipe, ingredients, and instructions on the blog.";
-  const tags = String(context.keywords || "")
-    .split(",")
-    .map((tag) => tag.trim().replace(/^#/, "").replace(/[^a-zA-Z0-9]/g, ""))
-    .filter(Boolean)
-    .slice(0, 8)
-    .map((tag) => `#${tag}`);
-  const instagramTags = tags.length ? tags : ["#EasyRecipes", "#RecipeIdeas", "#HomeCooking"];
-  return {
-    campaignTitle: title,
-    strategy: {
-      contentPillar: "Recipe discovery",
-      audienceIntent: goal,
-      originalityAngle: "Reuse the approved Pinterest angle with platform-ready formatting.",
-      recommendedFormat: "Facebook feed and Instagram feed",
-      whyNow: "Existing published article and approved Pinterest creative",
-      evidenceConfidence: "medium"
-    },
-    facebook: {
-      primaryPost: `${title}\n\n${description}\n\nSee the complete recipe, ingredients, and instructions on the blog.`,
-      shortPost: `${title}\n\n${description}`,
-      groupPost: `${title}\n\n${description}\n\nWould you add this to your meal plan?`,
-      reelCaption: `${title}. See the complete recipe on the blog.`,
-      linkHeadline: title,
-      cta: "View the complete recipe",
-      hashtags: tags.slice(0, 2),
-      imageAltText: title
-    },
-    instagram: {
-      feedCaption: `${title}\n\n${description}\n\nSave this idea, then use the link in the profile for the complete recipe.`,
-      reelCaption: `${title}\n\nSave this recipe idea for later.`,
-      reelHook: title,
-      reelScenes: [],
-      reelVoiceover: description,
-      reelProductionNotes: "Use the resized existing image. No new image generation is required.",
-      carouselSlides: [],
-      cta: "Save this recipe and visit the link in the profile.",
-      hashtags: instagramTags,
-      imageAltText: title
-    }
-  };
+async function freeMetaContent(source, article) {
+  const result = await electronAPI.getMetaCaptionDraft({ article, source: source || {} });
+  if (!result?.success) throw new Error(result?.error || 'Could not prepare recipe captions.');
+  return result.content;
 }
 
 function parseScheduleDate(value) {
@@ -242,6 +188,7 @@ function projectPack({ projectId, article, goal, content, imageAssets, source })
     articleId: article?.id || "",
     articleTitle: title,
     sourceUrl: article?.wordpressPostUrl || article?.sourceUrl || "",
+    includeSourceLink: false,
     campaignStyle: `meta-${goal}`,
     platforms: ["instagram", "facebook"],
     createdAt: new Date().toISOString(),
@@ -276,7 +223,6 @@ function projectPack({ projectId, article, goal, content, imageAssets, source })
 
 export default function MetaStudio({ articles, settings, activeScreen }) {
   const confirmAction = useConfirmDialog();
-  const completedArticles = useMemo(() => articles.filter((article) => article.queueStatus === "completed"), [articles]);
   const [query, setQuery] = useState("");
   const [articleId, setArticleId] = useState("");
   const [geo, setGeo] = useState("US");
@@ -285,6 +231,7 @@ export default function MetaStudio({ articles, settings, activeScreen }) {
   const [content, setContent] = useState(null);
   const [imageAssets, setImageAssets] = useState([]);
   const [sourcePins, setSourcePins] = useState([]);
+  const completedArticles = useMemo(() => articles.filter((article) => article.queueStatus === "completed" && metaSourceCandidates(article, sourcePins).length > 0), [articles, sourcePins]);
   const [selectedSourceId, setSelectedSourceId] = useState("");
   const [projects, setProjects] = useState([]);
   const [projectId, setProjectId] = useState("");
@@ -386,8 +333,10 @@ export default function MetaStudio({ articles, settings, activeScreen }) {
 
   useEffect(() => {
     if (!article || content) return;
-    setContent(freeMetaContent(copySource, article, goal));
-  }, [article, content, copySource, goal]);
+    let active = true;
+    freeMetaContent(copySource, article).then((draft) => { if (active) setContent(draft); }).catch((error) => { if (active) setStatus(error.message); });
+    return () => { active = false; };
+  }, [article, content, copySource]);
 
   function clearOutputForArticle(nextArticleId) {
     setArticleId(nextArticleId);
@@ -428,7 +377,7 @@ export default function MetaStudio({ articles, settings, activeScreen }) {
         setStatus(`${result.postCount} Facebook and Instagram posts are ready to edit.${failureNote}`);
         return;
       }
-      const exported = await electronAPI.exportRepurposeGhlRows?.({ headers: result.headers, rows: result.rows });
+      const exported = await electronAPI.exportRepurposeGhlRows?.({ headers: result.headers, rows: result.rows, includeSourceLink: false });
       setStatus(exported?.success
         ? `Combined GHL CSV saved with ${exported.rowCount || result.postCount} posts: ${exported.filePath}.${failureNote}`
         : exported?.error || "GHL export canceled.");
@@ -529,11 +478,11 @@ export default function MetaStudio({ articles, settings, activeScreen }) {
 
   async function reuseImage() {
     if (!article) return setStatus("Choose a completed article first.");
-    if (!selectedSource) return setStatus("This article does not have a Pinterest or featured image yet.");
+    if (!selectedSource) return setStatus("Generate a finished Pinterest Pin before repurposing it.");
     setWorking(true);
     setStatus("Cropping the selected image to one 1080 x 1350 Meta portrait with no new AI generation...");
     try {
-      const nextContent = content || freeMetaContent(copySource, article, goal);
+      const nextContent = content || await freeMetaContent(copySource, article);
       if (!content) setContent(nextContent);
       const pack = projectPack({ projectId, article, goal, content: nextContent, imageAssets, source: copySource });
       const result = await electronAPI.createRepurposeImageVariants?.({
@@ -648,11 +597,11 @@ export default function MetaStudio({ articles, settings, activeScreen }) {
 
   async function buildReadyGhlRows() {
     if (!article) throw new Error("Choose a completed article first.");
-    if (!imageSource && !imageAssets.some(hasReusableMetaAsset)) {
-      throw new Error("This article does not have a Pinterest or featured image yet.");
+    if (!imageSource || imageSource.kind !== "pin") {
+      throw new Error("Generate a finished Pinterest Pin before repurposing it.");
     }
 
-    const nextContent = content || freeMetaContent(copySource, article, goal);
+    const nextContent = content || await freeMetaContent(copySource, article);
     if (!content) setContent(nextContent);
     let nextAssets = imageAssets;
 
@@ -732,7 +681,9 @@ export default function MetaStudio({ articles, settings, activeScreen }) {
 
   async function prepareGhl() {
     if (!article) return setStatus("Choose a completed article first.");
-    const nextContent = content || freeMetaContent(copySource, article, goal);
+    let nextContent;
+    try { nextContent = content || await freeMetaContent(copySource, article); }
+    catch (error) { setStatus(error.message || 'Could not prepare recipe captions.'); return; }
     const nextQuality = scoreMetaContent(nextContent, {
       sourceUrl: article.wordpressPostUrl || article.sourceUrl || "",
       imageAssets
@@ -784,7 +735,7 @@ export default function MetaStudio({ articles, settings, activeScreen }) {
         ? { headers: ghlHeaders, rows: ghlRows }
         : await buildReadyGhlRows();
       setShowGhlEditor(true);
-      const result = await electronAPI.exportRepurposeGhlRows?.({ headers: prepared.headers, rows: prepared.rows });
+      const result = await electronAPI.exportRepurposeGhlRows?.({ headers: prepared.headers, rows: prepared.rows, includeSourceLink: false });
       setStatus(result?.success
         ? `GHL CSV saved with ${result.rowCount || prepared.rows.length} Facebook and Instagram posts: ${result.filePath}`
         : result?.error || "GHL export canceled.");
@@ -804,7 +755,7 @@ export default function MetaStudio({ articles, settings, activeScreen }) {
         ? { headers: ghlHeaders, rows: ghlRows }
         : await buildReadyGhlRows();
       setShowGhlEditor(true);
-      const result = await electronAPI.uploadRepurposeGhlRows?.({ headers: prepared.headers, rows: prepared.rows });
+      const result = await electronAPI.uploadRepurposeGhlRows?.({ headers: prepared.headers, rows: prepared.rows, includeSourceLink: false });
       if (result?.success) {
         const count = result.createdCount || prepared.rows.length;
         const verificationNote = result.unverifiedCount
@@ -834,13 +785,11 @@ export default function MetaStudio({ articles, settings, activeScreen }) {
   }), [article, content, imageAssets]);
 
   return (
-    <section className="animate-fade-in">
-      <SectionHeader eyebrow="Meta" title="Meta Studio">
-        Build original Facebook and Instagram campaigns from a finished article, then check every post before scheduling.
-      </SectionHeader>
+    <section className="meta-workspace animate-fade-in">
+      <SectionHeader eyebrow="Meta" title="Meta Studio" />
 
-      <div className="mb-5 space-y-4">
-        <div className="soft-card rounded-lg p-4">
+      <div className="meta-setup mb-5 grid min-w-0 items-start gap-5">
+        <div className="workspace-band min-w-0">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <div className="text-xs font-black uppercase text-indigo-600">Batch Workflow</div>
@@ -858,7 +807,6 @@ export default function MetaStudio({ articles, settings, activeScreen }) {
                 <input type="checkbox" className="mt-1 h-4 w-4 accent-violet-600" checked={selectedBulkSet.has(String(item.id))} onChange={() => toggleBulkArticle(item.id)} />
                 <span className="min-w-0">
                   <span className="block truncate text-sm font-black text-slate-900">{item.generatedTitle || item.title}</span>
-                  <span className={`mt-1 block truncate text-xs font-bold ${item.wordpressPostUrl || item.sourceUrl ? "text-emerald-700" : "text-amber-700"}`}>{item.wordpressPostUrl || item.sourceUrl || "No public article URL"}</span>
                 </span>
               </label>
             ))}
@@ -881,7 +829,7 @@ export default function MetaStudio({ articles, settings, activeScreen }) {
             </div>
           ) : null}
         </div>
-        <div className="soft-card rounded-lg p-4">
+        <div className="workspace-band min-w-0">
           <div className="mb-4 grid gap-3 md:grid-cols-[1fr_240px]">
             <label className="relative block">
               <Search className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" />
@@ -903,7 +851,6 @@ export default function MetaStudio({ articles, settings, activeScreen }) {
                   ) : null}
                 </div>
                 <h2 className="mt-1 text-lg font-black text-slate-900">{article.generatedTitle || article.title}</h2>
-                <p className="mt-1 truncate text-sm font-semibold text-slate-500">{article.wordpressPostUrl || article.sourceUrl || "Local article"}</p>
                 {articleProject?.autoCreated ? (
                   <p className="mt-2 text-sm font-semibold leading-6 text-slate-600">Facebook and Instagram copy were stored automatically. A matching finished Pinterest image is preferred for the shared Meta crop.</p>
                 ) : null}
@@ -941,13 +888,13 @@ export default function MetaStudio({ articles, settings, activeScreen }) {
                     ))}
                   </div>
                 ) : (
-                  <p className="mt-3 rounded-md bg-slate-50 p-3 text-sm font-semibold text-slate-500">This article does not have a finished Pinterest or featured image yet.</p>
+                  <p className="mt-3 rounded-md bg-slate-50 p-3 text-sm font-semibold text-slate-500">No finished Pinterest Pin is available.</p>
                 )}
               </div>
             </>
           ) : <EmptyState title="No completed articles">Complete an article first, then use it as the source for Meta content.</EmptyState>}
 
-          <div className="mt-4 grid gap-3">
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
             <Field label="Trend Country">
               <select className={inputClass} value={geo} onChange={(event) => setGeo(event.target.value)}>{countries.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
             </Field>
@@ -966,7 +913,7 @@ export default function MetaStudio({ articles, settings, activeScreen }) {
           {status ? <div className="mt-4 rounded-md bg-violet-50 px-3 py-2 text-sm font-bold text-violet-700 ring-1 ring-violet-100">{status}</div> : null}
         </div>
 
-        <div className="soft-card rounded-lg p-4">
+        <div className="workspace-band meta-campaign-library min-w-0">
           <h2 className="text-lg font-black text-slate-900">Campaign Library</h2>
           <p className="mt-1 text-sm font-semibold text-slate-500">Saved independently from Repurpose Studio.</p>
           <div className="mt-4 space-y-2">
@@ -1099,7 +1046,7 @@ export default function MetaStudio({ articles, settings, activeScreen }) {
           <div className="mb-5 grid gap-4">
             <div className="soft-card rounded-lg p-4">
               <h2 className="text-lg font-black text-slate-900">Shared Meta Image</h2>
-              <p className="mt-1 text-sm font-semibold text-slate-500">The selected Pinterest artwork is center-cropped once to 4:5 and shared by Facebook and Instagram. The article image is used only as a fallback.</p>
+              <p className="mt-1 text-sm font-semibold text-slate-500">The selected Pinterest artwork is center-cropped once to 4:5 and shared by Facebook and Instagram.</p>
               <div className="mt-4 flex items-center justify-between gap-3 rounded-md bg-slate-50 p-3">
                 <span className="text-sm font-bold text-slate-700">{imageSource?.label || "No image selected"}</span>
                 {imageSource ? <span className="rounded-full bg-emerald-100 px-2 py-1 text-xs font-black text-emerald-700">Selected automatically</span> : null}

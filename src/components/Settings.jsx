@@ -599,7 +599,7 @@ export default function Settings({ settings, saveSettings, refreshArticles, setA
       const connected = await electronAPI.getSettings();
       setDraft(connected);
       await saveSettings(connected);
-      setAnalyticsStatus(`Search Console connected. ${result.sites?.length || 0} properties found.`);
+      setAnalyticsStatus(result.warning || `Google connected. ${result.sites?.length || 0} Search Console properties found. Analytics report access is ready to test.`);
     } catch (error) {
       setAnalyticsStatus(error.message || "Google Search Console connection failed.");
     } finally {
@@ -677,11 +677,11 @@ export default function Settings({ settings, saveSettings, refreshArticles, setA
             </label>
             <label className="flex items-center justify-between gap-4 rounded-md bg-slate-50 p-4 font-bold text-slate-800 ring-1 ring-slate-100">
               <span><span className="block">Recipe Card</span><span className="text-sm font-medium text-slate-500">End card for recipe posts</span></span>
-              <input type="checkbox" className="h-5 w-5" checked={!!draft.recipeCardEnabled} onChange={(event) => update({ recipeCardEnabled: event.target.checked })} />
+              <input type="checkbox" className="h-5 w-5" checked disabled title="Required for every generated article" />
             </label>
             <label className="flex items-center justify-between gap-4 rounded-md bg-slate-50 p-4 font-bold text-slate-800 ring-1 ring-slate-100">
               <span><span className="block">Editorial Quality Pass</span><span className="text-sm font-medium text-slate-500">Consistency and usefulness review</span></span>
-              <input type="checkbox" className="h-5 w-5" checked={draft.smartQualityPass !== false} onChange={(event) => update({ smartQualityPass: event.target.checked })} />
+              <input type="checkbox" className="h-5 w-5" checked disabled title="Required editorial review" />
             </label>
             <label className="flex items-center justify-between gap-4 rounded-md bg-slate-50 p-4 font-bold text-slate-800 ring-1 ring-slate-100">
               <span><span className="block">Approve Outlines</span><span className="text-sm font-medium text-slate-500">Review before full generation</span></span>
@@ -772,15 +772,15 @@ export default function Settings({ settings, saveSettings, refreshArticles, setA
           icon={BarChart3}
           tone="icon-gradient-blue"
           title="Performance Connections"
-          subtitle="Search Console and Pinterest analytics"
+          subtitle="Google Analytics, Search Console and Pinterest"
           badge={draft.googleSearchConsoleConnected || draft.pinterestAnalyticsAccessToken ? "connected" : ""}
         >
           <div className="space-y-6">
             <div>
               <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <div className="font-black text-slate-900">Google Search Console</div>
-                  <div className="mt-1 text-sm font-medium text-slate-500">Use a Google Desktop OAuth client with Search Console API enabled.</div>
+                  <div className="font-black text-slate-900">Google Connection</div>
+                  <div className="mt-1 text-sm font-medium text-slate-500">Read-only access. Enable Google Analytics Data API and Search Console API for your Desktop OAuth client.</div>
                 </div>
                 {draft.googleSearchConsoleConnected ? <span className="rounded-md bg-emerald-50 px-2.5 py-1 text-xs font-black text-emerald-700 ring-1 ring-emerald-100">Connected</span> : null}
               </div>
@@ -811,6 +811,20 @@ export default function Settings({ settings, saveSettings, refreshArticles, setA
             </div>
 
             <div className="border-t border-slate-100 pt-5">
+              <h3 className="mb-3 font-black text-slate-900">Google Analytics 4</h3>
+              <div className="grid gap-4 md:grid-cols-2">
+                <Field label="Tracking ID" hint="Identification only. It does not grant access or install tracking on your website."><input className={inputClass} placeholder="G-XXXXXXXXXX" value={draft.googleAnalyticsMeasurementId || ''} onChange={(event) => update({ googleAnalyticsMeasurementId: event.target.value })} /></Field>
+                <Field label="GA4 property ID" hint="Numeric ID from Analytics Admin > Property details. Not the G- tracking ID."><input className={inputClass} inputMode="numeric" placeholder="123456789" value={draft.googleAnalyticsPropertyId || ''} onChange={(event) => update({ googleAnalyticsPropertyId: event.target.value })} /></Field>
+                <Field label="Analytics website"><input className={inputClass} placeholder="https://your-website.com" value={draft.googleAnalyticsSiteUrl || ''} onChange={(event) => update({ googleAnalyticsSiteUrl: event.target.value })} /></Field>
+                <div className="flex flex-wrap items-end gap-2"><Button variant="secondary" disabled={!!analyticsBusy || !draft.googleAnalyticsPropertyId || !draft.googleAnalyticsSiteUrl} onClick={async () => {
+                  setAnalyticsBusy('ga4'); setAnalyticsStatus('Reading Analytics reports...');
+                  try { await saveSettings(draft); const result = await electronAPI.refreshGoogleAnalytics(); if (!result.success) throw new Error(result.error); setAnalyticsStatus(`Analytics refreshed. ${result.recommendations?.length || 0} matching articles found.`); }
+                  catch (error) { setAnalyticsStatus(error.message); } finally { setAnalyticsBusy(''); }
+                }}><BarChart3 className="h-4 w-4" />Refresh Analytics</Button><Button variant="secondary" onClick={() => electronAPI.openExternalUrl('https://analytics.google.com/')}><ExternalLink className="h-4 w-4" />Analytics Admin</Button></div>
+              </div>
+            </div>
+
+            <div className="border-t border-slate-100 pt-5">
               <div className="mb-3 font-black text-slate-900">Pinterest Analytics</div>
               <div className="grid gap-4 md:grid-cols-[1fr_auto]">
                 <Field label="Pinterest access token" hint="Requires Pinterest analytics access. Stored encrypted.">
@@ -828,6 +842,12 @@ export default function Settings({ settings, saveSettings, refreshArticles, setA
               </div>
             </div>
             {analyticsStatus ? <div className="rounded-md bg-violet-50 px-3 py-2 text-sm font-bold text-violet-700 ring-1 ring-violet-100">{analyticsStatus}</div> : null}
+            <div className="border-t border-slate-100 pt-5">
+              <h3 className="font-black text-slate-900">Free API Options</h3>
+              <div className="mt-3 divide-y divide-slate-100 text-sm">
+                {[['Gemini Developer API', 'Optional free-tier text research with quotas. Free-tier content may be used to improve Google products. The app currently uses its existing Replicate text provider; a Gemini model through Replicate is not free.', 'https://ai.google.dev/gemini-api/docs/pricing'], ['Google Search Console API', 'Free search clicks, impressions and queries. Connected above.', 'https://developers.google.com/webmaster-tools/pricing'], ['Google Analytics Data API', 'Website session and engagement reports. Read-only connection above; quotas apply.', 'https://developers.google.com/analytics/devguides/reporting/data/v1/quotas']].map(([name, detail, url]) => <div key={name} className="flex items-start justify-between gap-3 py-3"><div><div className="font-bold text-slate-900">{name}</div><p className="mt-1 text-slate-500">{detail}</p></div><button type="button" className="shrink-0 p-2 text-indigo-600" title={`Open ${name} documentation`} onClick={() => electronAPI.openExternalUrl(url)}><ExternalLink className="h-4 w-4" /></button></div>)}
+              </div>
+            </div>
           </div>
         </SettingPanel>
 
@@ -956,7 +976,7 @@ export default function Settings({ settings, saveSettings, refreshArticles, setA
                   </Field>
                 </div>
                 <div className="mt-3 grid gap-3 md:grid-cols-3">
-                  <label className="flex items-center gap-2 rounded-md bg-slate-50 px-3 py-2 text-sm font-bold text-slate-700 ring-1 ring-slate-100"><input type="checkbox" checked={!!preset.recipeCardEnabled} onChange={(event) => updatePreset(index, { recipeCardEnabled: event.target.checked })} />Recipe card</label>
+                  <label className="flex items-center gap-2 rounded-md bg-slate-50 px-3 py-2 text-sm font-bold text-slate-700 ring-1 ring-slate-100"><input type="checkbox" checked disabled />Recipe card (required)</label>
                   <label className="flex items-center gap-2 rounded-md bg-slate-50 px-3 py-2 text-sm font-bold text-slate-700 ring-1 ring-slate-100"><input type="checkbox" checked={preset.requireOutlineApproval === true} onChange={(event) => updatePreset(index, { requireOutlineApproval: event.target.checked })} />Approve outline first</label>
                   <div className="flex justify-end"><Button variant="danger" onClick={() => update({ projectPresets: draft.projectPresets.filter((_, i) => i !== index) })}><Trash2 className="h-4 w-4" />Remove</Button></div>
                 </div>
@@ -987,7 +1007,7 @@ export default function Settings({ settings, saveSettings, refreshArticles, setA
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
               <Field label="Featured thumbnail image"><ImageRatioSelect value={draft.featuredImageRatio || "3:2"} onChange={(featuredImageRatio) => update({ featuredImageRatio })} /></Field>
               <Field label="In-article portrait for Pinterest"><ImageRatioSelect value={draft.intextImageRatio || "9:16"} onChange={(intextImageRatio) => update({ intextImageRatio })} /></Field>
-              <Field label="Pinterest pin"><ImageRatioSelect value={draft.pinterestPinRatio || "2:3"} onChange={(pinterestPinRatio) => update({ pinterestPinRatio })} /></Field>
+              <Field label="Pinterest pin"><ImageRatioSelect value={draft.pinterestPinRatio || "9:16"} onChange={(pinterestPinRatio) => update({ pinterestPinRatio })} /></Field>
               <Field label="Instagram portrait"><ImageRatioSelect value={draft.instagramPortraitRatio || "4:5"} onChange={(instagramPortraitRatio) => update({ instagramPortraitRatio })} /></Field>
               <Field label="Instagram Story or Reel"><ImageRatioSelect value={draft.instagramStoryRatio || "9:16"} onChange={(instagramStoryRatio) => update({ instagramStoryRatio })} /></Field>
               <Field label="Facebook feed"><ImageRatioSelect value={draft.facebookFeedRatio || "1.91:1"} onChange={(facebookFeedRatio) => update({ facebookFeedRatio })} /></Field>
@@ -1451,6 +1471,10 @@ export default function Settings({ settings, saveSettings, refreshArticles, setA
             <Field label="Unused generated media retention days" hint="Defaults to 7 days. Files still referenced by saved articles, Pins, social posts, or videos are protected.">
               <input className={inputClass} type="number" min="7" max="365" value={draft.mediaRetentionDays || 7} onChange={(event) => update({ mediaRetentionDays: Math.max(7, Number(event.target.value || 7)) })} />
             </Field>
+            <label className="flex items-center justify-between gap-4 rounded-md bg-slate-50 p-4 ring-1 ring-slate-100">
+              <span><span className="block font-black text-slate-900">WordPress Pin Cleanup</span><span className="mt-1 block text-sm font-medium text-slate-500">Remove unused app-uploaded Pins after 7 days. Pending imports, scheduled Pins, and article images are protected. Runs while the app is open.</span></span>
+              <input type="checkbox" className="h-5 w-5 shrink-0" checked={draft.wordpressPinCleanupEnabled !== false} onChange={(event) => update({ wordpressPinCleanupEnabled: event.target.checked })} />
+            </label>
             <Field label="Secure update feed URL">
               <input className={inputClass} type="url" value={draft.updateFeedUrl || ""} onChange={(event) => update({ updateFeedUrl: event.target.value })} placeholder="https://updates.example.com/content-studio" />
             </Field>

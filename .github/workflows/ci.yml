@@ -4,7 +4,6 @@ on:
   push:
     branches: [main, 'codex/**']
   pull_request:
-    branches: [main]
 
 permissions:
   contents: read
@@ -17,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest]
+        os: [windows-latest, ubuntu-latest, macos-latest]
 
     steps:
       - name: Check out source
@@ -40,3 +39,40 @@ jobs:
 
       - name: Build renderer
         run: npm run build
+
+      - name: Check production dependency advisories
+        run: npm audit --omit=dev --audit-level=moderate
+
+      - name: Check optional worker dependency advisories
+        run: npm audit --omit=dev --prefix worker --audit-level=moderate
+
+  wordpress-staging:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run test:wordpress
+
+  ui-regressions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:ui
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: ui-failure-screenshots
+          path: artifacts/*.png
+          if-no-files-found: ignore

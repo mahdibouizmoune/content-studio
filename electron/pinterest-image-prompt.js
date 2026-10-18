@@ -121,7 +121,7 @@ ${pinterestIngredientRealityRules(base)}
   return `${base}
 
 ${PINTEREST_FOOD_GUARDRAIL_MARKER}:
-- Use a high-resolution vertical 2:3 Pinterest composition designed to remain clear at mobile thumbnail size.
+- Use a high-resolution vertical 9:16 Pinterest composition designed to remain clear at mobile thumbnail size.
 ${subjectRules}
 - Render only the one quoted headline requested in the prompt. Keep it to 3-7 words in premium bold display lettering with clean kerning, balanced line breaks, high contrast, and generous safe margins. Spell every word exactly as quoted. Do not add a subtitle, badge, logo, watermark, URL, or extra lettering.
 - Set the headline directly over the photograph with a strong contrasting outline and restrained natural shadow. Do not draw a banner, ribbon, translucent strip, frosted panel, opaque box, or decorative frame behind it.
@@ -142,7 +142,7 @@ ${JULY_25_AI_MARKER}:
 - Choose a tight 30-45 degree view or tight overhead view that best reveals this specific dish. Keep the main food sharply focused with controlled shallow depth of field.
 - Reveal honest, appetizing texture that fits the recipe: browned edges, glossy sauce, tender interior, creamy layers, crisp crumbs, fresh garnish, or gentle steam only when factually appropriate.
 - Use bright diffused side-window light, natural shadows, true ingredient colors, realistic portions, and subtle home-cooked imperfections. Keep one plate or bowl edge visible so the food remains recognizable.
-- Preserve clean negative space behind the requested text panel without covering the hero bite. Keep all important food and text safely inside a vertical 2:3 mobile crop.
+- Preserve clean negative space behind the requested text panel without covering the hero bite. Keep all important food and text safely inside a vertical 9:16 mobile crop.
 - Show only ingredients and garnishes supported by the source prompt. No invented toppings, raw-looking cooked food, plastic texture, warped utensils, duplicate food, hands, faces, packaging, logos, watermarks, or extra text.
 - Create appetite and click curiosity through a clear cooking result and visible texture, never through misleading claims or visual exaggeration.`;
 }
@@ -179,7 +179,7 @@ function enhancePinterestOriginalJulyAiPrompt(prompt = '', overlayText = '') {
     .join(' ')
     .replace(/[.;:,\s]+$/, '');
 
-  return `${subject}. Create one full-bleed vertical 2:3 photograph with one finished dish, drink, jar, bowl, or serving as the unmistakable close-up hero.
+  return `${subject}. Create one full-bleed vertical 9:16 photograph with one finished dish, drink, jar, bowl, or serving as the unmistakable close-up hero.
 
 Render exactly this headline once: "${headline.toUpperCase()}". It is the only visible wording. Place it in the exact center middle in 2-4 balanced lines of large bold uppercase white modern sans-serif type inside a compact softly translucent rounded rectangle sampled from the food, with a thin warm-white border.
 
@@ -225,7 +225,7 @@ function enhancePinterestLegacyAiPrompt(prompt = '', placement = 'middle', overl
 
 ${allowCollage
     ? 'Create one cohesive vertical Pinterest collage with one dominant hero image and simple supporting panels.'
-    : 'Create one single full-bleed vertical 2:3 photograph. No collage, grid, split layout, inset, footer image, secondary panel, or step image.'}
+    : 'Create one single full-bleed vertical 9:16 photograph. No collage, grid, split layout, inset, footer image, secondary panel, or step image.'}
 
 ${base}
 
@@ -235,7 +235,7 @@ ${marker}:
 - Choose a tight 30-45 degree view or tight overhead view that best reveals this specific dish. Keep the main food sharply focused with controlled shallow depth of field.
 - Reveal honest, appetizing texture that fits the recipe: browned edges, glossy sauce, tender interior, creamy layers, crisp crumbs, fresh garnish, or gentle steam only when factually appropriate.
 - Use bright diffused side-window light, natural shadows, true ingredient colors, realistic portions, and subtle home-cooked imperfections. Keep one plate or bowl edge visible so the food remains recognizable.
-- Preserve clean negative space behind the requested text panel without covering the hero bite. Keep all important food and text safely inside a vertical 2:3 mobile crop.
+- Preserve clean negative space behind the requested text panel without covering the hero bite. Keep all important food and text safely inside a vertical 9:16 mobile crop.
 - Show only ingredients and garnishes supported by the source prompt. No invented toppings, raw-looking cooked food, plastic texture, warped utensils, duplicate food, hands, faces, packaging, logos, watermarks, or extra text.
 - Create appetite and click curiosity through a clear cooking result and visible texture, never through misleading claims or visual exaggeration.
 
@@ -284,7 +284,7 @@ function enhancePinterestPromptLedAiPrompt(prompt = '', allowCollage = false, ov
   return `${base}
 
 FINAL IDEOGRAM DELIVERY RULES:
-- Create one polished vertical 2:3 Pinterest Pin as a single finished composition.${allowCollage ? ' Preserve the deliberately requested collage structure.' : ' Use one full-bleed food photograph, not a collage, grid, inset, split layout, or footer image.'}
+- Create one polished vertical 9:16 Pinterest Pin as a single finished composition.${allowCollage ? ' Preserve the deliberately requested collage structure.' : ' Use one full-bleed food photograph, not a collage, grid, inset, split layout, or footer image.'}
 - Preserve the prompt's chosen typography, color, placement, and integrated text treatment. Do not replace them with a generic template or a plain white caption strip.${headline ? ` Render exactly this headline once: "${headline}". Do not rewrite it or add words.` : ''}
 - Keep the title bold, uppercase, geometric, and readable at phone-thumbnail size. Use no more than three centered lines, about 62-74% of the canvas width, and no more than 28% of the canvas height. Preserve the chosen transparent panel, center band, direct-text glow, or stacked-band treatment and keep the food visible beneath it. Never substitute thin serif lettering or a generic pale strip.
 - Add one compact call-to-action button near the bottom center containing exactly "GET THE RECIPE" in bold uppercase warm-white geometric sans-serif lettering. Make the button 34-44% of the canvas width and 6-8% of its height, with generous inner padding, softly rounded corners, a saturated color sampled from the food or a deep charcoal tone, a thin warm-white keyline, and a restrained natural shadow. Keep it 5-7% above the bottom edge inside the safe zone. It must look polished and eye-catching without covering the food.
@@ -359,7 +359,7 @@ function enhancePinterestAiTextPrompt(prompt = '', placement = 'middle', overlay
 ${base}
 
 PINTEREST IMAGE AND LETTERING BRIEF:
-- Create one high-resolution vertical 2:3 image of the exact finished recipe. Make it full-bleed, close, bright, natural, and instantly appetizing on a phone screen. ${layoutInstruction}
+- Create one high-resolution vertical 9:16 image of the exact finished recipe. Make it full-bleed, close, bright, natural, and instantly appetizing on a phone screen. ${layoutInstruction}
 ${pinterestPhotorealismRules(base)}
 - Render only this exact headline once: "${headline}". Copy every character exactly. Do not add punctuation or any other words.
 - Set it in ${lettering}, using one font and 2-4 balanced lines. Use clean kerning, tight readable line spacing, and large mobile-readable letters. Never use script, mixed fonts, warped letters, or 3D effects.

@@ -2,8 +2,8 @@ import { useState } from "react";
 import {
   BarChart3,
   CalendarDays,
-  CircleCheck,
   CircleDollarSign,
+  ChefHat,
   Facebook,
   FileClock,
   FileText,
@@ -14,6 +14,9 @@ import {
   ListTodo,
   Menu,
   Moon,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Search,
   Repeat2,
   Settings,
   ShieldCheck,
@@ -24,7 +27,7 @@ import {
 } from "lucide-react";
 import appLogo from "@/assets/content-studio-logo.png";
 
-function navigationGroups(flags = {}) {
+export function navigationGroups(flags = {}) {
   return [
   {
     id: "plan",
@@ -40,6 +43,7 @@ function navigationGroups(flags = {}) {
     label: "Create",
     items: [
       { id: "articles", label: "Articles", icon: FileText },
+      { id: "content-pipeline", label: "Content Pipeline", icon: FolderKanban },
       { id: "image-library", label: "Images", icon: ImageIcon },
       { id: "video-studio", label: "Video", icon: Video }
     ]
@@ -49,7 +53,9 @@ function navigationGroups(flags = {}) {
     label: "Distribute",
     items: [
       { id: "pin-creator", label: "Pinterest", icon: ImagePlus },
+      { id: "pin-publishing", label: "Pinterest Workspace", icon: CalendarDays },
       { id: "meta-studio", label: "Meta", icon: Facebook },
+      { id: "recipe-money-maker", label: "Recipe Money Maker", icon: ChefHat },
       ...(flags.campaignRecords ? [{ id: "campaigns", label: "Campaigns", icon: FolderKanban }] : [])
     ]
   },
@@ -68,6 +74,7 @@ function navigationGroups(flags = {}) {
     items: [
       { id: "connections", label: "Connections", icon: SlidersHorizontal },
       { id: "jobs", label: "Job Center", icon: ListTodo },
+      { id: "quality-studio", label: "Quality Studio", icon: ShieldCheck },
       { id: "settings", label: "Settings", icon: Settings },
       { id: "diagnostics", label: "Diagnostics", icon: ShieldCheck },
       ...(flags.runHistory ? [{ id: "run-history", label: "Run History", icon: FileClock }] : []),
@@ -86,14 +93,26 @@ const mobileControls = [
 ];
 
 function screenIsActive(activeScreen, itemId) {
+  if (itemId === 'pin-publishing') return activeScreen.startsWith('pin-publishing');
   if (itemId === "diagnostics") return activeScreen === "diagnostics";
   return activeScreen === itemId;
 }
 
-export default function Sidebar({ activeScreen, setActiveScreen, counts, theme, setTheme, settings }) {
+export default function Sidebar({ activeScreen, setActiveScreen, counts, theme, setTheme, settings, openArticleErrors }) {
   const isDark = theme === "dark";
   const [mobileMenu, setMobileMenu] = useState("");
+  const [query, setQuery] = useState("");
+  const [collapsed, setCollapsed] = useState(() => localStorage.getItem("studio-sidebar-collapsed") === "true");
   const groups = navigationGroups(settings?.featureFlags);
+  const filteredGroups = groups.map((group) => ({ ...group, items: group.items.filter((item) => `${group.label} ${item.label}`.toLowerCase().includes(query.trim().toLowerCase())) })).filter((group) => group.items.length);
+
+  function toggleCollapsed() {
+    setCollapsed((current) => {
+      localStorage.setItem("studio-sidebar-collapsed", String(!current));
+      return !current;
+    });
+    setQuery("");
+  }
 
   function selectScreen(screen) {
     setActiveScreen(screen);
@@ -106,36 +125,19 @@ export default function Sidebar({ activeScreen, setActiveScreen, counts, theme, 
 
   return (
     <>
-      <aside className="sticky top-0 hidden h-screen w-64 shrink-0 overflow-hidden border-r border-slate-800 bg-slate-950 p-4 text-white md:flex md:flex-col">
-        <div className="mb-4 flex items-center gap-3 px-1 pt-1">
-          <img src={appLogo} alt="Content Studio" className="h-11 w-11 rounded-md object-contain" />
-          <div className="min-w-0">
-            <h1 className="truncate whitespace-nowrap text-lg font-black leading-tight text-white">Content Studio</h1>
-            <p className="mt-0.5 text-xs font-semibold text-slate-400">Publishing workspace</p>
+      <aside className={`studio-sidebar ${collapsed ? "is-collapsed" : ""}`} aria-label="Workspace sidebar">
+        <div className="sidebar-brand">
+          <img src={appLogo} alt="Content Studio" className="h-9 w-9 shrink-0 rounded-md object-contain" />
+          <div className="sidebar-label min-w-0">
+            <h1 className="truncate whitespace-nowrap text-sm font-semibold">Content Studio</h1>
+            <p className="mt-0.5 text-[11px] text-slate-400">Publishing workspace</p>
           </div>
         </div>
-        <button
-          type="button"
-          onClick={() => setTheme(isDark ? "light" : "dark")}
-          className="mb-3 flex min-h-[40px] w-full items-center justify-center gap-2 rounded-md bg-slate-900 px-4 py-2 text-sm font-bold text-slate-200 ring-1 ring-white/10 transition-colors hover:bg-slate-800 hover:text-white"
-        >
-          {isDark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-          {isDark ? "Light" : "Dark"}
-        </button>
-        <div className="mb-3 grid grid-cols-2 divide-x divide-white/10 rounded-md bg-slate-900 ring-1 ring-white/10">
-          <div className="px-3 py-2">
-            <div className="text-base font-black">{counts.pending}</div>
-            <div className="text-[11px] font-bold text-slate-400">Queued</div>
-          </div>
-          <div className="px-3 py-2">
-            <div className="text-base font-black">{counts.completed}</div>
-            <div className="text-[11px] font-bold text-slate-400">Completed</div>
-          </div>
-        </div>
-        <nav className="min-h-0 flex-1 space-y-3 overflow-y-auto pb-2 pr-1" aria-label="Main navigation">
-          {groups.map((group) => (
+        {!collapsed ? <label className="sidebar-search"><Search size={15} aria-hidden="true" /><input aria-label="Find a workspace" placeholder="Find a workspace..." value={query} onChange={(event) => setQuery(event.target.value)} /></label> : null}
+        <nav className="min-h-0 flex-1 space-y-4 overflow-y-auto py-3" aria-label="Main navigation">
+          {filteredGroups.map((group) => (
             <div key={group.id}>
-              <div className="mb-1 px-3 text-[10px] font-black uppercase text-slate-500">{group.label}</div>
+              <div className="sidebar-group-label mb-1 px-3 text-[10px] font-semibold uppercase text-slate-400">{group.label}</div>
               <div className="space-y-0.5">
                 {group.items.map((item) => {
                   const Icon = item.icon;
@@ -146,34 +148,37 @@ export default function Sidebar({ activeScreen, setActiveScreen, counts, theme, 
                       key={item.id}
                       type="button"
                       onClick={() => selectScreen(item.id)}
-                      className={`group flex min-h-[38px] w-full items-center gap-3 rounded-md px-3 py-2 text-left text-sm font-bold transition-colors ${
-                        active ? "sidebar-nav-active bg-white text-slate-950 shadow-sm" : "text-slate-300 hover:bg-slate-900 hover:text-white"
-                      }`}
+                      aria-current={active ? "page" : undefined}
+                      aria-label={item.label}
+                      className={`sidebar-link ${active ? "sidebar-nav-active" : ""}`}
                       title={item.label}
                     >
-                      <Icon className={`h-[17px] w-[17px] ${active ? "text-indigo-600" : "text-slate-400 group-hover:text-slate-200"}`} />
-                      <span className="min-w-0 flex-1 truncate">{item.label}</span>
-                      {badge ? <span className="rounded-full bg-gradient-to-r from-indigo-600 to-violet-600 px-2 py-0.5 text-[10px] text-white">{badge}</span> : null}
+                      <Icon className="h-[17px] w-[17px] shrink-0" aria-hidden="true" />
+                      <span className="sidebar-label min-w-0 flex-1 truncate">{item.label}</span>
+                      {badge ? <span className="sidebar-label sidebar-badge">{badge}</span> : null}
                     </button>
                   );
                 })}
               </div>
             </div>
           ))}
+          {!filteredGroups.length ? <p className="px-3 text-xs text-slate-400" role="status">No matching workspace</p> : null}
         </nav>
         {counts.failed ? (
-          <div className="mt-2 rounded-md border border-rose-400/25 bg-rose-400/10 p-2 text-xs font-medium text-rose-100">
-            {counts.failed} article{counts.failed === 1 ? "" : "s"} need attention.
-          </div>
+          <button type="button" title="Review article errors" aria-label={`${counts.failed} articles need attention`} onClick={() => { selectScreen("articles"); openArticleErrors?.(); }} className="sidebar-label mt-2 rounded-md border border-rose-400/25 bg-rose-400/10 p-2 text-left text-xs font-medium text-rose-100">
+            {counts.failed} article{counts.failed === 1 ? " needs" : "s need"} attention.
+          </button>
         ) : null}
-        <div className="mt-2 flex shrink-0 items-center justify-between border-t border-white/10 pt-2 text-xs font-bold text-slate-400">
-          <span>Version {__APP_VERSION__}</span>
-          <CircleCheck className="h-4 w-4 text-emerald-400" />
+        <div className="sidebar-footer">
+          <span className="sidebar-label text-[11px] text-slate-400">Version {__APP_VERSION__}</span>
+          <button type="button" className="sidebar-icon" title={isDark ? "Switch to light theme" : "Switch to dark theme"} aria-label={isDark ? "Switch to light theme" : "Switch to dark theme"} onClick={() => setTheme(isDark ? "light" : "dark")}>{isDark ? <Sun size={16} /> : <Moon size={16} />}</button>
+          <button type="button" className="sidebar-icon" title={collapsed ? "Expand navigation" : "Collapse navigation"} aria-label={collapsed ? "Expand navigation" : "Collapse navigation"} aria-expanded={!collapsed} onClick={toggleCollapsed}>{collapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}</button>
         </div>
       </aside>
 
       {mobileMenu ? (
-        <div className="fixed inset-x-3 bottom-[68px] z-30 max-h-[60vh] overflow-auto rounded-lg border border-slate-200 bg-white p-3 shadow-panel md:hidden">
+        <div id="mobile-workspaces" className="mobile-workspaces fixed inset-x-3 bottom-[76px] z-30 max-h-[60vh] overflow-auto rounded-lg border border-slate-200 bg-white p-3 shadow-panel md:hidden" onKeyDown={(event) => { if (event.key === "Escape") setMobileMenu(""); }}>
+          <div className="mb-3 flex items-center justify-between text-sm font-semibold">Workspaces<button type="button" className="studio-icon-button" aria-label="Close workspaces" onClick={() => setMobileMenu("")}><PanelLeftClose size={16} /></button></div>
           {mobileGroups.map((group) => (
             <div key={group.id} className="mb-3 last:mb-0">
               <div className="mb-2 px-1 text-xs font-black uppercase text-slate-500">{group.label}</div>
@@ -185,6 +190,7 @@ export default function Sidebar({ activeScreen, setActiveScreen, counts, theme, 
                       key={item.id}
                       type="button"
                       onClick={() => selectScreen(item.id)}
+                      aria-current={screenIsActive(activeScreen, item.id) ? "page" : undefined}
                       className="flex min-h-14 items-center gap-2 rounded-md bg-slate-50 px-3 text-left text-sm font-bold text-slate-800 ring-1 ring-slate-100"
                     >
                       <Icon className="h-4 w-4 text-indigo-600" />
@@ -201,7 +207,7 @@ export default function Sidebar({ activeScreen, setActiveScreen, counts, theme, 
       <nav className="fixed inset-x-0 bottom-0 z-40 grid grid-cols-5 border-t border-slate-200 bg-white/95 p-1 shadow-panel backdrop-blur md:hidden" aria-label="Mobile navigation">
         {mobileControls.map((item) => {
           const Icon = item.icon;
-          const groupActive = item.group
+          const groupActive = item.id === "create" && activeScreen === "articles" ? false : item.group
             ? groups.find((group) => group.id === item.group)?.items.some((entry) => screenIsActive(activeScreen, entry.id))
             : item.groups
             ? groups.filter((group) => item.groups.includes(group.id)).some((group) => group.items.some((entry) => screenIsActive(activeScreen, entry.id)))
@@ -211,6 +217,8 @@ export default function Sidebar({ activeScreen, setActiveScreen, counts, theme, 
               key={item.id}
               type="button"
               onClick={() => item.screen ? selectScreen(item.screen) : setMobileMenu((current) => current === item.id ? "" : item.id)}
+              aria-expanded={item.screen ? undefined : mobileMenu === item.id}
+              aria-controls={item.screen ? undefined : "mobile-workspaces"}
               className={`relative flex min-h-14 min-w-0 flex-col items-center justify-center gap-1 rounded-md px-1 text-[10px] font-bold transition-colors ${
                 groupActive ? "bg-slate-950 text-white" : "text-slate-500 hover:bg-slate-100"
               }`}

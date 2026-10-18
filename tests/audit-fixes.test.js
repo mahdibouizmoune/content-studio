@@ -29,12 +29,16 @@ function memoryStore(initial = {}) {
     set store(value) { state = value; }
   };
 }
-function publisher({ get, post } = {}) {
+function publisher({ get, post, generateCard } = {}) {
   const requests = [];
   const store = memoryStore({ settings: { autoQueueOnPublish: false, postPublishQaEnabled: false } });
   let handler;
   const identity = (value) => value;
   const context = vm.createContext({
+    toAscii: require('../electron/ascii.js').toAscii,
+    validateRecipeCard: require('../electron/recipe-generation').validateRecipeCard,
+    prepareArticleRecipe: require('../electron/article-recipe-readiness').createRecipeReadinessService({ generateCard: generateCard || (async () => { throw new Error('Replicate API token is missing'); }) }),
+    removeArticleImpact: require('../electron/article-impact-cleanup').removeArticleImpact,
     Buffer, URL, Date, Number, String, Object, Array, Promise, Error, createHash, store, ...wordpress,
     setTimeout: (callback) => { callback(); },
     log: { warn() {}, error() {} },
@@ -59,7 +63,7 @@ function publisher({ get, post } = {}) {
   vm.runInContext(slice('function contentStudioStableId(', "secureIpcHandle('create-pinterest-pin',"), context);
   return { context, run: (article, url = 'https://site-a.example') => handler({}, { article, site: { url, username: 'mock', apiKey: 'mock' } }), requests, store };
 }
-const article = { id: 'article-1', title: 'Updated recipe', content: '<p>NEW body</p>', wordpressPostId: 42, wordpressPostUrl: 'https://site-a.example/recipe' };
+const article = { id: 'article-1', title: 'Updated recipe', content: '<p>NEW body</p><section id="recipe-card"><p>Prep Time: 5 minutes; Cook Time: 10 minutes; Total Time: 15 minutes; Servings: 2</p><h3>Ingredients</h3><ul><li>1 cup rice</li><li>2 cups water</li><li>1 tsp salt</li><li>1 tbsp oil</li></ul><h3>Instructions</h3><ol><li>Bring water to a boil.</li><li>Simmer rice for 10 minutes until tender.</li><li>Rest until fluffy and serve.</li></ol></section>', wordpressPostId: 42, wordpressPostUrl: 'https://site-a.example/recipe' };
 function ownedPost(context, overrides = {}) {
   const identity = context.wordpressPublicationIdentity('https://site-a.example', article);
   return { id: 42, slug: context.wordpressArticleSlug(article), status: 'publish', content: { raw: context.wordpressPublicationMarker(identity) }, ...overrides };
@@ -72,6 +76,37 @@ test('WordPress never reports an old receipt as success after HTTP 403', async (
   app.store.set('performance.wordpressPublishReceipts', [{ identity, siteUrl: 'https://site-a.example', postId: 42, status: 'publish' }]);
   await assert.rejects(app.run(article), /403/);
   assert.equal(app.requests.length, 1);
+});
+
+test('WordPress repairs an incomplete saved recipe before any publication and keeps the repair locally', async () => {
+  const original = { ...article, wordpressPostId: undefined, content: article.content.replace('Servings: 2', 'Servings: unknown') };
+  const app = publisher({ generateCard: async () => article.content });
+  app.store.set('articles', [original]);
+  const result = await app.run(original);
+  assert.equal(result.success, true);
+  assert.equal(result.recipeArticlePatch.recipeCardRepairApplied, true);
+  assert.equal(app.store.get('articles')[0].content, article.content);
+  assert.ok(app.requests[0].payload.content.includes('Servings: 2'));
+});
+
+test('WordPress does not publish or damage a saved article when recipe repair fails', async () => {
+  const original = { ...article, content: '<p>Useful source content to preserve for a later repair.</p>'.repeat(4) };
+  const app = publisher();
+  app.store.set('articles', [original]);
+  await assert.rejects(app.run(original), /RECIPE_REVIEW_REQUIRED/);
+  assert.equal(app.requests.length, 0);
+  assert.equal(app.store.get('articles')[0].content, original.content);
+  assert.equal(app.store.get('articles')[0].workflowStatus, 'needs-review');
+});
+
+test('WordPress refuses a stale recipe repair if the saved article changed while AI was working', async () => {
+  const original = { ...article, content: article.content.replace('Servings: 2', 'Servings: unknown') };
+  let app;
+  app = publisher({ generateCard: async () => { app.store.set('articles', [{ ...original, content: '<p>New user edit</p>' }]); return article.content; } });
+  app.store.set('articles', [original]);
+  await assert.rejects(app.run(original), /changed while its recipe/);
+  assert.equal(app.requests.length, 0);
+  assert.equal(app.store.get('articles')[0].content, '<p>New user edit</p>');
 });
 
 test('WordPress creates on site B without reusing site A post ID', async () => {
@@ -304,7 +339,8 @@ test('GHL verifies the documented results.post envelope and rejects false-positi
   }
 });
 
-test('bulk WordPress reporting separates public posts, drafts, and unsuccessful responses', async () => {
+for (const preparationFailure of [false, true]) {
+test(preparationFailure ? 'bulk WordPress preparation failure does not skip the later articles or leave the batch locked' : 'bulk WordPress reporting separates public posts, drafts, and unsuccessful responses', async () => {
   const component = fs.readFileSync(path.join(__dirname, '../src/components/ArticlesList.jsx'), 'utf8');
   const start = component.indexOf('  async function bulkPublishToWordPress()');
   const end = component.indexOf('  async function bulkSendToPinCreator()', start);
@@ -312,18 +348,22 @@ test('bulk WordPress reporting separates public posts, drafts, and unsuccessful 
   const saved = [];
   const context = vm.createContext({
     bulkSite: { url: 'https://example.com', categories: [{ id: 1 }] },
-    selectedArticles: [{ id: 'publish' }, { id: 'draft' }, { id: 'rejected' }], settings: {},
+    bulkWorking: '', bulkPublishRef: { current: false },
+    selectedArticles: preparationFailure ? [{ id: 'rejected' }, { id: 'publish' }, { id: 'draft' }] : [{ id: 'publish' }, { id: 'draft' }, { id: 'rejected' }], settings: {},
     confirmAction: async () => true, setBulkWorking() {}, setBulkProgress() {},
     setBulkStatus: (message) => statuses.push(message),
-    publishReadyArticle: (value) => value, manualCategoryForSite: () => '',
+    publishReadyArticle: (value) => { if (preparationFailure && value.id === 'rejected') throw new Error('Invalid draft preparation'); return value; }, manualCategoryForSite: () => '',
     matchWordPressCategory: () => ({ category: { id: 1 } }), refreshArticles: async () => {},
     electronAPI: {
-      pushToWordPress: async ({ article }) => ({ success: article.id !== 'rejected', status: article.id, postId: 42 }),
+      pushToWordPress: async ({ article }) => ({ success: article.id !== 'rejected', status: article.id, postId: 42, recipeArticlePatch: { content: 'Validated repair' } }),
       saveArticle: async (value) => saved.push(value)
     }
   });
   vm.runInContext(component.slice(start, end), context);
   await context.bulkPublishToWordPress();
   assert.equal(saved.length, 2);
+  assert.equal(saved[0].content, 'Validated repair');
+  assert.equal(context.bulkPublishRef.current, false);
   assert.match(statuses.at(-1), /Published 1\. Needs review 1\. Warnings 0\. Failed 1/);
 });
+}

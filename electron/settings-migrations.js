@@ -1,9 +1,9 @@
-const SETTINGS_SCHEMA_VERSION = 5;
+const SETTINGS_SCHEMA_VERSION = 6;
 
 const imageRatioDefaults = Object.freeze({
   featuredImageRatio: '3:2',
   intextImageRatio: '9:16',
-  pinterestPinRatio: '2:3',
+  pinterestPinRatio: '9:16',
   instagramPortraitRatio: '4:5',
   instagramStoryRatio: '9:16',
   facebookFeedRatio: '1.91:1',
@@ -111,6 +111,24 @@ function migrateSettings(input = {}) {
     };
     version = 5;
     applied.push('automatic-media-cleanup-v5');
+  }
+
+  if (version < 6) {
+    settings = {
+      ...settings,
+      pinterestPinRatio: '9:16',
+      pinCreator: {
+        ...(settings.pinCreator || {}), postInterval: 60,
+        customStyles: Object.fromEntries(Object.entries(settings.pinCreator?.customStyles || {}).map(([id, style]) => (
+          [id, { ...style, prompt: String(style.prompt || '').replace(/vertical 2:3/g, 'vertical 9:16') }]
+        )))
+      },
+      impactArticlesEnabled: false,
+      wordpressPinCleanupEnabled: true,
+      settingsSchemaVersion: 6
+    };
+    version = 6;
+    applied.push('pin-workflow-v6');
   }
 
   const migrated = {
