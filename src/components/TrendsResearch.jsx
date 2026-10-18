@@ -1,6 +1,7 @@
 import { BarChart3, Download, FilePlus2, Search, SlidersHorizontal, Trash2, Upload } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import SectionHeader from "@/components/SectionHeader";
+import WebsitePerformance from "@/components/WebsitePerformance";
 import { useConfirmDialog } from "@/components/ConfirmDialog";
 import { Button, EmptyState, Field, inputClass } from "@/components/ui";
 import { electronAPI } from "@/lib/electron";
@@ -31,10 +32,6 @@ function scoreTone(score) {
   if (score >= 80) return "bg-emerald-100 text-emerald-700";
   if (score >= 60) return "bg-violet-100 text-violet-700";
   return "bg-slate-100 text-slate-600";
-}
-
-function normalizedTitle(value = "") {
-  return String(value).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
 
 export default function TrendsResearch({ settings, articles, refreshArticles, setActiveScreen, setArticlesWorkflowStage }) {
@@ -205,16 +202,10 @@ export default function TrendsResearch({ settings, articles, refreshArticles, se
       setStatus("Select at least one keyword first.");
       return;
     }
-    const conflicts = selectedKeywords.filter((item) => item.cannibalization?.title);
-    if (conflicts.length && !await confirmAction({
-      title: "Possible content overlap",
-      message: `${conflicts.length} selected idea${conflicts.length === 1 ? "" : "s"} may overlap an existing article.`,
-      confirmLabel: "Queue Anyway"
-    })) return;
     setWorking("queue");
     try {
-      const existing = new Set(articles.map((article) => normalizedTitle(article.generatedTitle || article.title)));
-      const unique = selectedKeywords.filter((item) => !existing.has(normalizedTitle(item.suggestedTitle)));
+      const unique = selectedKeywords;
+      const drafts = [];
       const preset = settings.projectPresets?.find((item) => item.id === "preset-pinterest-recipe-traffic") || {};
       const now = Date.now();
       for (const [index, item] of unique.entries()) {
@@ -243,7 +234,7 @@ export default function TrendsResearch({ settings, articles, refreshArticles, se
           smartRecommendations: smart,
           globalSettings: settings
         });
-        await electronAPI.saveArticle({
+        drafts.push({
           id: `trend-${now}-${index}`,
           title: item.suggestedTitle,
           generatedTitle: null,
@@ -287,8 +278,11 @@ export default function TrendsResearch({ settings, articles, refreshArticles, se
           errorMessage: ""
         });
       }
+      const intake = await electronAPI.queueArticles({ articles: drafts });
+      if (!intake?.success) throw new Error(intake?.error || 'Could not queue article ideas.');
       await refreshArticles();
-      setStatus(`Added ${unique.length} research-backed article idea${unique.length === 1 ? "" : "s"} to the queue.`);
+      setStatus(`Added ${intake.addedCount} articles. Skipped ${intake.skipped?.length || 0} overlapping ideas.`);
+      if (!intake.addedCount) return;
       setArticlesWorkflowStage?.("queued");
       setActiveScreen("articles");
     } catch (error) {
@@ -303,6 +297,8 @@ export default function TrendsResearch({ settings, articles, refreshArticles, se
       <SectionHeader eyebrow="Search intelligence" title="Trends Research" action={<button type="button" className="inline-flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-800" onClick={()=>setActiveScreen('pin-publishing-research')}><Search className="h-4 w-4" />Live Pinterest Research</button>}>
         Separate live search surges from proven Pinterest clicks and evergreen ideas before building the article queue.
       </SectionHeader>
+
+      <WebsitePerformance onChoose={(item) => { setSeed(item.topic || item.title); setStatus(`Selected ${item.title} as an Analytics-backed research topic.`); }} onSettings={() => setActiveScreen('settings')} />
 
       <div className="mb-5 grid gap-4 xl:grid-cols-[1fr_340px]">
         <div className="glass rounded-lg p-5 shadow-panel">

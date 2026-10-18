@@ -33,7 +33,7 @@ function findMatchingWordPressSite(sites = [], destinationUrl = '') {
 }
 
 function resolvePinterestExportHost(requested = 'auto', sites = [], destinationUrl = '') {
-  if (requested === 'wordpress') return 'wordpress';
+  if (['wordpress', 'imgbb', 'replicate', 'resilient'].includes(requested)) return requested;
   return findMatchingWordPressSite(sites, destinationUrl) ? 'wordpress' : 'auto';
 }
 

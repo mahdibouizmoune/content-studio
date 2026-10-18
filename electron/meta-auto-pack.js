@@ -1,8 +1,9 @@
 const { createHash } = require('node:crypto');
+const { enforceRecipeCaptions } = require('./meta-captions');
 
 function metaSourceFingerprint(source = {}) {
   source = source || {};
-  return createHash('sha256').update(JSON.stringify([source.kind || '', String(source.pinId || ''), source.localPath || '', source.publicUrl || '', source.sourceRevision || '', '1080x1350:cover:centre:v1'])).digest('hex');
+  return createHash('sha256').update(JSON.stringify([source.kind || '', String(source.pinId || ''), source.localPath || '', source.publicUrl || '', source.sourceRevision || '', '1080x1350:pin-only:cover:centre:v2'])).digest('hex');
 }
 
 function text(value = '') {
@@ -67,18 +68,18 @@ function automaticMetaContent(article = {}, pin = {}) {
   const title = articleTitle(article, pin);
   const description = articleDescription(article, pin);
   const hashtags = metaHashtags(article, pin);
-  return {
+  return enforceRecipeCaptions({
     campaignTitle: title,
     strategy: {
       contentPillar: 'Recipe discovery',
-      audienceIntent: 'traffic',
+      audienceIntent: 'conversation',
       originalityAngle: 'Turn the completed recipe into useful platform-ready social copy.',
       recommendedFormat: 'Facebook feed and Instagram feed',
       whyNow: 'Completed article with reusable original media',
       evidenceConfidence: 'medium'
     },
     facebook: {
-      primaryPost: `${title}\n\n${description}\n\nGet the full recipe, ingredient amounts, and step-by-step instructions on the blog.`,
+      primaryPost: `${title}\n\n${description}`,
       shortPost: `${title}\n\n${description}`,
       groupPost: `${title}\n\n${description}\n\nWould you add this recipe to your meal plan?`,
       reelCaption: `${title}. Get the complete recipe on the blog.`,
@@ -88,7 +89,7 @@ function automaticMetaContent(article = {}, pin = {}) {
       imageAltText: title
     },
     instagram: {
-      feedCaption: `${title}\n\n${description}\n\nSave this recipe idea, then visit the link in the profile for the complete recipe.`,
+      feedCaption: `${title}\n\nA little inspiration for your next meal: ${description}`,
       reelCaption: `${title}\n\nSave this recipe idea for later.`,
       reelHook: title,
       reelScenes: [],
@@ -99,7 +100,7 @@ function automaticMetaContent(article = {}, pin = {}) {
       hashtags,
       imageAltText: title
     }
-  };
+  }, article);
 }
 
 function sourceUrl(source = {}) {
@@ -132,7 +133,7 @@ function metaSourceScore(source = {}) {
 
 function preferredMetaSource(sources = []) {
   return (Array.isArray(sources) ? sources : [])
-    .filter((source) => source?.localPath || sourceUrl(source))
+    .filter((source) => source?.kind === 'pin' && (source.localPath || sourceUrl(source)))
     .reduce((best, source) => (!best || metaSourceScore(source) > metaSourceScore(best) ? source : best), null);
 }
 
@@ -147,21 +148,6 @@ function matchingPins(article = {}, pins = []) {
   ));
 }
 
-function featuredSource(article = {}, pin = {}) {
-  return {
-    id: 'article:featured',
-    kind: 'article-featured',
-    label: 'Article Featured Image',
-    localPath: article.featuredImageLocalPath || '',
-    localUrl: article.featuredImageDisplay || article.featuredImageLocalUrl || '',
-    url: article.featuredImageDisplay || article.featuredImageLocalUrl || article.featuredImage || article.featuredImageRemoteUrl || '',
-    publicUrl: article.featuredImageRemoteUrl || article.featuredImage || '',
-    remoteUrl: article.featuredImageRemoteUrl || article.featuredImage || '',
-    pinterestTitle: pin.title || pin.sourceTitle || '',
-    pinterestDescription: pin.description || '',
-    pinterestKeywords: pin.csvKeywords || ''
-  };
-}
 
 function pinSource(pin = {}) {
   const publicUrl = [
@@ -193,13 +179,8 @@ function pinSource(pin = {}) {
 }
 
 function metaSourceLibrary(article = {}, pins = []) {
-  const articlePins = matchingPins(article, pins);
-  const primaryPin = articlePins[0] || {};
-  const featured = featuredSource(article, primaryPin);
-  const pinSources = articlePins
-    .map(pinSource)
-    .filter((source) => source.localPath || sourceUrl(source));
-  return dedupeSources([...pinSources, featured].filter((source) => source.localPath || sourceUrl(source)));
+  return dedupeSources(matchingPins(article, pins).map(pinSource)
+    .filter((source) => source.localPath || sourceUrl(source)));
 }
 
 function compatibleMetaAssets(assets = [], source = null) {
@@ -208,6 +189,7 @@ function compatibleMetaAssets(assets = [], source = null) {
   return (Array.isArray(assets) ? assets : [])
     .filter((asset) => (
       asset?.id === 'meta-social-portrait'
+      && sourceKind === 'pin'
       && Number(asset.width || 0) === 1080
       && Number(asset.height || 0) === 1350
       && text(asset.sourceKind).toLowerCase() === sourceKind

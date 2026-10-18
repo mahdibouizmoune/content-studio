@@ -5,6 +5,7 @@ import ArticlesList from "@/components/ArticlesList";
 import ModeSelector from "@/components/ModeSelector";
 import Queue from "@/components/Queue";
 import SectionHeader from "@/components/SectionHeader";
+import { Button } from "@/components/ui";
 import { isArticlePublished } from "@/lib/articlePublication.mjs";
 
 const stages = [
@@ -40,32 +41,30 @@ export default function ArticlesWorkflow(props) {
     : ["pending", "generating", "outline-review", "error", "cancelled"];
 
   const summaryCards = [
-    { label: "Queued", value: counts.queued, icon: Clock3, tone: "bg-indigo-50 text-indigo-700 ring-indigo-100" },
-    { label: "Generating", value: counts.generating, icon: FileText, tone: "bg-cyan-50 text-cyan-700 ring-cyan-100" },
-    { label: "Completed", value: counts.completed, icon: CheckCircle2, tone: "bg-emerald-50 text-emerald-700 ring-emerald-100" },
-    { label: "Published", value: counts.published, icon: Globe2, tone: "bg-violet-50 text-violet-700 ring-violet-100" },
-    { label: "Errors", value: counts.errors, icon: AlertCircle, tone: "bg-rose-50 text-rose-700 ring-rose-100" }
+    { label: "Queued", stage: "queued", value: counts.queued, icon: Clock3, tone: "text-indigo-700" },
+    { label: "Generating", stage: "queued", value: counts.generating, icon: FileText, tone: "text-cyan-700" },
+    { label: "Completed", stage: "completed", value: counts.completed, icon: CheckCircle2, tone: "text-emerald-700" },
+    { label: "Published", stage: "published", value: counts.published, icon: Globe2, tone: "text-violet-700" },
+    { label: "Errors", stage: "errors", value: counts.errors, icon: AlertCircle, tone: "text-rose-700" }
   ];
 
   return (
-    <section className="animate-fade-in">
-      <SectionHeader eyebrow="Articles" title="Articles">
-        One place for article setup, queued generation, completed drafts, published posts, and errors.
-      </SectionHeader>
+    <section className="articles-workspace animate-fade-in">
+      <SectionHeader eyebrow="Create" title="Articles" action={<Button onClick={() => chooseStage("add")}><Plus size={16} />Add Titles</Button>} />
 
-      <div className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
+      <div className="article-status-strip mb-5" aria-label="Article status summary">
         {summaryCards.map((item) => {
           const Icon = item.icon;
           return (
-            <div key={item.label} className="soft-card flex min-h-[86px] items-center gap-3 rounded-lg p-4">
-              <div className={`grid h-10 w-10 shrink-0 place-items-center rounded-md ring-1 ${item.tone}`}><Icon className="h-5 w-5" /></div>
-              <div className="min-w-0"><div className="text-2xl font-black leading-none text-slate-950">{item.value}</div><div className="mt-1.5 truncate text-sm font-semibold text-slate-500">{item.label}</div></div>
-            </div>
+            <button type="button" key={item.label} onClick={() => chooseStage(item.stage)} className="article-status-item" aria-label={`${item.value} ${item.label.toLowerCase()} articles`}>
+              <div className={`flex items-center gap-2 text-xs ${item.tone}`}><Icon className="h-3.5 w-3.5" aria-hidden="true" />{item.label}</div>
+              <div className="mt-2 text-2xl font-semibold leading-none tabular-nums text-slate-950">{item.value}</div>
+            </button>
           );
         })}
       </div>
 
-      <div className="mb-5 flex gap-1 overflow-x-auto rounded-lg border border-slate-200 bg-white p-1.5 shadow-sm">
+      <div className="article-stage-tabs mb-5 flex overflow-x-auto" role="group" aria-label="Article workflow">
         {stages.map((item) => {
           const Icon = item.icon;
           const active = stage === item.id;
@@ -74,9 +73,8 @@ export default function ArticlesWorkflow(props) {
               key={item.id}
               type="button"
               onClick={() => chooseStage(item.id)}
-              className={`inline-flex min-h-[40px] shrink-0 items-center gap-2 rounded-md px-4 py-2 text-sm font-bold transition-colors ${
-                active ? "bg-gradient-to-r from-indigo-600 via-violet-600 to-purple-600 text-white shadow-sm" : "text-slate-600 hover:bg-slate-100"
-              }`}
+              aria-pressed={active}
+              className={`article-stage-tab ${active ? "is-active" : ""}`}
             >
               <Icon className="h-4 w-4" />
               {item.label}
@@ -98,7 +96,7 @@ export default function ArticlesWorkflow(props) {
       </div>
 
       {!articles.length ? (
-        <div className="mt-5 rounded-lg border border-dashed border-slate-300 bg-white p-8 text-center">
+        <div className="studio-empty mt-5 p-8 text-center">
           <FileText className="mx-auto mb-3 h-8 w-8 text-slate-400" />
           <div className="text-base font-black text-slate-900">No articles yet</div>
           <div className="mt-1 text-sm font-semibold text-slate-500">Add article titles, then they will move through this workflow.</div>

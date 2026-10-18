@@ -745,7 +745,7 @@ test('Pinterest image prompts preserve ultra-realistic close-up food photography
   assert.match(enhanced, /large diffused side window and soft bounce fill/i);
   assert.match(enhanced, /real full-frame food-photography look with a natural 50-85mm perspective/i);
   assert.match(enhanced, /f\/4-f\/5\.6-like depth of field/i);
-  assert.match(enhanced, /vertical 2:3 Pinterest composition/i);
+  assert.match(enhanced, /vertical 9:16 Pinterest composition/i);
   assert.match(enhanced, /only the one quoted headline/i);
   assert.match(enhanced, /premium bold display lettering/i);
   assert.match(enhanced, /strong contrasting outline/i);
@@ -865,7 +865,7 @@ test('Ingredient Closeup AI style uses one centered translucent panel and no str
     'This Pinterest pin is viral. A bright professional close-up photograph of sparkling cherry lemonade with realistic ice, fruit, and natural window light. Text Overlay in the center: "Sparkling Cherry Lemonade". This Pinterest pin is bright and highly clickable.',
     'Sparkling Cherry Lemonade'
   );
-  assert.match(prompt, /one full-bleed vertical 2:3 photograph/i);
+  assert.match(prompt, /one full-bleed vertical 9:16 photograph/i);
   assert.match(prompt, /"SPARKLING CHERRY LEMONADE"/);
   assert.match(prompt, /exact center middle/i);
   assert.match(prompt, /compact softly translucent rounded rectangle/i);
@@ -882,7 +882,7 @@ test('Pinterest AI generation removes accidental collages and polishes awkward o
   const collagePrompt = 'A vertical close-up of sardine toast. Two smaller supporting shots show a skillet and melting butter, separated by dividers. Keep the center calm for overlay.';
   const prompt = enhancePinterestLegacyAiPrompt(collagePrompt, 'middle', 'Sardine Toast Canned Fish Taste', false);
 
-  assert.match(prompt, /one single full-bleed vertical 2:3 photograph/i);
+  assert.match(prompt, /one single full-bleed vertical 9:16 photograph/i);
   assert.doesNotMatch(prompt, /two smaller supporting shots|separated by dividers/i);
   assert.match(prompt, /Never put the title in a white footer/i);
   assert.equal(polishPinterestOverlayText('Sardine Toast Canned Fish Taste'), 'Sardine Toast');
@@ -1181,13 +1181,13 @@ test('Pinterest CSV round trip preserves eight UTF-8 fields without a BOM', () =
   const records = require('csv-parse/sync').parse(bytes, { bom: false });
   assert.equal(records.length, 4);
   assert.ok(records.every((row) => row.length === 8));
-  assert.equal(records[1][0], rows[0][0]);
-  assert.equal(records[1][2], 'Dîners &  Délices/Été');
+  assert.equal(records[1][0], require('../electron/ascii.js').toAscii(rows[0][0]));
+  assert.equal(records[1][2], 'Diners & Delices/Ete');
   assert.equal(records[1][3], '');
   assert.equal(records[1][4], 'Easy, fast, family-friendly dinner With "quotes" & herbs now');
   assert.equal(records[1][5], 'https://example.com/recipe?a=1&b=2#recipe');
   assert.equal(records[1][6], '');
-  assert.equal(records[1][7], '#été, piña colada');
+  assert.equal(records[1][7], '#ete, pina colada');
   assert.deepEqual(records.slice(1), validatePinterestRows(rows).rows);
   assert.ok(records.slice(1).flat().every((cell) => !/[\r\n\0]/.test(cell)));
 });
@@ -1210,9 +1210,8 @@ test('Pinterest title and description limits preserve whole Unicode graphemes', 
     assert.ok(row[4].length <= 500);
     assert.equal(row[0].isWellFormed(), true);
     assert.equal(row[4].isWellFormed(), true);
-    const graphemes = [...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(text)].map((item) => item.segment);
-    assert.ok(graphemes.join('').startsWith(row[0]));
-    if (!text.includes(' ')) assert.ok(graphemes.includes([...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(row[0])].at(-1).segment));
+    assert.ok(require('../electron/ascii.js').toAscii(text).startsWith(row[0]));
+    assert.doesNotMatch(row[0] + row[4], /[^\x00-\x7f]/);
   }
 });
 
@@ -1294,7 +1293,7 @@ test('Pinterest keeps complete batches, splits only above 200 rows, and uses cle
 test('Pinterest duplicate media is rejected and valid keyword content is preserved', () => {
   const row = ['Recipe', 'https://i.ibb.co/a.jpg', 'Recipes', '', '', '', '', '#dinner, café, meal prep'];
   assert.ok(validatePinterestRows([row, row]).errors.some((error) => error.rule === 'duplicate_media'));
-  assert.equal(normalizePinterestKeywords(row[7]), row[7]);
+  assert.equal(normalizePinterestKeywords(row[7]), '#dinner, cafe, meal prep');
 });
 
 test('Both Pinterest export buttons use the shared writer and legacy BOM downloads are removed', () => {
@@ -1596,8 +1595,7 @@ test('Pinterest CSV keeps row identity and rejects stale image verification', ()
   assert.doesNotMatch(mainSource, /validationIsFresh/);
   assert.match(mainSource, /pin\.imageQa\?\.publicValidatedUrl !== mediaUrl/);
   assert.match(mainSource, /pin\.imageQa\?\.publicIdentityVerified !== true/);
-  assert.match(mainSource, /Number\(pin\.imageQa\?\.publicWidth \|\| 0\) !== PIN_WIDTH/);
-  assert.match(mainSource, /Number\(pin\.imageQa\?\.publicHeight \|\| 0\) !== PIN_HEIGHT/);
+  assert.match(mainSource, /hasPinterestDimensions\(\{ width: Number\(pin\.imageQa\?\.publicWidth/);
   const legacyPublicMediaBlock = legacyRendererSource.match(/function getPinPublicMediaUrl\(pin\) \{[\s\S]*?\n\}/)?.[0] || '';
   assert.match(legacyPublicMediaBlock, /publicIdentityVerified !== true/);
   assert.doesNotMatch(legacyPublicMediaBlock, /remoteImageUrl/);
@@ -1630,7 +1628,7 @@ test('Pinterest automatic hosting prefers ImgBB before its WordPress fallback', 
   assert.ok(imgbbCall < wordpressCall);
 });
 
-test('ImgBB hosting serializes uploads and retries transient failures without a long lockout', () => {
+test('ImgBB hosting serializes uploads and circuit-breaks rate limits', () => {
   const mainSource = fs.readFileSync(path.join(__dirname, '..', 'electron', 'main.js'), 'utf8');
   const uploadStart = mainSource.indexOf('async function uploadLocalImageToImgBB');
   const uploadEnd = mainSource.indexOf('function normalizeImageUrl', uploadStart);
@@ -1640,7 +1638,8 @@ test('ImgBB hosting serializes uploads and retries transient failures without a 
   assert.match(uploadBlock, /withTransientRetries/);
   assert.match(uploadBlock, /attempts: 4/);
   assert.match(uploadBlock, /response\.status >= 500/);
-  assert.match(uploadBlock, /Rate limits and provider outages are transient/);
+  assert.match(uploadBlock, /imgbbRateLimited/);
+  assert.match(uploadBlock, /15 \* 60 \* 1000/);
   assert.doesNotMatch(uploadBlock, /6 \* 60 \* 60 \* 1000/);
 });
 
@@ -1677,7 +1676,7 @@ test('Pinterest generation verifies durable hosting immediately and uses a singl
   assert.match(mainSource, /targetBytes: options\.targetBytes \?\? 240 \* 1024/);
   assert.match(pinViewSource, /function generateImages[\s\S]*?\}, \{ concurrency: 2 \}\);/);
   assert.match(pinViewSource, /pin\.imageQa\?\.dimensionsVerified !== true/);
-  assert.match(pinViewSource, /hosted image dimensions are not verified at 1000 x 1500/);
+  assert.match(pinViewSource, /selectPinterestExportRows/);
   assert.match(pinViewSource, /Public hosting is pending and will retry automatically/);
   assert.match(mainSource, /hostingError: ''/);
   assert.doesNotMatch(pinViewSource, /xl:grid-cols-\[minmax\(0,1fr\)_360px\]/);
@@ -1712,7 +1711,7 @@ test('Pinterest defaults to the merged Ingredient Closeup one-pass style and ret
   assert.match(pinViewSource, />Clear All<\/Button>/);
   assert.doesNotMatch(pinViewSource, /Estimated Full Pack Cost/);
   assert.match(pinViewSource, /AI Integrated Center Text/);
-  assert.match(pinDefaultsSource, /Create one complete vertical 2:3 recipe Pin with an ultra-realistic, full-bleed close-up/);
+  assert.match(pinDefaultsSource, /Create one complete vertical 9:16 recipe Pin with an ultra-realistic, full-bleed close-up/);
   assert.match(pinDefaultsSource, /real full-frame food-photography look/);
   assert.match(pinDefaultsSource, /Avoid fake steam, excessive glaze, oily pools, plastic perfection, neon saturation/);
   assert.doesNotMatch(pinDefaultsSource, /custom-july-original-ai[\s\S]{0,1000}Generate no text/);
@@ -1739,7 +1738,7 @@ test('Meta reuses one Pinterest-first 4:5 image without a new image model call',
   assert.match(metaSource, /createRepurposeImageVariants/);
   assert.match(metaSource, /prepareRepurposeGhlRows/);
   assert.match(mainSource, /sourceAsset = null/);
-  assert.match(mainSource, /sharedMetaPortrait = false/);
+  assert.match(mainSource, /const wantedFormats = \[metaPortraitFormat\]/);
   assert.match(mainSource, /id: 'meta-social-portrait'/);
   assert.match(mainSource, /userEdited: systemPrepared \? previous\?\.userEdited === true : true/);
   const resizeStart = mainSource.indexOf('async function createRepurposeImageVariants');
@@ -1748,11 +1747,10 @@ test('Meta reuses one Pinterest-first 4:5 image without a new image model call',
     ? mainSource.slice(resizeStart, resizeEnd)
     : '';
   assert.match(resizeBlock, /\.resize\(format\.width, format\.height/);
-  assert.match(resizeBlock, /sharedMetaPortrait/);
+  assert.match(resizeBlock, /sourceAsset.kind !== 'pin'/);
   assert.match(resizeBlock, /requiredWidth: format\.width, requiredHeight: format\.height/);
-  assert.match(mainSource, /platform: 'Instagram', label: 'Instagram Portrait', width: 1080, height: 1350/);
-  assert.match(mainSource, /platform: 'Facebook', label: 'Facebook Feed', width: 1200, height: 630/);
-  assert.match(mainSource, /requestedPlatforms\.has\(String\(format\.platform\)\.toLowerCase\(\)\)/);
+  assert.match(resizeBlock, /fit: 'cover', position: 'centre'/);
+  assert.doesNotMatch(resizeBlock, /articleImageSource/);
   assert.doesNotMatch(resizeBlock, /generatePinterestBaseImage|replicateRequest/);
 });
 
@@ -1786,7 +1784,7 @@ test('Meta uses one vertical column and Pinterest CSV preparation stays responsi
   assert.match(pinViewSource, /setCsvOpen\(true\);[\s\S]*setCsvHosting\(true\)/);
   assert.match(pinViewSource, /visiblePins\.map/);
   assert.match(pinViewSource, /Show 20 More Pins/);
-  assert.match(mainSource, /Math\.min\(wordpressExport \? 1 : 4, inputPins\.length\)/);
+  assert.match(mainSource, /Math\.min\(4, inputPins\.length\)/);
   assert.match(mainSource, /Rejected stale or mismatched media URL/);
   assert.match(pinViewSource, /mergePreparedPinHosting\(pinsRef\.current, hosting\?\.pins \|\| \[\]\)/);
 });
@@ -1794,7 +1792,8 @@ test('Meta uses one vertical column and Pinterest CSV preparation stays responsi
 test('Pinterest CSV editor keeps exact interval scheduling beside smart scheduling', () => {
   const pinViewSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'PinCreatorView.jsx'), 'utf8');
   const mainSource = fs.readFileSync(path.join(__dirname, '..', 'electron', 'main.js'), 'utf8');
-  assert.match(pinViewSource, /function applyPinterestTime\(\)/);
+  assert.match(pinViewSource, /function applyPinterestTime\(\{ fromNow = false \} = \{\}\)/);
+  assert.match(pinViewSource, /Start From Now/);
   assert.match(pinViewSource, /index \* intervalHours \* 60 \* 60 \* 1000/);
   assert.match(pinViewSource, /onClick=\{applyPinterestTime\}[\s\S]*>Apply Time<\/Button>/);
   assert.match(pinViewSource, /onClick=\{applyPinterestSchedule\}[\s\S]*>Smart Schedule<\/Button>/);
@@ -1837,10 +1836,10 @@ test('completed articles receive a credit-free Meta draft and Pinterest enrichme
   assert.equal(first[0].autoCreated, true);
   assert.equal(first[0].creditFree, true);
   assert.match(first[0].content.facebook.primaryPost, /quick pan sauce/i);
-  assert.match(first[0].content.instagram.feedCaption, /Save this recipe idea/i);
-  assert.equal(first[0].sourceLibrary.length, 1);
-  assert.equal(first[0].selectedSource.kind, 'article-featured');
-  assert.equal(preferredMetaSource(first[0].sourceLibrary).kind, 'article-featured');
+  assert.match(first[0].content.instagram.feedCaption, /Send us a message for the complete recipe/i);
+  assert.doesNotMatch(first[0].content.instagram.feedCaption, /https?:|link in (?:the )?profile/i);
+  assert.equal(first[0].sourceLibrary.length, 0);
+  assert.equal(preferredMetaSource(first[0].sourceLibrary), null);
 
   const noDuplicate = upsertAutomaticMetaProject(first, article, [], '2026-07-28T12:01:00.000Z');
   assert.equal(noDuplicate.length, 1);
@@ -1855,7 +1854,7 @@ test('completed articles receive a credit-free Meta draft and Pinterest enrichme
   };
   const enriched = syncAutomaticMetaProjects(noDuplicate, [article], [pin], '2026-07-28T12:02:00.000Z');
   assert.equal(enriched.length, 1);
-  assert.equal(enriched[0].sourceLibrary.length, 2);
+  assert.equal(enriched[0].sourceLibrary.length, 1);
   assert.equal(enriched[0].sourceLibrary[0].kind, 'pin');
   assert.equal(enriched[0].selectedSource.kind, 'pin');
   assert.equal(enriched[0].selectedSource.pinId, pin.id);
@@ -1873,7 +1872,7 @@ test('completed articles receive a credit-free Meta draft and Pinterest enrichme
   }];
   const protectedDraft = syncAutomaticMetaProjects(edited, [article], [pin], '2026-07-28T12:03:00.000Z');
   assert.deepEqual(protectedDraft[0].content, { custom: 'keep me' });
-  assert.equal(protectedDraft[0].sourceLibrary.length, 2);
+  assert.equal(protectedDraft[0].sourceLibrary.length, 1);
   assert.equal(protectedDraft[0].sourceLibrary[0].kind, 'pin');
   assert.equal(protectedDraft[0].imageAssets.length, 0);
 });
@@ -1893,8 +1892,8 @@ test('Pinterest image generation uses focused Ingredient Closeup AI while other 
   const mainSource = fs.readFileSync(path.join(__dirname, '..', 'electron', 'main.js'), 'utf8');
   const legacyRendererSource = fs.readFileSync(path.join(__dirname, '..', 'electron', 'pin-creator', 'renderer.js'), 'utf8');
 
-  assert.match(mainSource, /generatePinImage\(prompt, aspectRatio = '2:3'/);
-  assert.match(mainSource, /pinAspectRatio = '2:3'/);
+  assert.match(mainSource, /generatePinImage\(prompt, aspectRatio = '9:16'/);
+  assert.match(mainSource, /pinAspectRatio = '9:16'/);
   const pinterestModelBlock = mainSource.match(/function pinterestModelRequest[\s\S]*?async function generatePinterestBaseImage/)?.[0] || '';
   assert.doesNotMatch(pinterestModelBlock, /magic_prompt_option: 'Auto'/);
   assert.match(pinterestModelBlock, /magic_prompt_option: 'Off'/);
@@ -2149,12 +2148,12 @@ test('settings migration adds purpose-specific image ratios and preserves unknow
 
   assert.equal(first.settings.featuredImageRatio, '3:2');
   assert.equal(first.settings.intextImageRatio, '9:16');
-  assert.equal(first.settings.pinterestPinRatio, '1:1');
+  assert.equal(first.settings.pinterestPinRatio, '9:16');
   assert.equal(first.settings.instagramPortraitRatio, '4:5');
   assert.equal(first.settings.instagramStoryRatio, '9:16');
   assert.equal(first.settings.facebookFeedRatio, '1.91:1');
   assert.equal(first.settings.squareSocialRatio, '1:1');
-  assert.equal(first.settings.settingsSchemaVersion, 5);
+  assert.equal(first.settings.settingsSchemaVersion, 6);
   assert.equal(first.settings.automaticMediaCleanupEnabled, true);
   assert.equal(first.settings.mediaRetentionDays, 7);
   assert.equal(first.settings.internalLinkCount, 3);
@@ -2175,7 +2174,7 @@ test('settings migration changes only the old in-article landscape default to po
 
   assert.equal(oldDefault.settings.featuredImageRatio, '3:2');
   assert.equal(oldDefault.settings.intextImageRatio, '9:16');
-  assert.equal(oldDefault.settings.settingsSchemaVersion, 5);
+  assert.equal(oldDefault.settings.settingsSchemaVersion, 6);
   assert.equal(customPortrait.settings.intextImageRatio, '2:3');
 });
 
@@ -2642,16 +2641,17 @@ test('article setting resolver preserves a legacy saved length without a source 
 test('recipe collection validation rejects thin or misnumbered recipes', () => {
   const complete = `
     <h2>1. Lemon Chicken</h2>
-    <ul class="recipe-facts"><li><strong>Prep Time:</strong> 10 minutes</li><li><strong>Total Time:</strong> 30 minutes</li><li><strong>Servings:</strong> 4</li></ul>
+    <ul class="recipe-facts"><li><strong>Prep Time:</strong> 10 minutes</li><li><strong>Cook Time:</strong> 20 minutes</li><li><strong>Total Time:</strong> 30 minutes</li><li><strong>Servings:</strong> 4</li></ul>
     <h3>Ingredients</h3><ul><li>1 lb chicken</li><li>1 lemon</li><li>2 tbsp oil</li><li>1 tsp salt</li></ul>
-    <h3>Instructions</h3><ol><li>Heat the pan.</li><li>Cook the chicken.</li><li>Finish with lemon.</li></ol>
+    <h3>Instructions</h3><ol><li>Heat the pan until oil shimmers.</li><li>Cook chicken for 20 minutes until browned and the internal temperature reaches 165 F on a thermometer.</li><li>Finish with lemon.</li></ol>
     <h2>2. Tomato Pasta</h2>
-    <ul class="recipe-facts"><li><strong>Prep Time:</strong> 10 minutes</li><li><strong>Total Time:</strong> 25 minutes</li><li><strong>Yield:</strong> 4 servings</li></ul>
+    <ul class="recipe-facts"><li><strong>Prep Time:</strong> 10 minutes</li><li><strong>Cook Time:</strong> 15 minutes</li><li><strong>Total Time:</strong> 25 minutes</li><li><strong>Yield:</strong> 4 servings</li></ul>
     <h3>Ingredients</h3><ul><li>12 oz pasta</li><li>2 cups tomatoes</li><li>2 tbsp oil</li><li>1 tsp salt</li></ul>
-    <h3>Instructions</h3><ol><li>Boil the pasta.</li><li>Cook the sauce.</li><li>Combine and serve.</li></ol>`;
+    <h3>Instructions</h3><ol><li>Boil the pasta for 10 minutes until tender.</li><li>Cook sauce until bubbling.</li><li>Combine and serve.</li></ol>`;
   assert.equal(validateRecipeChunk(complete, 1, 2).ok, true);
   assert.equal(validateRecipeChunk(complete.replace('<h2>2.', '<h2>3.'), 1, 2).ok, false);
-  assert.equal(validateRecipeChunk(complete.replace(/<li>1 tsp salt<\/li>/g, ''), 1, 2).ok, false);
+  assert.equal(validateRecipeChunk(complete.replace(/<li>1 tsp salt<\/li>/g, ''), 1, 2).ok, true);
+  assert.equal(validateRecipeChunk(complete.replace(/<h3>Ingredients<\/h3><ul>[\s\S]*?<\/ul>/g, '<h3>Ingredients</h3><ul></ul>'), 1, 2).ok, false);
 });
 
 test('recipe collection headings accept common model variants without matching time headings', () => {
@@ -2684,7 +2684,7 @@ test('recipe card validation requires quantities, timing, yield, and complete st
   const card = `<section id="recipe-card">
     <ul><li><strong>Prep Time:</strong> 10 minutes</li><li><strong>Cook Time:</strong> 20 minutes</li><li><strong>Total Time:</strong> 30 minutes</li><li><strong>Servings:</strong> 4</li></ul>
     <h3>Ingredients</h3><ul><li>1 lb chicken</li><li>1 lemon</li><li>2 tbsp oil</li><li>1 tsp salt</li></ul>
-    <h3>Instructions</h3><ol><li>Heat the pan until the oil shimmers.</li><li>Cook for 12 minutes until browned.</li><li>Rest and serve.</li></ol>
+    <h3>Instructions</h3><ol><li>Heat the pan until the oil shimmers.</li><li>Cook for 12 minutes until browned and the internal temperature reaches 165 F on a thermometer.</li><li>Rest and serve.</li></ol>
   </section>`;
   assert.equal(validateRecipeCard(card).ok, true);
   assert.equal(validateRecipeCard(card.replace('<li>1 lb chicken</li>', '<li>chicken</li>').replace('<li>1 lemon</li>', '<li>lemon</li>')).ok, false);
@@ -2899,7 +2899,7 @@ test('affiliate cards do not advertise a sale without a lower verified current p
   assert.doesNotMatch(applied.content, /Check current deal|Save 40%|Was \$30/);
 });
 
-test('strong verified Impact matches are inserted automatically without an exact body phrase', async () => {
+test('Impact recommendations are not inserted into reader articles', async () => {
   const { applyAffiliateLinksToArticle } = await import('../src/lib/affiliateLinks.mjs');
   const article = {
     id: 'cookie-article',
@@ -2923,11 +2923,8 @@ test('strong verified Impact matches are inserted automatically without an exact
     }]
   });
 
-  assert.equal(applied.affiliateLinks.length, 1);
-  assert.equal(applied.affiliateLinks[0].automaticPlacement, true);
-  assert.match(applied.content, /Helpful tool for this recipe/);
-  assert.match(applied.content, /Ceramic Mixing Bowls/);
-  assert.equal((applied.content.match(/data-affiliate-disclosure="true"/g) || []).length, 1);
+  assert.equal(applied.affiliateLinks.length, 0);
+  assert.doesNotMatch(applied.content, /Helpful tool for this recipe|data-affiliate-disclosure/);
 });
 
 test('verified Amazon matches use tagged links, Amazon CTA text, and required disclosure', async () => {
@@ -3250,8 +3247,8 @@ test('completed articles view uses the imported publication checker', () => {
 
 test('article generation overlaps independent planning while preserving bounded concurrency', () => {
   const source = fs.readFileSync(require.resolve('../src/components/Queue.jsx'), 'utf8');
-  assert.match(source, /Promise\.all\(\[titleTask,\s*featuredPromptTask\]\)/);
-  assert.match(source, /Promise\.all\(\[featuredTask,\s*imagePromptsTask\]\)/);
+  assert.match(source, /checkpointParallelTasks\(\{ generatedTitle: titleTask, featuredImagePrompt: featuredPromptTask \}/);
+  assert.match(source, /checkpointParallelTasks\(\{ featured: featuredTask, imagePrompts: imagePromptsTask \}/);
   assert.match(source, /missingIndexes\.slice\(start,\s*start\s*\+\s*2\)/);
   assert.match(source, /internalLinkPostsCacheRef/);
 });
@@ -3644,7 +3641,7 @@ test('performance scheduling learns strong posting hours and keeps minimum spaci
     { publishedAt: '2026-07-01T21:00:00', outboundClicks: 12, impressions: 800 },
     { publishedAt: '2026-07-02T21:00:00', outboundClicks: 11, impressions: 700 }
   ];
-  const profile = buildPerformanceScheduleProfile(rows);
+  const profile = buildPerformanceScheduleProfile([...rows, ...rows, ...rows]);
   const slots = nextPerformanceSlots(4, { start: new Date('2026-08-01T08:00:00'), intervalHours: 2, preferredHours: profile.preferredHours, pinsPerDay: 4 });
   assert.equal(profile.mode, 'account-data');
   assert.deepEqual(profile.preferredHours.slice(0, 2), [18, 21]);

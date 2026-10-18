@@ -1,7 +1,6 @@
 import { AlertTriangle, Download, FileUp, Plus } from "lucide-react";
 import { useMemo, useState } from "react";
 import BatchImportPreview from "@/components/BatchImportPreview";
-import { useConfirmDialog } from "@/components/ConfirmDialog";
 import SectionHeader from "@/components/SectionHeader";
 import { Button, Field, inputClass } from "@/components/ui";
 import { electronAPI } from "@/lib/electron";
@@ -9,7 +8,8 @@ import { detectCannibalization } from "@/lib/contentPlanning";
 import { buildSmartArticleDefaults, inferSmartIntent } from "@/lib/smartContentEngine";
 import { resolveArticleGenerationSettings } from "@/lib/articleGenerationSettings.mjs";
 import { buildArticleBrief } from "@/lib/articleBrief.mjs";
-import { duplicateImportIds, resolveImportRow, validateImportRow } from "@/lib/batchArticleImport.mjs";
+import { resolveImportRow, validateImportRow } from "@/lib/batchArticleImport.mjs";
+import { cleanTitleFromInput, filterArticleIntake } from "../../electron/article-intake.mjs";
 
 function promptName(mode, category) {
   if (mode === "article") return "Classic article prompt";
@@ -21,24 +21,7 @@ function promptName(mode, category) {
   }[category] || "Default listicle prompt";
 }
 
-function cleanTitleFromInput(input) {
-  try {
-    const url = new URL(input);
-    const slug = decodeURIComponent(url.pathname.split("/").filter(Boolean).pop() || url.hostname);
-    const title = slug
-      .replace(/\.[a-z0-9]+$/i, "")
-      .replace(/[-_]+/g, " ")
-      .replace(/\s+/g, " ")
-      .trim()
-      .replace(/\b\w/g, (letter) => letter.toUpperCase());
-    return { title: title || input, sourceUrl: url.href };
-  } catch {
-    return { title: input, sourceUrl: "" };
-  }
-}
-
 export default function AddToQueue({ mode, settings, articles, refreshArticles, setActiveScreen, setArticlesWorkflowStage }) {
-  const confirmAction = useConfirmDialog();
   const [titles, setTitles] = useState("");
   const [message, setMessage] = useState("");
   const [targetKeyword, setTargetKeyword] = useState("");
@@ -53,10 +36,7 @@ export default function AddToQueue({ mode, settings, articles, refreshArticles, 
   const [submitting, setSubmitting] = useState(false);
   const lines = useMemo(() => titles.split(/\r?\n/).map((line) => line.trim()).filter(Boolean), [titles]);
   const duplicateWarnings = useMemo(() => {
-    return lines.map((line) => {
-      const { title } = cleanTitleFromInput(line);
-      return { title, matches: detectCannibalization(title, articles || [], { threshold: 62 }) };
-    }).filter((item) => item.matches.length);
+    return filterArticleIntake(lines.map((title, index) => ({ id: index, title })), articles || []).skipped;
   }, [lines, articles]);
   const smartPreview = useMemo(() => {
     if (!lines.length) return null;
@@ -101,22 +81,23 @@ export default function AddToQueue({ mode, settings, articles, refreshArticles, 
 
   async function addRowsToQueue(rowsToAdd) {
     if (!rowsToAdd.length || submitting) return;
-    const duplicateIds = duplicateImportIds(rowsToAdd);
-    const invalidRows = rowsToAdd.filter((row) => validateImportRow(row).length);
+    const selection = filterArticleIntake(rowsToAdd, articles || []);
+    const safeRows = selection.accepted;
+    if (!safeRows.length) {
+      setMessage(`No new articles added. ${selection.skipped.length} duplicate or overlapping titles were excluded.`);
+      setTitles("");
+      return;
+    }
+    const invalidRows = safeRows.filter((row) => validateImportRow(row).length);
     if (invalidRows.length) {
       setMessage(`Fix ${invalidRows.length} invalid row${invalidRows.length === 1 ? "" : "s"} before adding this batch.`);
       return;
     }
-    const warningCount = rowsToAdd.filter((row) => duplicateIds.has(row.id) || detectCannibalization(row.title, articles || [], { threshold: 62 }).length).length;
-    if (warningCount && !await confirmAction({
-      title: "Possible duplicate content",
-      message: `${warningCount} selected row${warningCount === 1 ? "" : "s"} may duplicate or cannibalize content.`,
-      confirmLabel: "Add Anyway"
-    })) return;
     setSubmitting(true);
     const now = Date.now();
     try {
-      for (const [index, row] of rowsToAdd.entries()) {
+      const batch = [];
+      for (const [index, row] of safeRows.entries()) {
         const { title, sourceUrl } = cleanTitleFromInput(row.title);
         const rowSettings = resolveImportRow(row, settings, { projectPresetId, brandVoiceId });
         const rowMode = row.contentType || mode;
@@ -163,10 +144,10 @@ export default function AddToQueue({ mode, settings, articles, refreshArticles, 
           resolvedSettings: resolved,
           cannibalizationConflicts: conflicts
         });
-        await electronAPI.saveArticle({
+        batch.push({
           id: `${now}-${index}`,
           title,
-          sourceUrl,
+          sourceUrl: row.sourceUrl || sourceUrl,
           generatedTitle: null,
           content: "",
           type: rowMode,
@@ -206,13 +187,19 @@ export default function AddToQueue({ mode, settings, articles, refreshArticles, 
           errorMessage: ""
         });
       }
+      const result = await electronAPI.queueArticles({ articles: batch });
+      if (!result?.success) throw new Error(result?.error || "Could not save the queue.");
+      const skipped = selection.skipped.length + (result.skipped?.length || 0);
       setTitles("");
       setImportRows([]);
       setImportErrors([]);
-      setMessage(`Added ${rowsToAdd.length} item${rowsToAdd.length === 1 ? "" : "s"} to the queue.`);
+      setMessage(`Added ${result.addedCount} articles. ${skipped} duplicate or overlapping titles excluded.`);
       await refreshArticles();
       setArticlesWorkflowStage?.("queued");
       setActiveScreen("articles");
+    } catch (error) {
+      setMessage(error.message || "Could not add articles to the queue.");
+      await refreshArticles();
     } finally {
       setSubmitting(false);
     }
@@ -264,7 +251,7 @@ export default function AddToQueue({ mode, settings, articles, refreshArticles, 
           />
         </Field>
         <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <p className="text-sm font-medium text-ink/60">{lines.length} title{lines.length === 1 ? "" : "s"} ready</p>
+          <p className="text-sm font-medium text-ink/60">{lines.length - duplicateWarnings.length} ready / {duplicateWarnings.length} excluded</p>
           <div className="flex flex-wrap gap-2">
             <Button variant="secondary" onClick={downloadSample} disabled={submitting}><Download className="h-4 w-4" />Sample CSV</Button>
             <Button variant="secondary" onClick={importCsv} disabled={submitting}><FileUp className="h-4 w-4" />Import CSV</Button>
@@ -281,8 +268,8 @@ export default function AddToQueue({ mode, settings, articles, refreshArticles, 
           <div className="mt-4 space-y-2 rounded-md bg-red-50 p-3 text-sm text-red-800 ring-1 ring-red-100">
             <div className="flex items-center gap-2 font-black"><AlertTriangle className="h-4 w-4" />Duplicate / Cannibalization Checker</div>
             {duplicateWarnings.slice(0, 4).map((warning) => (
-              <div key={warning.title} className="font-semibold">
-                {warning.title} looks {warning.matches[0].score}% similar to {warning.matches[0].article.generatedTitle || warning.matches[0].article.title}
+              <div key={warning.id} className="font-semibold">
+                Excluded: {warning.title} ({warning.score}% overlap with {warning.matchedTitle})
               </div>
             ))}
           </div>

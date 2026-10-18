@@ -2,12 +2,12 @@ const { schedulePins } = require("./pin-scheduler");
 const DEFAULT_PINTEREST_SCHEDULE = Object.freeze({
   enabled: true,
   startAt: "",
-  intervalHours: 1,
+  intervalHours: 1.5,
 });
 function schedulePinterestPins(
   pins,
   config = {},
-  { now = Date.now(), lastScheduled = "", occupied = [] } = {},
+  { now = Date.now(), occupied = [] } = {},
 ) {
   const settings = { ...DEFAULT_PINTEREST_SCHEDULE, ...config };
   if (!settings.enabled) return pins;
@@ -34,15 +34,13 @@ function schedulePinterestPins(
       accountId,
       destination: p.url || `https://legacy.invalid/pin/${i}`,
       scheduledAt: p.csvPublishDate || "",
-      lockedTime: !!p.csvPublishDate,
+      lockedTime: !!p.csvPublishDate && (p.csvScheduleOrigin !== "automatic" || !!p.exportedAt),
     }));
   const minimum = now + 10 * 60000;
   const chosenStart = settings.startAt
     ? Math.max(minimum, Date.parse(settings.startAt))
-    : Math.max(
-        minimum,
-        lastScheduled ? Date.parse(lastScheduled) + interval * 3600000 : 0,
-      );
+    : minimum;
+  if (!Number.isFinite(chosenStart)) throw new Error("Choose a valid CSV start time.");
   let slots;
   try {
     slots = schedulePins(
@@ -73,12 +71,13 @@ function schedulePinterestPins(
     if (p.csvPublishImmediately) return p;
     const id = String(p.id ?? `legacy-${index}`);
     index++;
-    return p.csvPublishDate
+    return p.csvPublishDate && (p.csvScheduleOrigin !== "automatic" || p.exportedAt)
       ? p
       : {
           ...p,
           csvPublishDate: byId.get(id).scheduledAt,
           csvPublishImmediately: false,
+          csvScheduleOrigin: "automatic",
         };
   });
 }

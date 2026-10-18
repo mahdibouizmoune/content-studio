@@ -7,14 +7,14 @@ module.exports = {
       },
       colors: {
         ink: "#1d2428",
-        paper: "#f7f7f2",
+        paper: "#f6f7f8",
         moss: "#547568",
-        accentA: "#7c3aed",
-        accentB: "#8b5cf6",
+        accentA: "#12694e",
+        accentB: "#21748b",
         sky: "#4f88a8"
       },
       boxShadow: {
-        panel: "0 1px 2px rgb(15 23 42 / 0.04), 0 10px 28px rgb(15 23 42 / 0.06)"
+        panel: "0 2px 8px rgb(24 34 39 / 0.06)"
       },
       keyframes: {
         "fade-in": {

@@ -1,6 +1,7 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
+  qualityWorkspace: (action, params = {}) => ipcRenderer.invoke('quality-workspace', { action, params }),
   pinWorkspace: (action, params = {}) => ipcRenderer.invoke('pin-workspace', { action, params }),
   // Settings (secrets auto-encrypted in main process)
   getSettings: () => ipcRenderer.invoke('get-settings'),
@@ -15,6 +16,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   createAmazonAffiliateLink: (params) => ipcRenderer.invoke('create-amazon-affiliate-link', params),
   discoverAffiliates: (params) => ipcRenderer.invoke('discover-affiliates', params),
   connectGoogleSearchConsole: () => ipcRenderer.invoke('connect-google-search-console'),
+  getGoogleAnalyticsWorkspace: () => ipcRenderer.invoke('get-google-analytics-workspace'),
+  refreshGoogleAnalytics: () => ipcRenderer.invoke('refresh-google-analytics'),
+  getMetaCaptionDraft: (params) => ipcRenderer.invoke('get-meta-caption-draft', params),
   disconnectGoogleSearchConsole: () => ipcRenderer.invoke('disconnect-google-search-console'),
   testPinterestAnalytics: () => ipcRenderer.invoke('test-pinterest-analytics'),
   getPerformanceIntelligence: () => ipcRenderer.invoke('get-performance-intelligence'),
@@ -26,6 +30,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Articles CRUD
   getArticles: () => ipcRenderer.invoke('get-articles'),
   saveArticle: (article) => ipcRenderer.invoke('save-article', article),
+  queueArticles: (params) => ipcRenderer.invoke('queue-articles', params),
+  prepareArticleRecipe: (params) => ipcRenderer.invoke('prepare-article-recipe', params),
   deleteArticle: (articleId) => ipcRenderer.invoke('delete-article', articleId),
   exportArticles: () => ipcRenderer.invoke('export-articles'),
   importArticles: () => ipcRenderer.invoke('import-articles'),
@@ -80,6 +86,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getPinterestDelivery: () => ipcRenderer.invoke('get-pinterest-delivery'),
   revealPinterestExport: (params) => ipcRenderer.invoke('reveal-pinterest-export', params),
   suggestPinterestResults: (params) => ipcRenderer.invoke('suggest-pinterest-results', params),
+  savePinterestReceiptDraft: (params) => ipcRenderer.invoke('save-pinterest-receipt-draft', params),
+  importPinterestReceipt: () => ipcRenderer.invoke('import-pinterest-receipt'),
   savePinterestResults: (params) => ipcRenderer.invoke('save-pinterest-results', params),
   getPinterestRetry: (params) => ipcRenderer.invoke('get-pinterest-retry', params),
   generateRepurposePack: (params) => ipcRenderer.invoke('generate-repurpose-pack', params),
@@ -132,6 +140,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   deleteMetaProject: (projectId) => ipcRenderer.invoke('delete-meta-project', projectId),
   getMetaBulkGhlDraft: () => ipcRenderer.invoke('get-meta-bulk-ghl-draft'),
   prepareMetaBulkGhlRows: (params) => ipcRenderer.invoke('prepare-meta-bulk-ghl-rows', params),
+
+  // Recipe Money Maker
+  getRecipeMoneyMakerState: () => ipcRenderer.invoke("rmm-get-state"),
+  saveRecipeMoneyMakerSettings: (params) => ipcRenderer.invoke("rmm-save-settings", params),
+  chooseRecipeMoneyMakerLogo: () => ipcRenderer.invoke("rmm-choose-logo"),
+  testRecipeMoneyMakerConnection: (params) => ipcRenderer.invoke("rmm-test-connection", params),
+  generateRecipeMoneyMakerRecipe: (params) => ipcRenderer.invoke("rmm-generate", params),
+  deleteRecipeMoneyMakerRecipes: (params) => ipcRenderer.invoke("rmm-delete", params),
+  exportRecipeMoneyMakerPdf: (params) => ipcRenderer.invoke("rmm-export-pdf", params),
 
   // Progress events
   onImageProgress: (callback) => {

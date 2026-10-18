@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Ban, CheckCircle2, CircleAlert, Clock3, ExternalLink, LoaderCircle, RefreshCw, Trash2 } from "lucide-react";
 import { electronAPI } from "@/lib/electron";
 import SectionHeader from "@/components/SectionHeader";
+import VirtualList from "@/components/VirtualList";
 import { Button, EmptyState } from "@/components/ui";
 
 const activeStatuses = new Set(["queued", "running", "cancelling", "interrupted"]);
@@ -74,8 +75,8 @@ export default function JobCenter({ setActiveScreen }) {
 
       {status ? <div className="rounded-md bg-violet-50 px-4 py-3 text-sm font-bold text-violet-700">{status}</div> : null}
       {!jobs.length ? <EmptyState title="No background jobs">New generation, publishing, and QA tasks will appear here.</EmptyState> : (
-        <div className="space-y-3">
-          {jobs.map((job) => (
+        <VirtualList items={jobs} label="Background jobs">
+          {(job) => (
             <article key={job.id} className="soft-card rounded-lg p-4">
               <div className="flex flex-col gap-4 md:flex-row md:items-start">
                 <StatusIcon status={job.status} />
@@ -96,8 +97,8 @@ export default function JobCenter({ setActiveScreen }) {
                 </div>
               </div>
             </article>
-          ))}
-        </div>
+          )}
+        </VirtualList>
       )}
     </div>
   );

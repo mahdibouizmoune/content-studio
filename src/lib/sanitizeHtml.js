@@ -1,6 +1,6 @@
 const blockedTags = new Set([
   "script", "style", "iframe", "object", "embed", "link", "meta", "base",
-  "form", "input", "button", "textarea", "select", "option", "template"
+  "form", "input", "button", "textarea", "select", "option", "template", "svg", "math"
 ]);
 const uriAttrs = new Set(["href", "src", "xlink:href", "action", "formaction", "poster"]);
 const blockedAttrs = new Set(["srcdoc", "formaction", "action", "method", "autofocus", "contenteditable"]);

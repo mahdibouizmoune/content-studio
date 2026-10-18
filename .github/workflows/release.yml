@@ -1,0 +1,56 @@
+name: Verified Signed Release
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Reviewed version tag (vX.Y.Z)'
+        required: true
+permissions:
+  contents: read
+jobs:
+  build:
+    environment: production-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            certificate: WINDOWS_CSC_LINK
+            password: WINDOWS_CSC_KEY_PASSWORD
+          - os: macos-latest
+            certificate: MACOS_CSC_LINK
+            password: MACOS_CSC_KEY_PASSWORD
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm audit --omit=dev --audit-level=moderate
+      - name: Verify reviewed tag and clean source
+        run: node scripts/release-provenance.cjs
+      - name: Build signed artifacts
+        run: npm run dist
+        env:
+          CSC_LINK: ${{ secrets[matrix.certificate] }}
+          CSC_KEY_PASSWORD: ${{ secrets[matrix.password] }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          CSC_IDENTITY_AUTO_DISCOVERY: 'true'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: signed-content-studio-${{ matrix.os }}
+          path: |
+            release/*.exe
+            release/*.dmg
+            release/*.blockmap
+            electron/assets/release-provenance.json
+          if-no-files-found: error

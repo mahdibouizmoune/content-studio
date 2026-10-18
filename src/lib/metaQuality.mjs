@@ -46,14 +46,16 @@ export function scoreMetaContent(content = {}, { sourceUrl = "", imageAssets = [
   const slides = Array.isArray(instagram.carouselSlides) ? instagram.carouselSlides.filter((slide) => cleanText(slide?.heading) || cleanText(slide?.body)) : [];
   const scenes = Array.isArray(instagram.reelScenes) ? instagram.reelScenes.filter(Boolean) : [];
   const productionNotes = cleanText(instagram.reelProductionNotes);
+  const feedOnly = /facebook feed and instagram feed/i.test(strategy.recommendedFormat || '');
+  const recipeCaptionMode = content.captionMode === 'recipe-preview';
 
   const checks = [
-    { id: "public-link", platform: "global", label: "Public destination URL is ready", passed: isPublicDestination(sourceUrl), weight: 5 },
+    { id: "public-link", platform: "global", label: recipeCaptionMode ? "Captions have no article links" : "Public destination URL is ready", passed: recipeCaptionMode ? !/https?:\/\//i.test(`${fbPost} ${igCaption}`) : isPublicDestination(sourceUrl), weight: 5 },
     { id: "original-angle", platform: "global", label: "Originality angle is defined", passed: cleanText(strategy.originalityAngle).length >= 20, weight: 5 },
     { id: "asset", platform: "global", label: "A reusable image is attached", passed: imageAssets.some((asset) => asset?.fileUrl || asset?.publicUrl || asset?.imgbbUrl || asset?.remoteImageUrl), weight: 5 },
     { id: "fb-depth", platform: "facebook", label: "Facebook post has useful context", passed: fbPost.length >= 120 && fbPost.length <= 1800, weight: 7 },
     { id: "fb-question", platform: "facebook", label: "Facebook post invites a natural discussion", passed: fbPost.includes("?"), weight: 4 },
-    { id: "fb-cta", platform: "facebook", label: "Facebook has a clear link CTA", passed: cleanText(facebook.cta).length >= 8, weight: 5 },
+    { id: "fb-cta", platform: "facebook", label: "Facebook has a clear next step", passed: cleanText(facebook.cta).length >= 8, weight: 5 },
     { id: "fb-alt", platform: "facebook", label: "Facebook image alt text is descriptive", passed: cleanText(facebook.imageAltText).length >= 20, weight: 5 },
     { id: "fb-bait", platform: "facebook", label: "Facebook copy avoids engagement bait", passed: !hasEngagementBait(`${fbPost} ${facebook.cta || ""}`), weight: 7 },
     { id: "ig-hook", platform: "instagram", label: "Instagram opens with a concise hook", passed: cleanText(igCaption.split(/\r?\n/)[0]).length >= 20 && cleanText(igCaption.split(/\r?\n/)[0]).length <= 125, weight: 7 },
@@ -66,7 +68,7 @@ export function scoreMetaContent(content = {}, { sourceUrl = "", imageAssets = [
     { id: "ig-reel", platform: "instagram", label: "Reel has a hook and 3 to 6 scenes", passed: cleanText(instagram.reelHook).length >= 10 && scenes.length >= 3 && scenes.length <= 6, weight: 7 },
     { id: "ig-production", platform: "instagram", label: "Reel plan covers 9:16, audio, captions, and safe zones", passed: /9:16/.test(productionNotes) && /audio|sound/i.test(productionNotes) && /caption/i.test(productionNotes) && /safe zone/i.test(productionNotes), weight: 7 },
     { id: "platform-distinct", platform: "global", label: "Facebook and Instagram copy are distinct", passed: similarity(fbPost, igCaption) < 0.82, weight: 5 }
-  ];
+  ].filter((check) => !feedOnly || !['ig-carousel', 'ig-reel', 'ig-production'].includes(check.id));
 
   const scoreFor = (platform) => {
     const scoped = checks.filter((check) => check.platform === platform || check.platform === "global");

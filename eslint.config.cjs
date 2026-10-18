@@ -43,6 +43,7 @@ const nodeGlobals = {
   fetch: "readonly",
   FormData: "readonly",
   AbortController: "readonly",
+  AbortSignal: "readonly",
   structuredClone: "readonly",
   setTimeout: "readonly",
   clearTimeout: "readonly",
@@ -107,6 +108,11 @@ module.exports = [
       sourceType: "commonjs",
       globals: nodeGlobals
     },
+    rules: sharedRules
+  },
+  {
+    files: ['electron/assets/reader-plugin/reader.js'],
+    languageOptions: { globals: { ...browserGlobals, location: 'readonly', IntersectionObserver: 'readonly' }, sourceType: 'script' },
     rules: sharedRules
   },
   {

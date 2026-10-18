@@ -650,11 +650,13 @@ export default function ArticleEditor({ article, settings, saveSettings, onClose
     };
     setStatus(match.category?.id ? `Publishing to ${publishSite.name || publishSite.url} in ${match.category.name}...` : `Publishing to ${publishSite.name || publishSite.url}...`);
     const result = await electronAPI.pushToWordPress({ article: articleForPublish, site: publishSite });
+    if (!result?.success) throw new Error(result?.error || "WordPress did not confirm this publication.");
     const isPublic = result.status === "publish";
     const isScheduled = result.status === "future";
     const publicPostUrl = isPublic ? (result.postUrl || readyDraft.wordpressPostUrl) : readyDraft.wordpressPostUrl;
     const next = {
       ...articleForPublish,
+      ...(result.recipeArticlePatch || {}),
       publishStatusOverride: "",
       workflowStatus: result.success ? (isPublic ? "published" : isScheduled ? "approved" : "needs-review") : readyDraft.workflowStatus,
       wordpressPublishStatus: result.status || readyDraft.wordpressPublishStatus || "",

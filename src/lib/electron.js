@@ -1,3 +1,5 @@
+import { filterArticleIntake } from "../../electron/article-intake.mjs";
+
 const storageKey = "content-studio-dev-store";
 export const isElectronApp = Boolean(window.electronAPI);
 
@@ -20,6 +22,17 @@ function writeStore(next) {
 
 function makeMockApi() {
   return {
+    async savePinterestReceiptDraft({ batchId, ...value }) { const s = readStore(); writeStore({ ...s, receiptDrafts: { ...s.receiptDrafts, [batchId]: value } }); return { success: true }; },
+    async importPinterestReceipt() { return { canceled: true }; },
+    async qualityWorkspace() { return { success: false, error: 'Quality checks, spending records and file exports require the desktop app.' }; },
+    async getGoogleAnalyticsWorkspace() { return { configured: false, snapshot: null, recommendations: [] }; },
+    async refreshGoogleAnalytics() { return { success: false, error: 'Connect Google Analytics in the desktop app.' }; },
+    async getMetaCaptionDraft({ article = {}, source = {} } = {}) {
+      const title = source.pinterestTitle || article.generatedTitle || article.title || 'Recipe idea';
+      const cta = 'Want the full ingredient list and all the steps? Send us a message for the complete recipe.';
+      const description = String(source.pinterestDescription || article.metaDescription || '').replace(/https?:\/\/\S+/gi, '').trim();
+      return { success: true, content: { campaignTitle: title, captionMode: 'recipe-preview', strategy: { originalityAngle: 'Reuse the approved Pinterest recipe as a useful feed post.', recommendedFormat: 'Facebook feed and Instagram feed' }, facebook: { primaryPost: `${title}\n\n${description}\n\n${cta}`, cta, hashtags: ['#HomeCooking'], imageAltText: title }, instagram: { feedCaption: `${title}\n\nA little meal inspiration: ${description}\n\n${cta}`, cta, hashtags: ['#EasyRecipes', '#RecipeIdeas', '#HomeCooking'], imageAltText: title } } };
+    },
     async getSettings() {
       return readStore().settings || {};
     },
@@ -28,6 +41,13 @@ function makeMockApi() {
       writeStore({ ...store, settings });
       return { success: true };
     },
+    async getRecipeMoneyMakerState() { return readStore().recipeMoneyMaker || { settings: { brandColor: "#1f6b4f", accentColor: "#f3b44b", font: "Inter", language: "English", brandName: "Recipe Money Maker", hasApiKey: false }, recipes: [] }; },
+    async saveRecipeMoneyMakerSettings(settings) { const store = readStore(); const previous = store.recipeMoneyMaker || { recipes: [] }; const next = { settings: { ...previous.settings, ...settings, hasApiKey: Boolean(settings.apiKey || previous.settings?.hasApiKey) }, recipes: previous.recipes || [] }; writeStore({ ...store, recipeMoneyMaker: next }); return { success: true, settings: next.settings }; },
+    async chooseRecipeMoneyMakerLogo() { return { success: false, canceled: true }; },
+    async testRecipeMoneyMakerConnection() { return { success: false, error: "Connection testing is available in the desktop app." }; },
+    async generateRecipeMoneyMakerRecipe() { return { success: false, error: "Recipe generation is available in the desktop app." }; },
+    async deleteRecipeMoneyMakerRecipes({ ids = [] } = {}) { const store = readStore(); const previous = store.recipeMoneyMaker || { settings: {}, recipes: [] }; const chosen = new Set(ids); const recipes = (previous.recipes || []).filter((recipe) => !chosen.has(recipe.id)); writeStore({ ...store, recipeMoneyMaker: { ...previous, recipes } }); return { success: true, recipes }; },
+    async exportRecipeMoneyMakerPdf() { return { success: false, canceled: true }; },
     async clearStoredCredential({ credential, siteId, siteUrl } = {}) {
       const store = readStore();
       const settings = { ...(store.settings || {}) };
@@ -238,6 +258,15 @@ function makeMockApi() {
     },
     async getArticles() {
       return readStore().articles || [];
+    },
+    async queueArticles({ articles }) {
+      const store = readStore();
+      const selection = filterArticleIntake(articles, store.articles || []);
+      writeStore({ ...store, articles: [...(store.articles || []), ...selection.accepted] });
+      return { success: true, addedCount: selection.accepted.length, skipped: selection.skipped };
+    },
+    async prepareArticleRecipe({ article }) {
+      return { success: false, patch: { content: article.content, recipeCardQualityWarning: "Recipe validation requires the desktop app." } };
     },
     async saveArticle(article) {
       const store = readStore();
@@ -479,7 +508,7 @@ function makeMockApi() {
     async exportPinterestCsv({ rows = [] }) {
       return { success: false, canceled: false, validation: { valid: false, rowCount: rows.length, errors: [{ field: "Export", message: "Open Content Studio desktop to export the verified Pinterest CSV." }], warnings: [], rows } };
     },
-    async getPinterestDelivery() { return { account: '', batches: [] }; },
+    async getPinterestDelivery() { return { account: '', batches: [], drafts: readStore().receiptDrafts || {} }; },
     async revealPinterestExport() { throw new Error('Open Content Studio desktop to locate exported files.'); },
     async suggestPinterestResults() { throw new Error('Open Content Studio desktop to record import results.'); },
     async savePinterestResults() { throw new Error('Open Content Studio desktop to record import results.'); },
@@ -782,12 +811,13 @@ function makeMockApi() {
     async prepareRepurposeGhlRows({ packs = [] } = {}) {
       const pack = packs[0] || {};
       const imageUrl = pack.imageAssets?.[0]?.publicUrl || pack.imageAssets?.[0]?.imageUrl || "";
-      const destinationUrl = pack.sourceUrl || "https://example.com";
+      const noLink = pack.includeSourceLink === false || /^meta-/.test(pack.campaignStyle || '');
+      const destinationUrl = noLink ? '' : pack.sourceUrl || "https://example.com";
       const instagram = pack.content?.instagram;
       const facebook = pack.content?.facebook;
       const rows = [
-        instagram?.caption ? ["2026-05-28 14:00:00", [instagram.caption, ...(instagram.hashtags || [])].join("\n\n"), destinationUrl, imageUrl, "Instagram", "", "post"] : null,
-        facebook?.pagePost ? ["2026-05-28 16:00:00", facebook.pagePost, destinationUrl, imageUrl, "Facebook", `Full recipe: ${destinationUrl}`, "post"] : null
+        instagram?.caption ? ["2026-05-28 14:00:00", [noLink ? instagram.caption.replace(/https?:\/\/\S+/gi, '') : instagram.caption, ...(instagram.hashtags || [])].join("\n\n"), destinationUrl, imageUrl, "Instagram", "", "post"] : null,
+        facebook?.pagePost ? ["2026-05-28 16:00:00", noLink ? facebook.pagePost.replace(/https?:\/\/\S+/gi, '') : facebook.pagePost, destinationUrl, imageUrl, "Facebook", noLink ? '' : `Full recipe: ${destinationUrl}`, "post"] : null
       ].filter(Boolean);
       return {
         success: true,
@@ -841,8 +871,8 @@ function makeMockApi() {
         const instagram = project.content?.instagram?.feedCaption || article.metaDescription || article.generatedTitle || article.title || "";
         const facebook = project.content?.facebook?.primaryPost || article.metaDescription || article.generatedTitle || article.title || "";
         return [
-          [start, instagram, article.wordpressPostUrl || article.sourceUrl || "", imageUrl, "", "", "", "True", "False", "Instagram", "Instagram", "", "post"],
-          [start, facebook, article.wordpressPostUrl || article.sourceUrl || "", imageUrl, "", "", "", "True", "False", "Facebook", "Facebook", "", "post"]
+          [start, instagram.replace(/https?:\/\/\S+/gi, ''), "", imageUrl, "", "", "", "True", "False", "Instagram", "Instagram", "", "post"],
+          [start, facebook.replace(/https?:\/\/\S+/gi, ''), "", imageUrl, "", "", "", "True", "False", "Facebook", "Facebook", "", "post"]
         ];
       });
       const draft = { success: true, status: "complete", headers, rows, articleCount: articles.length, postCount: rows.length, failures: [], percent: 100 };

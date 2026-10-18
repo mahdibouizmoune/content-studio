@@ -1,4 +1,5 @@
 import { parsePromisedRecipeCount } from "./recipeTitle.mjs";
+import { toAscii } from "./ascii.mjs";
 import { articleBriefPrompt } from "./articleBrief.mjs";
 
 export const ARTICLE_SIZE_OPTIONS = [
@@ -102,9 +103,7 @@ export function preparePrompt(basePrompt, settings) {
       "Follow this outline closely unless a small improvement is clearly needed."
     ].join("\n");
   }
-  if (settings.recipeCardEnabled) {
-    prompt += `\n${recipeCardInstruction}`;
-  }
+  prompt += `\n${recipeCardInstruction}`;
   prompt += [
     "",
     "SEO METADATA:",
@@ -141,7 +140,7 @@ export function sanitizeTitleText(value = "") {
 }
 
 export function slugify(value = "") {
-  return sanitizeTitleText(value)
+  return toAscii(sanitizeTitleText(value))
     .toLowerCase()
     .replace(/&/g, " and ")
     .replace(/[^a-z0-9\s-]/g, "")
@@ -239,27 +238,12 @@ export function sanitizeHeadingEmDashes(html = "") {
 
 function removeJumpLinks(html = "") {
   return String(html)
+    .replace(/<nav\b[^>]*class=["']cs-recipe-navigation["'][^>]*>[\s\S]*?<\/nav>/gi, "")
     .replace(/<div[^>]*class=["'][^"']*cs-jump-to-recipe-wrap[^"']*["'][^>]*>\s*<a[^>]+href=["']#recipe-card["'][\s\S]*?<\/a>\s*<\/div>/gi, "")
     .replace(/<p[^>]*>\s*<a[^>]+href=["']#recipe-card["'][\s\S]*?<\/a>\s*<\/p>/gi, "")
     .replace(/<a[^>]+href=["']#recipe-card["'][\s\S]*?<\/a>/gi, "");
 }
 
-function buildFallbackRecipeCard(title) {
-  const cleanTitle = escapeHtml(sanitizeTitleText(title || "Recipe"));
-  return [
-    '<section id="recipe-card" class="recipe-card recipe-card-fallback" data-recipe-fallback="true" style="margin:36px 0;padding:24px;border:1px solid #e5e7eb;border-radius:16px;background:#ffffff;box-shadow:0 12px 30px rgba(17,24,39,.08);">',
-    '<div style="margin-bottom:18px;border-bottom:1px solid #f1f5f9;padding-bottom:16px;">',
-    '<p style="margin:0 0 8px;font-size:13px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#7c3aed;">Recipe Summary</p>',
-    `<h2 style="margin:0;font-size:28px;line-height:1.2;color:#111827;">${cleanTitle}</h2>`,
-    '<p style="margin:10px 0 0;color:#4b5563;">Use the complete ingredient amounts, timing, and method provided in the article above.</p>',
-    "</div>",
-    '<h3 style="margin:22px 0 10px;color:#111827;">Ingredients</h3>',
-    '<p style="color:#4b5563;">See the ingredient list and quantities in the recipe section above.</p>',
-    '<h3 style="margin:22px 0 10px;color:#111827;">Instructions</h3>',
-    '<p style="margin-bottom:0;color:#4b5563;">Follow the step-by-step method and food-safety guidance in the article above.</p>',
-    "</section>"
-  ].join("\n");
-}
 
 function enhanceRecipeCard(html = "") {
   const addStyle = (attrs = "", style = "") => (
@@ -290,12 +274,19 @@ function enhanceRecipeCard(html = "") {
   );
 }
 
-export function ensureRecipeCard(html = "", title = "") {
+export function ensureRecipeCard(html = "") {
   let next = removeJumpLinks(String(html));
   if (!/id=["']recipe-card["']/i.test(next)) {
-    next = `${next}\n${buildFallbackRecipeCard(title)}`;
+    return next;
   }
-  return enhanceRecipeCard(next);
+  next = enhanceRecipeCard(next);
+  const navigation = '<nav class="cs-recipe-navigation" aria-label="Recipe shortcuts" style="margin:16px 0;display:flex;flex-wrap:wrap;gap:12px;"><a href="#recipe-card" style="font-weight:700;text-decoration:underline;">Jump to Recipe</a></nav>';
+  if (/class=["']cs-recipe-navigation["']/i.test(next)) return next;
+  const opening = next.match(/<p\b[^>]*>[\s\S]*?<\/p>/i);
+  const cardStart = next.search(/<section\b[^>]*id=["']recipe-card["']/i);
+  if (!opening || (cardStart >= 0 && opening.index >= cardStart)) return navigation + next;
+  const position = opening.index + opening[0].length;
+  return next.slice(0, position) + navigation + next.slice(position);
 }
 
 function extractRecipeCard(html = "") {
@@ -320,8 +311,11 @@ function durationToIso(value = "") {
   const text = value.toLowerCase();
   const hours = Number((text.match(/(\d+(?:\.\d+)?)\s*(hours|hour|hrs|hr|h)\b/) || [])[1] || 0);
   const minutes = Number((text.match(/(\d+(?:\.\d+)?)\s*(minutes|minute|mins|min|m)\b/) || [])[1] || 0);
-  if (!hours && !minutes) return undefined;
-  return `PT${hours ? `${Math.round(hours)}H` : ""}${minutes ? `${Math.round(minutes)}M` : ""}`;
+  const days = Number((text.match(/(\d+(?:\.\d+)?)\s*(days|day)\b/) || [])[1] || 0);
+  const weeks = Number((text.match(/(\d+(?:\.\d+)?)\s*(weeks|week)\b/) || [])[1] || 0);
+  const totalMinutes = minutes + hours * 60 + days * 1440 + weeks * 10080;
+  if (!Number.isFinite(totalMinutes) || totalMinutes < 0 || (!totalMinutes && !/\b0\s*(minutes?|mins?|hours?|hrs?)\b/i.test(text))) return undefined;
+  return `PT${totalMinutes}M`;
 }
 
 export function buildRecipeSchema(article) {
@@ -340,7 +334,7 @@ export function buildRecipeSchema(article) {
   const prepTime = extractRecipeValue(card, text, "Prep Time");
   const cookTime = extractRecipeValue(card, text, "Cook Time");
   const totalTime = extractRecipeValue(card, text, "Total Time");
-  const servings = extractRecipeValue(card, text, "Servings");
+  const servings = extractRecipeValue(card, text, "Servings") || extractRecipeValue(card, text, "Yield");
   const publicImage = article.featuredImageRemoteUrl || (/^https?:\/\//i.test(article.featuredImage || "") ? article.featuredImage : "");
   const keywordValues = [
     article.rankMathFocusKeyword,
@@ -451,12 +445,12 @@ export function scoreArticle(article, content) {
     || (numberedRecipeSections.length === promisedListCount
       && numberedRecipeSections.every((number, index) => number === index + 1));
   const recipeComplete = !hasRecipeCard || (
-    cardIngredients.length >= 4
+    cardIngredients.length > 0
     && cardInstructions.length >= 3
     && measuredIngredients.length >= Math.ceil(cardIngredients.length * 0.7)
     && instructionCues.length >= Math.min(2, cardInstructions.length)
     && Boolean(extractRecipeValue(recipeCard, stripHtml(recipeCard), "Total Time") || (extractRecipeValue(recipeCard, stripHtml(recipeCard), "Prep Time") && extractRecipeValue(recipeCard, stripHtml(recipeCard), "Cook Time")))
-    && Boolean(extractRecipeValue(recipeCard, stripHtml(recipeCard), "Servings"))
+    && Boolean(extractRecipeValue(recipeCard, stripHtml(recipeCard), "Servings") || extractRecipeValue(recipeCard, stripHtml(recipeCard), "Yield"))
   );
   let schemaHasImage = !hasRecipeCard;
   try { schemaHasImage = schemaHasImage || Boolean(JSON.parse(article.structuredData || "{}").image?.length); } catch {}
