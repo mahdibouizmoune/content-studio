@@ -1,6 +1,6 @@
 {
   "name": "content-studio",
-  "version": "1.4.0",
+  "version": "1.6.1",
   "description": "Content Studio - AI article generation, images, recipes, and WordPress publishing",
   "main": "electron/main.js",
   "author": "Mahdi Bouizmoune",
@@ -19,30 +19,42 @@
     "lint:fix": "eslint src electron scripts tests *.config.js *.config.cjs --fix",
     "test": "node --test tests/*.test.js",
     "test:integration": "node --test tests/integration.test.js",
+    "test:ui": "node scripts/test-app-ui.cjs",
+    "test:wordpress": "node scripts/test-wordpress-driver.cjs",
     "check": "npm run lint && npm test && npm run build",
     "dist": "vite build && electron-builder",
     "dist:win": "vite build && electron-builder --win",
     "dist:mac": "vite build && electron-builder --mac"
   },
   "dependencies": {
+    "@js-temporal/polyfill": "^0.5.1",
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "@tanstack/react-virtual": "^3.14.21",
+    "@tesseract.js-data/eng": "^1.0.0",
     "axios": "^1.18.0",
+    "css-select": "^7.0.0",
     "csv-parse": "^7.0.2",
     "csv-stringify": "^6.6.0",
+    "domutils": "^4.0.2",
     "electron-log": "^5.2.0",
     "electron-store": "^8.2.0",
     "electron-updater": "^6.6.2",
     "fast-xml-parser": "^5.10.1",
+    "htmlparser2": "^12.0.0",
     "jszip": "^3.10.1",
     "opentype.js": "^1.3.4",
+    "parse-ingredient": "^3.0.0",
+    "postal-mime": "4.0.11",
     "sanitize-html": "^2.17.7",
+    "satori": "^0.62.0",
     "sharp": "^0.35.4",
-    "@js-temporal/polyfill": "^0.5.1",
-    "@modelcontextprotocol/sdk": "^1.32.1",
-    "css-select": "^7.0.0",
-    "domutils": "^4.0.2",
-    "htmlparser2": "^12.0.0"
+    "tesseract.js": "^7.0.0"
   },
   "overrides": {
+    "qs": "^6.16.1",
+    "postcss-selector-parser": "^7.1.6",
+    "fflate": "^0.7.5",
+    "shell-quote": "^1.12.0",
     "fast-uri": "^3.1.6",
     "nanoid": "^3.3.17",
     "undici": "^6.28.0"
@@ -50,6 +62,7 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@vitejs/plugin-react": "^4.3.4",
+    "@wp-playground/cli": "3.1.50",
     "autoprefixer": "^10.4.20",
     "concurrently": "^9.1.0",
     "cross-env": "^7.0.3",
@@ -61,6 +74,7 @@
     "javascript-obfuscator": "^5.4.3",
     "lucide-react": "^0.460.0",
     "postcss": "^8.5.25",
+    "playwright": "1.62.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "tailwindcss": "^3.4.15",
@@ -72,7 +86,12 @@
     "productName": "Content Studio",
     "files": [
       "electron/*.js",
+      "electron/*.mjs",
       "electron/assets/**/*",
+      "worker/*.cjs",
+      "worker/package*.json",
+      "worker/README.md",
+      "worker/.env.example",
       "dist/**/*",
       "build-resources/icon.png",
       "package.json"
@@ -82,6 +101,7 @@
       "output": "release"
     },
     "asar": true,
+    "beforePack": "scripts/release-provenance.cjs",
     "afterPack": "scripts/after-pack.js",
     "afterAllArtifactBuild": "scripts/verify-release-signatures.cjs",
     "electronFuses": {
@@ -102,6 +122,7 @@
       "target": "dmg",
       "icon": "build-resources/icon.png",
       "category": "public.app-category.productivity",
+      "notarize": true,
       "hardenedRuntime": true
     },
     "nsis": {
@@ -112,7 +133,10 @@
     },
     "asarUnpack": [
       "node_modules/sharp/**/*",
-      "node_modules/@img/**/*"
+      "node_modules/@img/**/*",
+      "node_modules/tesseract.js/**/*",
+      "node_modules/tesseract.js-core/**/*",
+      "node_modules/@tesseract.js-data/**/*"
     ]
   }
 }

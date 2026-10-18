@@ -131,6 +131,7 @@ function normalizedAffiliateItems(settings = {}) {
       terms: affiliateTerms(item)
     }))
     .filter((item) => {
+      if (item.source === "impact") return false;
       if (item.enabled === false || !item.name || !item.url || !item.anchorText || !item.terms.length) return false;
       if (item.trackingVerified === false) return false;
       if (["impact", "amazon"].includes(item.source) && item.trackingVerified !== true) return false;

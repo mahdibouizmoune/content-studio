@@ -49,6 +49,12 @@ const { migrateSettings } = require('./settings-migrations');
 const { calculateEstimatedCost } = require('./cost-estimation');
 const { assertSafeRemoteRedirect, isPathInsideRoots, isSafeRemoteMediaUrl } = require('./media-security');
 const { mediaCleanupCandidates, normalizeMediaRetentionDays } = require('./media-retention');
+const { removeArticleImpact } = require('./article-impact-cleanup');
+const { cleanupWordPressPins, eligibleWordPressPins } = require('./wordpress-pin-retention');
+const { READER_RECIPE_GUIDANCE, assessEditorialGaps } = require('./article-editorial');
+const { createReplicatePoller } = require('./replicate-polling');
+const { createRecipeReadinessService } = require('./article-recipe-readiness');
+const { runSerial, mapBounded } = require('./bounded-work');
 const { escapeXmlText } = require('./xml-safety');
 const { mergePinStyles, migratePinStyles } = require('./pin-style-settings');
 const { buildPinSourceSnapshot, sanitizePinSourceSnapshot } = require('./pin-source');
@@ -67,11 +73,14 @@ const {
   isTemporaryPinterestMediaUrl,
   mediaExtension,
   pinterestCsvFilename,
+  truncateAtWordBoundary,
   validatePinterestRows
 } = require('./pinterest-export');
 const { findMatchingWordPressSite, normalizedHostname, resolvePinterestExportHost } = require('./pinterest-hosting');
-const { MAX_PIN_IMAGE_BYTES, digest, imageCompatibilityError, retryableRows, suggestFailedRows, updateDeliveryOutcomes } = require('./pinterest-delivery');
+const { MAX_PIN_IMAGE_BYTES, hasPinterestDimensions, digest, imageCompatibilityError, retryableRows, suggestFailedRows, updateDeliveryOutcomes } = require('./pinterest-delivery');
 const { createPinterestExportService } = require('./pinterest-export-service');
+const { toAscii } = require('./ascii.js');
+const { verifyPinterestLink } = require('./pinterest-link-check');
 const { schedulePinterestPins } = require('./pinterest-schedule');
 const { scopedPostId, siteContains, payloadRevision, revisionMarker, matchesRevision } = require('./wordpress-delivery');
 const { classifyKeywordEvidence, findLiveTrendMatch } = require('./trend-evidence');
@@ -133,6 +142,7 @@ const {
   recommendedRecipeCollectionLength,
   replaceRecipeCard,
   validateRecipeChunk,
+  validateCompactRecipeCollection,
   validateRecipeCard,
   usesCompactRecipeCollection
 } = require('./recipe-generation');
@@ -152,6 +162,8 @@ const {
   summarizeSearchRows
 } = require('./performance-intelligence');
 const { auditRecipeHtml } = require('./recipe-seo-audit');
+const { analyticsConfig, fetchAnalyticsSnapshot, analyticsWorkspace, websiteEvidence, articleUrl: analyticsArticleUrl } = require('./google-analytics');
+const { withoutArticleLinks, recipePreview, enforceRecipeCaptions, metaRowsWithoutLinks } = require('./meta-captions');
 const { booleanFeatureFlags, connectionStatus, sanitizeDiagnosticReport, sanitizeProviderError } = require('./diagnostics');
 
 function logProviderError(context, error, level = 'error') {
@@ -163,6 +175,7 @@ const { normalizeBatchImportRows } = require('./article-import');
 const { sanitizeWordPressArticleHtml } = require('./wordpress-content');
 const {
   automaticMetaProject,
+  automaticMetaContent,
   metaSourceFingerprint,
   metaSourceLibrary,
   preferredMetaSource,
@@ -195,6 +208,8 @@ let workspaceBackupInFlight;
 let lastAutomaticWorkspaceBackupAt = 0;
 let imgbbBlockedUntil = 0;
 let imgbbBlockedKey = '';
+let imgbbBlockedReason = '';
+let imgbbLastFailure = '';
 let imgbbUploadQueue = Promise.resolve();
 let lastImgBBUploadAt = 0;
 
@@ -367,8 +382,12 @@ function createStore() {
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 let store;
 let jobCenter;
+let spendingLedger;
 if (hasSingleInstanceLock) {
   store = createStore();
+  const { createSpendLedger, installSpendInterceptors } = require('./spend-ledger');
+  spendingLedger = createSpendLedger({ store });
+  installSpendInterceptors(axios, spendingLedger);
   store.onDidAnyChange(() => scheduleWorkspaceBackup('automatic'));
   jobCenter = createJobCenter({
     store,
@@ -628,13 +647,14 @@ function getAIModelUrl(aiModel) {
 // ============================================================================
 const NON_RETRY_STATUSES = new Set([400, 401, 403, 404, 422]);
 
-async function replicateRequest(url, body, apiToken, { signal, timeout = 60000 } = {}) {
+async function replicateRequest(url, body, apiToken, { signal, timeout = 60000, predictionDeadlineSeconds = 300 } = {}) {
   try {
     return await axios.post(url, body, {
-      headers: { 'Authorization': `Bearer ${apiToken}`, 'Content-Type': 'application/json' },
+      headers: { 'Authorization': `Bearer ${apiToken}`, 'Content-Type': 'application/json', 'Cancel-After': `${Math.max(5, Math.min(86400, predictionDeadlineSeconds))}s` },
       timeout, signal
     });
   } catch (err) {
+    if (err.noRetry) throw err;
     if (err.response && NON_RETRY_STATUSES.has(err.response.status)) {
       // Surface a clean error and mark it non-retryable
       const msg = err.response.data?.detail || err.response.data?.title || err.response.statusText;
@@ -642,26 +662,20 @@ async function replicateRequest(url, body, apiToken, { signal, timeout = 60000 }
       tagged.noRetry = true;
       throw tagged;
     }
+    if (!err.response || err.response.status >= 500) {
+      err.noRetry = true;
+      err.message = `Replicate submission could not be confirmed. Automatic resubmission was stopped to avoid duplicate charges. ${err.message}`;
+    }
     throw err;
   }
 }
 
-async function pollReplicate(predictionId, apiToken, { maxAttempts = 60, intervalMs = 5000, signal } = {}) {
-  let attempts = 0;
-  while (attempts < maxAttempts) {
-    if (signal?.aborted) throw new Error('Cancelled by user');
-    await new Promise(r => setTimeout(r, intervalMs));
-    const res = await axios.get(`https://api.replicate.com/v1/predictions/${predictionId}`, {
-      headers: { 'Authorization': `Bearer ${apiToken}` }, timeout: 30000, signal
-    });
-    if (res.data.status === 'succeeded') {
-      return Array.isArray(res.data.output) ? res.data.output.join('') : res.data.output;
-    }
-    if (res.data.status === 'failed')   throw new Error(`Prediction failed: ${res.data.error || 'Unknown'}`);
-    if (res.data.status === 'canceled') throw new Error('Prediction canceled');
-    attempts++;
-  }
-  throw new Error('Prediction timed out');
+async function pollReplicate(predictionId, apiToken, options = {}) {
+  return createReplicatePoller({
+    get: (url, config) => axios.get(url, config),
+    cancel: cancelReplicatePrediction,
+    delay: waitForAbortableDelay
+  })(predictionId, apiToken, options);
 }
 
 function waitForAbortableDelay(delayMs, signal) {
@@ -699,6 +713,8 @@ async function runManagedReplicatePrediction(model, input, apiToken, {
   progressLabel = 'Replicate prediction'
 } = {}) {
   const deadlineSeconds = Math.max(5, Math.min(86400, Math.ceil(timeoutMs / 1000)));
+  const contextId = String(jobKey).match(/^native-(?:image|regen|title|prompt)-(.+)$/)?.[1];
+  const contextPin = contextId ? pinCreatorPins().find(p => String(p.id) === contextId) : null;
   const create = await axios.post(
     `https://api.replicate.com/v1/models/${model}/predictions`,
     { input },
@@ -709,7 +725,8 @@ async function runManagedReplicatePrediction(model, input, apiToken, {
         'Cancel-After': `${deadlineSeconds}s`
       },
       timeout: 30000,
-      signal
+      signal,
+      generationContext: { jobKey, pinId: contextPin?.id || '', articleId: contextPin?.articleId || '' }
     }
   );
   let prediction = create.data || {};
@@ -967,7 +984,7 @@ PHOTOGRAPHY DIRECTION:
 ${photoDirection}
 
 CREATIVE DIRECTION:
-- Design the photograph and headline together as one finished vertical 2:3 Pinterest Pin, not as a clean photo for later editing
+- Design the photograph and headline together as one finished vertical 9:16 Pinterest Pin, not as a clean photo for later editing
       - Show one full-bleed, ultra-realistic close-up of the exact freshly finished recipe. Make it look captured with a real full-frame camera, natural 50-85mm perspective, and f/4-f/5.6-like depth of field. Use a large diffused side window, soft bounce fill, open natural shadows, controlled highlights, truthful white balance, and rich but realistic color
       - Fill about 72-88% of the frame with one generous recognizable hero serving, bowl, plate, or glass. Make the best source-supported appetite cue tack-sharp: natural browning, crisp edges, moist crumb, believable sauce viscosity, creamy layers, fresh crunch, realistic condensation, dimensional ice, or natural bubbles. Preserve pores, fibers, crumbs, and small homemade irregularities without fake steam, excessive glaze, oily pools, neon saturation, or plastic perfection
 - Choose the strongest close overhead, 30-45 degree, or eye-level composition for this specific dish or drink. Keep the food dominant and immediately recognizable at mobile thumbnail size. Use only a simple softly blurred background and minimal source-relevant props
@@ -996,7 +1013,7 @@ ${customPrompt}
 RULES:
 - Start with the exact finished dish or source subject. Keep ingredients, texture, cooking method, and setting accurate to the source
 - Use the private performance signals only to choose a promising angle. Never print metrics on the Pin
-- Create one real-looking premium vertical 2:3 food-blog photograph with one appetite-first hero serving filling about 72-86% of the frame, bright directional window light, tack-sharp believable micro-texture, truthful color, useful breathing room, and subtle homemade imperfections
+- Create one real-looking premium vertical 9:16 food-blog photograph with one appetite-first hero serving filling about 72-86% of the frame, bright directional window light, tack-sharp believable micro-texture, truthful color, useful breathing room, and subtle homemade imperfections
 - ${placementCompositionText(placement)}
 - Keep the ${placementText(placement)} calm enough for a local text overlay while continuing recognizable food texture through the area
 - Generate no text, lettering, numbers, labels, title ribbon, panel, badge, logo, or watermark. The app adds exact typography after the clean photo is finished
@@ -1085,7 +1102,11 @@ function extractSlugFromUrl(url) {
 
 async function uploadLocalImageToImgBB(filePath, blogUrl = '', label = '') {
   const imgbbApiKey = getPinCreatorSettings().imgbbApiKey;
-  if (!imgbbApiKey || !filePath || !fs.existsSync(filePath)) return null;
+  if (!imgbbApiKey) {
+    imgbbLastFailure = 'No ImgBB API key is configured in Settings.';
+    return null;
+  }
+  if (!filePath || !fs.existsSync(filePath)) return null;
   const scheduledUpload = imgbbUploadQueue.catch(() => {}).then(async () => {
     const spacingMs = Math.max(0, 700 - (Date.now() - lastImgBBUploadAt));
     if (spacingMs) await new Promise((resolve) => setTimeout(resolve, spacingMs));
@@ -1125,10 +1146,16 @@ async function uploadLocalImageToImgBB(filePath, blogUrl = '', label = '') {
               if (!response.ok) {
                 const detail = sanitizeDiagnosticReport(String(await response.text())).replace(/\s+/g, ' ').slice(0, 500);
                 const rateLimited = response.status === 429 || /rate limit reached|["']code["']\s*:\s*100/i.test(detail);
-                if (rateLimited || response.status >= 500) {
+                if (rateLimited) {
+                  const rateLimitError = new Error('ImgBB rate limit reached.');
+                  rateLimitError.imgbbRateLimited = true;
+                  rateLimitError.imgbbDetail = detail;
+                  throw rateLimitError;
+                }
+                if (response.status >= 500) {
                   const transientError = new Error(`ImgBB temporarily rejected the upload (${response.status}).`);
                   transientError.response = {
-                    status: rateLimited ? 429 : response.status,
+                    status: response.status,
                     headers: { 'retry-after': response.headers.get('retry-after') || '' }
                   };
                   transientError.imgbbDetail = detail;
@@ -1160,6 +1187,8 @@ async function uploadLocalImageToImgBB(filePath, blogUrl = '', label = '') {
             if (data?.success && directUrl) {
               imgbbBlockedUntil = 0;
               imgbbBlockedKey = '';
+              imgbbBlockedReason = '';
+              imgbbLastFailure = '';
               return directUrl;
             }
             lastDetail = 'ImgBB returned a successful response without an image URL';
@@ -1169,16 +1198,28 @@ async function uploadLocalImageToImgBB(filePath, blogUrl = '', label = '') {
           lastDetail = res.detail;
           if ([401, 403].includes(lastStatus)) break;
         } catch (error) {
-          lastStatus = Number(error?.response?.status || 0);
+          lastStatus = error?.imgbbRateLimited ? 429 : Number(error?.response?.status || 0);
           lastDetail = sanitizeDiagnosticReport(String(error?.imgbbDetail || error?.message || 'Upload failed')).replace(/\s+/g, ' ').slice(0, 500);
           break;
         }
       }
-      // Cache only credential failures. Rate limits and provider outages are transient
-      // and must not disable the rest of a Pinterest batch.
-      if ([401, 403].includes(lastStatus)) {
+      if (lastStatus === 429) {
+        imgbbBlockedKey = imgbbApiKey;
+        imgbbBlockedUntil = Date.now() + 15 * 60 * 1000;
+        imgbbBlockedReason = 'rate-limit';
+        imgbbLastFailure = 'ImgBB rate limit reached. ImgBB uploads are paused for 15 minutes.';
+      } else if ([401, 403].includes(lastStatus)) {
         imgbbBlockedKey = imgbbApiKey;
         imgbbBlockedUntil = Date.now() + 30 * 60 * 1000;
+        imgbbBlockedReason = 'credentials';
+        imgbbLastFailure = 'ImgBB rejected the API key. Update it in Settings.';
+      } else if (lastStatus >= 500) {
+        imgbbBlockedKey = imgbbApiKey;
+        imgbbBlockedUntil = Date.now() + 2 * 60 * 1000;
+        imgbbBlockedReason = 'provider';
+        imgbbLastFailure = 'ImgBB is temporarily unavailable. Uploads are paused for two minutes.';
+      } else {
+        imgbbLastFailure = `ImgBB upload failed${lastDetail ? `: ${lastDetail}` : '.'}`;
       }
       log.error(`[ImgBB] Local upload failed: ${lastStatus || 'invalid response'} ${lastDetail}`);
       return null;
@@ -1189,6 +1230,13 @@ async function uploadLocalImageToImgBB(filePath, blogUrl = '', label = '') {
   });
   imgbbUploadQueue = scheduledUpload.then(() => undefined, () => undefined);
   return scheduledUpload;
+}
+
+function imgBBFailureMessage() {
+  if (imgbbBlockedReason === 'rate-limit') return 'ImgBB rate limit reached. Wait 15 minutes or use the resilient hosting option.';
+  if (imgbbBlockedReason === 'credentials') return 'ImgBB rejected the API key. Update it in Settings or choose another host.';
+  if (imgbbBlockedReason === 'provider') return 'ImgBB is temporarily unavailable. Wait two minutes or use the resilient hosting option.';
+  return imgbbLastFailure || 'ImgBB did not provide a verified URL. Check the ImgBB key or choose another host.';
 }
 
 function normalizeImageUrl(value) {
@@ -1485,14 +1533,84 @@ async function cleanupUnusedManagedMedia({ olderThanDays = 7, dryRun = false } =
   };
 }
 
+async function cleanupHostedWordPressPins() {
+  if (activePinterestMediaOperations > 0) return;
+  if (store.get('settings.wordpressPinCleanupEnabled', true) === false) return;
+  const records = store.get('pinterestDelivery.wordpressMedia', []);
+  const batches = pinterestBatches();
+  const eligible = eligibleWordPressPins(records, batches);
+  if (!eligible.length) return;
+  const credentials = new Map();
+  const sitePosts = new Map();
+  const connection = (record) => {
+    if (credentials.has(record.siteUrl)) return credentials.get(record.siteUrl);
+    const site = (store.get('settings.wordpressSites', []) || []).find((item) => normalizeWordPressUrl(item.url) === record.siteUrl);
+    if (!site) throw new Error('WordPress cleanup skipped: the original site connection is missing.');
+    const resolved = resolveWordPressCredentials(site);
+    if (!resolved.username || !resolved.apiKey) throw new Error('WordPress cleanup skipped: credentials are unavailable.');
+    const auth = 'Basic ' + Buffer.from(`${resolved.username}:${resolved.apiKey}`).toString('base64');
+    const config = wordpressRequestConfig(record.siteUrl, { headers: { Authorization: auth }, timeout: 20000 });
+    credentials.set(record.siteUrl, config);
+    return config;
+  };
+  const results = await cleanupWordPressPins({
+    records: eligible, batches,
+    inspect: async (record) => {
+      try { return (await axios.get(`${record.siteUrl}/wp-json/wp/v2/media/${record.mediaId}?context=edit`, connection(record))).data; }
+      catch (error) { if (error.response?.status === 404) return null; throw error; }
+    },
+    isReferenced: async (record, media) => {
+      if (!sitePosts.has(record.siteUrl)) {
+        const posts = [];
+        const types = (await axios.get(`${record.siteUrl}/wp-json/wp/v2/types?context=edit`, connection(record))).data;
+        if (!types || typeof types !== 'object' || Array.isArray(types)) throw new Error('WordPress cleanup skipped: content types could not be checked.');
+        const collections = Object.values(types).filter((type) => type.slug !== 'attachment' && type.rest_base);
+        for (const type of collections) {
+          let complete = false;
+          for (let page = 1; page <= 20; page++) {
+            const response = await axios.get(`${record.siteUrl}/wp-json/${type.rest_namespace || 'wp/v2'}/${type.rest_base}`, {
+              ...connection(record), params: { context: 'edit', status: 'any', per_page: 100, page, _fields: 'id,content,featured_media' }
+            });
+            if (!Array.isArray(response.data)) throw new Error('WordPress cleanup skipped: reference check returned an invalid response.');
+            posts.push(...response.data);
+            const total = Number(response.headers?.['x-wp-totalpages']);
+            if (response.data.length < 100 || (Number.isFinite(total) && total > 0 && page >= total)) { complete = true; break; }
+          }
+          if (!complete) throw new Error('WordPress cleanup skipped: not all content references could be checked.');
+        }
+        sitePosts.set(record.siteUrl, posts);
+      }
+      const urls = [record.url, ...Object.values(media?.media_details?.sizes || {}).map((size) => size.source_url)].filter(Boolean);
+      return [...sitePosts.get(record.siteUrl), ...store.get('articles', [])].some((post) => {
+        const content = typeof post.content === 'string' ? post.content : post.content?.raw || post.content?.rendered || '';
+        const savedMedia = [post.featuredImage, post.featuredImageRemoteUrl, ...(post.images || []).flatMap((image) => [image.url, image.remoteImageUrl])];
+        return Number(post.featured_media) === record.mediaId || urls.some((url) => savedMedia.includes(url) || String(content).replace(/&amp;/g, '&').includes(url))
+          || String(content).includes(`wp-image-${record.mediaId}`);
+      });
+    },
+    remove: async (record) => {
+      if (activePinterestMediaOperations > 0) throw new Error('WordPress cleanup deferred while Pins are being prepared or exported.');
+      const protectedRecord = !require('./wordpress-pin-retention').eligibleWordPressPins([record], pinterestBatches()).length;
+      if (protectedRecord) throw new Error('WordPress cleanup deferred: this Pin has a protected import.');
+      const response = await axios.delete(`${record.siteUrl}/wp-json/wp/v2/media/${record.mediaId}?force=true`, connection(record));
+      if (response.data?.deleted !== true) throw new Error('WordPress did not confirm Pin media deletion.');
+    },
+    save: async (record) => {
+      store.set('pinterestDelivery.wordpressMedia', store.get('pinterestDelivery.wordpressMedia', []).filter((item) => item.siteUrl !== record.siteUrl || item.mediaId !== record.mediaId));
+    }
+  });
+  store.set('pinterestDelivery.lastCleanup', { checkedAt: new Date().toISOString(), deleted: results.filter((item) => item.deleted).length, errors: results.filter((item) => item.error) });
+}
+
 function runAutomaticMediaCleanup() {
   if (mediaCleanupInFlight) return mediaCleanupInFlight;
   const settings = store.get('settings', {});
-  if (settings.automaticMediaCleanupEnabled === false) return Promise.resolve({ success: true, skipped: true });
-  mediaCleanupInFlight = cleanupUnusedManagedMedia({
+  if (settings.automaticMediaCleanupEnabled === false && settings.wordpressPinCleanupEnabled === false) return Promise.resolve({ success: true, skipped: true });
+  mediaCleanupInFlight = (settings.automaticMediaCleanupEnabled === false ? Promise.resolve({ deletedCount: 0, deletedBytes: 0 }) : cleanupUnusedManagedMedia({
     olderThanDays: normalizeMediaRetentionDays(settings.mediaRetentionDays, 7),
     dryRun: false
-  }).then((result) => {
+  })).then(async (result) => {
+    await cleanupHostedWordPressPins();
     if (result.deletedCount) {
       log.info(`Automatic media cleanup removed ${result.deletedCount} unreferenced file(s) and freed ${result.deletedBytes} bytes.`);
     }
@@ -1509,7 +1627,7 @@ function runAutomaticMediaCleanup() {
 
 function scheduleAutomaticMediaCleanup(delayMs = 15000) {
   if (mediaCleanupTimer) clearTimeout(mediaCleanupTimer);
-  if (store.get('settings.automaticMediaCleanupEnabled', true) === false) {
+  if (store.get('settings.automaticMediaCleanupEnabled', true) === false && store.get('settings.wordpressPinCleanupEnabled', true) === false) {
     mediaCleanupTimer = null;
     return;
   }
@@ -1584,13 +1702,17 @@ function isTrustedIpcSender(event) {
   return isTrustedAppNavigation(frame.url);
 }
 
+let activePinterestMediaOperations = 0;
 function secureIpcHandle(channel, listener) {
   ipcMain.handle(channel, async (event, ...args) => {
     if (!isTrustedIpcSender(event)) {
       log.warn(`Blocked IPC call from an untrusted renderer: ${channel}`);
       throw new Error('Blocked an untrusted application request.');
     }
-    return listener(event, ...args);
+    const protectsPinMedia = ['prepare-pinterest-export', 'export-pinterest-csv', 'create-pinterest-pin-asset'].includes(channel);
+    if (protectsPinMedia) activePinterestMediaOperations++;
+    try { return await listener(event, ...args); }
+    finally { if (protectsPinMedia) activePinterestMediaOperations--; }
   });
 }
 
@@ -1995,7 +2117,7 @@ function stripHtml(html = '') {
 }
 
 function sanitizeFilename(value = 'content') {
-  return String(value)
+  return toAscii(value)
     .replace(/[<>:"/\\|?*\x00-\x1F]/g, '-')
     .replace(/\s+/g, ' ')
     .trim()
@@ -2280,7 +2402,8 @@ function fallbackKeywordResearch({ seed = '', geo = 'US', goal = 'traffic', evid
     `${seed} with simple ingredients`,
     `${seed} for a family dinner`
   ].map((keyword) => ({ keyword, score: 1, pinClicks: 0, outboundClicks: 0, saves: 0, impressions: 0, pins: 0, boards: [] }));
-  const source = (relevant.length ? relevant : evidence.length ? evidence : evergreenSeeds).slice(0, 25);
+  const source = (relevant.length ? relevant : evergreenSeeds).slice(0, 25);
+  const relatedTrends = liveTrends.filter((trend) => seedTerms.some((term) => term.length > 3 && keywordTokens(trend.title).includes(term)));
   const maxScore = Math.max(1, ...source.map((item) => item.score));
   const keywords = source.map((item, index) => {
     const suggestedTitle = `${item.keyword.replace(/\b\w/g, (letter) => letter.toUpperCase())}: Practical Recipe Ideas To Try`;
@@ -2321,14 +2444,14 @@ function fallbackKeywordResearch({ seed = '', geo = 'US', goal = 'traffic', evid
     seed,
     geo,
     goal,
-    summary: keywords.length
-      ? `Ranked ${keywords.length} keyword opportunities from your Pinterest performance data.`
-      : 'No usable Pinterest keyword evidence was found. Import a Pinterest Analytics CSV with titles and click metrics.',
+    summary: relevant.length
+      ? `Ranked ${keywords.length} related opportunities from imported Pinterest performance.`
+      : `Built ${keywords.length} evergreen ideas for this topic. No matching Pinterest performance evidence was found; these are planning ideas, not proven demand.`,
     researchedAt: new Date().toISOString(),
-    sourceLabel: 'Pinterest Analytics and Google Trends Trending Now',
+    sourceLabel: relevant.length ? 'Imported Pinterest performance and topic planning' : 'Evergreen topic planning / unverified demand',
     keywords,
     liveTrends: liveTrends.slice(0, 12),
-    seasonalOpportunities: liveTrends.slice(0, 5).map((trend) => trend.title),
+    seasonalOpportunities: relatedTrends.slice(0, 5).map((trend) => trend.title),
     contentPlan: keywords.slice(0, 5).map((item) => item.suggestedTitle)
   });
 }
@@ -2593,12 +2716,15 @@ function localPathFromAsset(asset = {}) {
   return '';
 }
 
-async function publicImageUrlForAsset(asset, pack, uploadedAssets) {
+async function publicImageUrlForAsset(asset, pack, uploadedAssets, sourceChecks = new Map()) {
   if (!asset) return '';
   if (asset.id === 'meta-social-portrait') {
     const article = findArticleForPack(pack, store.get('articles', []));
     const source = metaSourceLibrary(article || {}, pinCreatorPins()).find((item) => item.kind === asset.sourceKind && (item.kind !== 'pin' || item.pinId === asset.sourcePinId));
-    if (!source || !await metaAssetMatchesSource(asset, source)) throw new Error('The Meta source image changed. Create the 4:5 Meta image again before exporting.');
+    if (!source) throw new Error('The Meta source image changed. Create the 4:5 Meta image again before exporting.');
+    const key = JSON.stringify([metaSourceFingerprint(source), asset.sourceSha256]);
+    if (!sourceChecks.has(key)) sourceChecks.set(key, metaAssetMatchesSource(asset, source));
+    if (!await sourceChecks.get(key)) throw new Error('The Meta source image changed. Create the 4:5 Meta image again before exporting.');
   }
   const existingHosted = [asset.hostedImageUrl, asset.publicUrl, asset.imgbbUrl]
     .find((value) => isPublicUrl(value) && !isTemporaryPinterestMediaUrl(value));
@@ -2635,8 +2761,8 @@ function pinAssetFromPack(pack, pins = []) {
   return {
     label: 'Pinterest Pin',
     platform: 'Pinterest',
-    width: 1000,
-    height: 1500,
+    width: pin.imageQa?.width || 1000,
+    height: pin.imageQa?.height || 1500,
     filePath,
     fileUrl,
     publicUrl,
@@ -2667,6 +2793,7 @@ async function buildGhlSocialRows(packs = []) {
   let slot = firstFutureSlot(intervalMinutes);
   const intervalMs = intervalMinutes * 60 * 1000;
   const uploadedAssets = new Map();
+  const sourceChecks = new Map();
   const headers = [
     'postAtSpecificTime (YYYY-MM-DD HH:mm:ss)',
     'content',
@@ -2687,16 +2814,17 @@ async function buildGhlSocialRows(packs = []) {
   const addRow = async ({ pack, platform = 'Social', caption, hashtags = [], type = 'post', comment = '' }) => {
     if (!caption) return;
     const asset = preferredPlatformAsset(pack, platform) || sharedSocialAsset(pack);
-    const publicImageUrl = await publicImageUrlForAsset(asset, pack, uploadedAssets);
+    const publicImageUrl = await publicImageUrlForAsset(asset, pack, uploadedAssets, sourceChecks);
     if (asset && publicImageUrl) {
       asset.publicUrl = asset.publicUrl || publicImageUrl;
       if (/^https:\/\/i\.ibb\.co\//i.test(publicImageUrl)) asset.imgbbUrl = asset.imgbbUrl || publicImageUrl;
     }
     const category = platform;
     const prefix = contentPrefixFor(category, type);
-    const link = trackedPackUrl(pack, category, `${prefix}_${rows.length + 1}`, 'organic_social');
-    const finalCaption = replaceSourceUrlInText(caption, pack, link);
-    const finalComment = replaceSourceUrlInText(comment, pack, link);
+    const noLink = pack.includeSourceLink === false || /^meta-/.test(pack.campaignStyle || '');
+    const link = noLink ? '' : trackedPackUrl(pack, category, `${prefix}_${rows.length + 1}`, 'organic_social');
+    const finalCaption = noLink ? withoutArticleLinks(caption) : replaceSourceUrlInText(caption, pack, link);
+    const finalComment = noLink ? '' : replaceSourceUrlInText(comment, pack, link);
     const tags = [category, pack.campaignStyle, ...(Array.isArray(hashtags) ? hashtags.map((tag) => String(tag).replace(/^#/, '')) : [])]
       .map((tag) => String(tag || '').trim())
       .filter(Boolean)
@@ -2834,7 +2962,7 @@ async function fetchGhlJson(url, options = {}, timeoutMs = 30000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(url, { ...options, signal: controller.signal });
+    const response = await fetch(url, { ...options, redirect: 'error', signal: controller.signal });
     const text = await response.text();
     let body;
     try { body = text ? JSON.parse(text) : {}; }
@@ -2966,7 +3094,7 @@ async function googleAccessToken() {
   }
   const settings = googleSettings();
   if (!settings.clientId || !settings.clientSecret || !settings.refreshToken) {
-    throw new Error('Connect Google Search Console in Settings first.');
+    throw new Error('Connect Google in Settings first.');
   }
   const body = await fetchJsonResponse('https://oauth2.googleapis.com/token', {
     method: 'POST',
@@ -2978,6 +3106,7 @@ async function googleAccessToken() {
       grant_type: 'refresh_token'
     }).toString()
   });
+  if (!body.access_token) throw new Error('Google did not return an access token. Reconnect Google in Settings.');
   googleAccessTokenCache = {
     token: String(body.access_token || ''),
     expiresAt: Date.now() + (Math.max(60, Number(body.expires_in || 3600)) * 1000)
@@ -3114,7 +3243,7 @@ const articleSettingsDefaults = {
   imageModel: 'z-image-turbo',
   featuredImageRatio: '3:2',
   intextImageRatio: '9:16',
-  pinterestPinRatio: '2:3',
+  pinterestPinRatio: '9:16',
   instagramPortraitRatio: '4:5',
   instagramStoryRatio: '9:16',
   facebookFeedRatio: '1.91:1',
@@ -3262,7 +3391,7 @@ const defaultPinCustomStyles = {
   'custom-july-original-ai': {
     name: 'Ingredient Closeup Pin',
     prompt: [
-      'Create one complete vertical 2:3 recipe Pin with an ultra-realistic, full-bleed close-up of the exact freshly finished dish or drink. Make one generous hero serving and its most delicious source-supported texture instantly recognizable at phone size.',
+      'Create one complete vertical 9:16 recipe Pin with an ultra-realistic, full-bleed close-up of the exact freshly finished dish or drink. Make one generous hero serving and its most delicious source-supported texture instantly recognizable at phone size.',
       'Use a real full-frame food-photography look, natural close perspective, large diffused side-window light, soft bounce fill, truthful white balance, controlled highlights, and open natural shadows. Preserve believable crumbs, fibers, browning, moisture, sauce viscosity, condensation, or fresh crunch supported by the recipe, with subtle handmade irregularity.',
       'Render the supplied short recipe headline exactly once in the center, in large bold uppercase white sans-serif lettering inside a compact translucent rounded panel colored from the food.',
       'Keep the food visible around and through the panel. Add no other words, number, subtitle, CTA, footer, collage, URL, logo, icon, badge, label, packaging, or watermark. Avoid fake steam, excessive glaze, oily pools, plastic perfection, neon saturation, invented garnish, duplicated food, CGI, and illustration.'
@@ -3271,7 +3400,7 @@ const defaultPinCustomStyles = {
   'custom-modern-recipe-magazine': {
     name: 'Modern Recipe Magazine',
     prompt: [
-      'Create a premium vertical 2:3 editorial food photograph of the exact finished recipe, like a modern cooking magazine cover photographed with a real camera.',
+      'Create a premium vertical 9:16 editorial food photograph of the exact finished recipe, like a modern cooking magazine cover photographed with a real camera.',
       'Show one generous hero serving from the most flattering close overhead, 30-45 degree, or eye-level angle. Let it fill 72-86% of the frame and leave a calm upper quarter for the app\'s editorial masthead.',
       'Use a real full-frame camera look, large diffused side-window light, soft bounce fill, accurate white balance, controlled highlights, and open natural shadows. Keep the hero bite and surrounding food sharp, with recipe-supported browned edges, natural sauce viscosity, moist crumb, creamy layers, fresh crunch, or condensation.',
       'Use only one or two source-relevant props. Generate no text, labels, panels, logos, or watermarks. Avoid fake steam, excessive gloss, invented garnish, duplicate food, distorted utensils, plastic texture, harsh HDR, muddy shadows, heavy orange casts, neon saturation, CGI, and illustration.'
@@ -3280,7 +3409,7 @@ const defaultPinCustomStyles = {
   'custom-minimal-editorial': {
     name: 'Minimal Editorial',
     prompt: [
-      'Create a refined vertical 2:3 food-editorial photograph of the exact finished recipe with one unmistakable hero subject and clean visual restraint.',
+      'Create a refined vertical 9:16 food-editorial photograph of the exact finished recipe with one unmistakable hero subject and clean visual restraint.',
       'Crop close enough for appetite and mobile recognition, but preserve purposeful breathing room in the upper quarter for direct local typography. Use a simple neutral surface and no more than one source-relevant prop.',
       'Use large soft directional daylight, realistic contrast, truthful ingredient color, open natural shadows, crisp focal texture, and gentle background falloff without blurring the important food. Preserve a freshly prepared look and small handmade irregularities.',
       'Generate no text, panels, ribbons, labels, buttons, logos, or watermarks. Avoid fake steam, excess glaze, invented ingredients, excessive garnish, duplicate food, synthetic symmetry, plastic shine, harsh HDR, dark restaurant lighting, neon saturation, CGI, and illustration.'
@@ -3456,7 +3585,7 @@ secureIpcHandle('get-settings', async (event) => {
   merged.googleClientSecret = publicSecretValue(s.googleClientSecret_encrypted);
   merged.googleSearchConsoleProperty = s.googleSearchConsoleProperty || '';
   merged.googleSearchConsoleSites = Array.isArray(s.googleSearchConsoleSites) ? s.googleSearchConsoleSites : [];
-  merged.googleSearchConsoleConnected = Boolean(s.googleRefreshToken_encrypted);
+  merged.googleSearchConsoleConnected = Boolean(decryptSecret(s.googleRefreshToken_encrypted || ''));
   merged.pinterestAnalyticsAccessToken = publicSecretValue(s.pinterestAnalyticsAccessToken_encrypted);
   merged.wordpressSites = (s.wordpressSites || []).map(site => ({
     ...Object.fromEntries(Object.entries(site).filter(([key]) => key !== 'apiKey_encrypted')),
@@ -3487,6 +3616,10 @@ secureIpcHandle('get-settings', async (event) => {
 secureIpcHandle('save-settings', (event, settings) => {
   const previous = store.get('settings', {});
   const toStore = { ...previous, ...settings };
+  const gaConfig = analyticsConfig(toStore);
+  toStore.googleAnalyticsMeasurementId = gaConfig.measurementId;
+  toStore.googleAnalyticsPropertyId = gaConfig.propertyId;
+  toStore.googleAnalyticsSiteUrl = gaConfig.siteUrl;
   const senderIsPinCreator = isPinCreatorSender(event);
   delete toStore.youtubeArticlePrompt;
   if (toStore.internalLinkMaxPosts !== undefined) {
@@ -3627,6 +3760,10 @@ secureIpcHandle('save-settings', (event, settings) => {
   delete toStore.pinterestAnalyticsAccessToken;
 
   const migratedSettings = migrateSettings(toStore).settings;
+  if (previous.googleClientId !== migratedSettings.googleClientId || previous.googleClientSecret_encrypted !== migratedSettings.googleClientSecret_encrypted) {
+    googleAccessTokenCache = { token: '', expiresAt: 0 };
+    delete migratedSettings.googleRefreshToken_encrypted;
+  }
   store.set('settings', migratedSettings);
   scheduleAutomaticMediaCleanup(5000);
   if (migratedSettings.replicateApiToken_encrypted) initializePinReplicate();
@@ -3678,6 +3815,10 @@ secureIpcHandle('clear-stored-credential', (event, request = {}) => {
   }
 
   store.set('settings', settings);
+  if (credential === 'google') {
+    googleAccessTokenCache = { token: '', expiresAt: 0 };
+    store.delete('trendResearch.googleAnalytics');
+  }
   return { success: true, credential };
 });
 
@@ -3687,6 +3828,8 @@ secureIpcHandle('connect-google-search-console', async () => {
     return { success: false, error: 'Add the Google Desktop OAuth Client ID and Client Secret, then save Settings first.' };
   }
   const state = randomBytes(24).toString('hex');
+  const verifier = randomBytes(32).toString('base64url');
+  const challenge = createHash('sha256').update(verifier).digest('base64url');
   let server;
   try {
     const result = await new Promise((resolve, reject) => {
@@ -3714,6 +3857,7 @@ secureIpcHandle('connect-google-search-console', async () => {
               code,
               client_id: settings.clientId,
               client_secret: settings.clientSecret,
+              code_verifier: verifier,
               redirect_uri: redirectUri,
               grant_type: 'authorization_code'
             }).toString()
@@ -3725,7 +3869,11 @@ secureIpcHandle('connect-google-search-console', async () => {
             token: String(tokens.access_token || ''),
             expiresAt: Date.now() + (Math.max(60, Number(tokens.expires_in || 3600)) * 1000)
           };
-          const sites = await listSearchConsoleSites(tokens.access_token);
+          if (!tokens.access_token) throw new Error('Google did not return an access token.');
+          let sites = [];
+          let warning = '';
+          try { sites = await listSearchConsoleSites(tokens.access_token); }
+          catch { warning = 'Google connected. Search Console properties could not be loaded; Analytics can still be connected.'; }
           const selected = current.googleSearchConsoleProperty && sites.some((site) => site.siteUrl === current.googleSearchConsoleProperty)
             ? current.googleSearchConsoleProperty
             : sites[0]?.siteUrl || '';
@@ -3736,10 +3884,10 @@ secureIpcHandle('connect-google-search-console', async () => {
             googleSearchConsoleProperty: selected
           });
           response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-          response.end('<!doctype html><title>Content Studio connected</title><main style="font-family:system-ui;max-width:560px;margin:80px auto;padding:24px"><h1>Search Console connected</h1><p>You can close this tab and return to Content Studio.</p></main>');
+          response.end('<!doctype html><title>Content Studio connected</title><main style="font-family:system-ui;max-width:560px;margin:80px auto;padding:24px"><h1>Google connected</h1><p>You can close this tab and return to Content Studio.</p></main>');
           clearTimeout(timeout);
           server.close();
-          resolve({ success: true, sites, property: selected });
+          resolve({ success: true, sites, property: selected, warning });
         } catch (error) {
           response.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' });
           response.end('<!doctype html><title>Connection failed</title><main style="font-family:system-ui;max-width:560px;margin:80px auto;padding:24px"><h1>Connection failed</h1><p>Return to Content Studio and try again.</p></main>');
@@ -3748,7 +3896,7 @@ secureIpcHandle('connect-google-search-console', async () => {
           reject(error);
         }
       });
-      server.on('error', reject);
+      server.on('error', (error) => { clearTimeout(timeout); reject(error); });
       server.listen(0, '127.0.0.1', async () => {
         const redirectUri = `http://127.0.0.1:${server.address().port}/oauth2callback`;
         const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
@@ -3756,12 +3904,15 @@ secureIpcHandle('connect-google-search-console', async () => {
           client_id: settings.clientId,
           redirect_uri: redirectUri,
           response_type: 'code',
-          scope: 'https://www.googleapis.com/auth/webmasters.readonly',
+          scope: 'https://www.googleapis.com/auth/webmasters.readonly https://www.googleapis.com/auth/analytics.readonly',
+          code_challenge: challenge,
+          code_challenge_method: 'S256',
           access_type: 'offline',
           prompt: 'consent',
           state
         }).toString();
-        await shell.openExternal(authUrl.toString());
+        try { await shell.openExternal(authUrl.toString()); }
+        catch (error) { clearTimeout(timeout); server.close(); reject(error); }
       });
     });
     return result;
@@ -3779,6 +3930,7 @@ secureIpcHandle('disconnect-google-search-console', () => {
   settings.googleSearchConsoleProperty = '';
   store.set('settings', settings);
   googleAccessTokenCache = { token: '', expiresAt: 0 };
+  store.delete('trendResearch.googleAnalytics');
   return { success: true };
 });
 
@@ -4085,6 +4237,12 @@ function sanitizePinForStorage(pin = {}) {
     articleId: pin.articleId ? String(pin.articleId) : '',
     queueType: pin.queueType ? String(pin.queueType) : '',
     clusterVariantId: pin.clusterVariantId ? String(pin.clusterVariantId).slice(0, 180) : '',
+    promptLabVersionId: String(pin.promptLabVersionId || '').slice(0, 120),
+    promptLabPromptHash: String(pin.promptLabPromptHash || '').slice(0, 64),
+    promptLabSourceHash: String(pin.promptLabSourceHash || '').slice(0, 64),
+    promptStyle: String(pin.promptStyle || '').slice(0, 120),
+    promptImageSourceMode: ['generate-new', 'reuse-article'].includes(pin.promptImageSourceMode) ? pin.promptImageSourceMode : '',
+    promptTextRenderMode: ['ai', 'local'].includes(pin.promptTextRenderMode) ? pin.promptTextRenderMode : '',
     sourceTitle: pin.sourceTitle || '',
     excerpt: pin.excerpt || '',
     targetKeyword: pin.targetKeyword || '',
@@ -4185,29 +4343,6 @@ function findArticleForPack(pack, articles = []) {
     || null;
 }
 
-function articleImageSource(article, imageSource = 'auto') {
-  if (!article) return null;
-  const featured = {
-    kind: 'article-featured',
-    label: 'Article Featured Image',
-    localPath: article.featuredImageLocalPath || '',
-    url: article.featuredImageDisplay || article.featuredImageLocalUrl || article.featuredImage || article.featuredImageRemoteUrl || '',
-    publicUrl: [article.featuredImageRemoteUrl, article.featuredImage].find(isPublicUrl) || '',
-    remoteUrl: [article.featuredImageRemoteUrl, article.featuredImage].find(isPublicUrl) || ''
-  };
-  const firstInline = (article.images || []).find((image) => image?.localPath || image?.displayUrl || image?.localUrl || image?.url);
-  const inline = firstInline ? {
-    kind: 'article-inline',
-    label: 'Article In-Text Image',
-    localPath: firstInline.localPath || '',
-    url: firstInline.displayUrl || firstInline.localUrl || firstInline.url || '',
-    publicUrl: [firstInline.remoteImageUrl, firstInline.url, firstInline.displayUrl].find(isPublicUrl) || '',
-    remoteUrl: [firstInline.remoteImageUrl, firstInline.url, firstInline.displayUrl].find(isPublicUrl) || ''
-  } : null;
-  if (imageSource === 'article-featured') return featured.localPath || featured.url ? featured : null;
-  if (imageSource === 'article-inline') return inline;
-  return (featured.localPath || featured.url) ? featured : inline;
-}
 
 function pinImageSource(pin) {
   if (!pin) return null;
@@ -4257,11 +4392,6 @@ async function imageSourceBuffer(sourceInfo) {
   });
   return Buffer.from(res.data);
 }
-
-const repurposeImageFormats = [
-  { id: 'instagram-portrait', platform: 'Instagram', label: 'Instagram Portrait', width: 1080, height: 1350 },
-  { id: 'facebook-feed', platform: 'Facebook', label: 'Facebook Feed', width: 1200, height: 630 }
-];
 
 const metaPortraitFormat = Object.freeze({
   id: 'meta-social-portrait',
@@ -4343,81 +4473,24 @@ secureIpcHandle('get-repurpose-packs', async () => {
 });
 
 async function createRepurposeImageVariants({
-  packs = [],
-  pins = [],
-  articles = [],
-  platforms = [],
-  imageSource = 'auto',
-  sourceAsset = null,
-  preserveOriginal = false,
-  sharedMetaPortrait = false
+  packs = [], pins = [], sourceAsset = null
 } = {}) {
   try {
     initializeImagesDir();
-    if (!preserveOriginal && !sharp) sharp = getSharp();
+    if (!sharp) sharp = getSharp();
     const storedPins = Array.isArray(pins) && pins.length ? pins : pinCreatorPins();
-    const requestedPlatforms = new Set((Array.isArray(platforms) ? platforms : []).map((platform) => String(platform).toLowerCase()));
-    const wantedFormats = sharedMetaPortrait
-      ? [metaPortraitFormat]
-      : repurposeImageFormats.filter((format) => (
-          !requestedPlatforms.size || requestedPlatforms.has(String(format.platform).toLowerCase())
-        ));
-    if (!wantedFormats.length) return { success: false, error: 'Choose Instagram or Facebook first.' };
+    const wantedFormats = [metaPortraitFormat];
 
     const updatedPacks = [];
     const missing = [];
     for (const pack of packs) {
-      const pin = findPinForPack(pack, storedPins);
-      const article = findArticleForPack(pack, articles);
-      const explicitSource = sourceAsset && typeof sourceAsset === 'object' ? {
-        kind: String(sourceAsset.kind || 'selected'),
-        label: String(sourceAsset.label || 'Selected Source Image'),
-        localPath: String(sourceAsset.localPath || ''),
-        url: String(sourceAsset.localUrl || sourceAsset.url || ''),
-        publicUrl: String(sourceAsset.publicUrl || ''),
-        remoteUrl: String(sourceAsset.remoteUrl || sourceAsset.publicUrl || ''),
-        pinId: String(sourceAsset.pinId || ''),
-        sourceRevision: String(sourceAsset.sourceRevision || '')
-      } : null;
-      const sourceInfo = explicitSource || (imageSource === 'pin'
-        ? pinImageSource(pin)
-        : imageSource === 'article-featured' || imageSource === 'article-inline'
-          ? articleImageSource(article, imageSource)
-          : (pinImageSource(pin) || articleImageSource(article, 'auto')));
-      if (!sourceInfo) {
-        missing.push(pack.articleTitle || pack.articleId || 'Untitled article');
-        updatedPacks.push(pack);
-        continue;
-      }
-      if (preserveOriginal) {
-        const filePath = sourceInfo.localPath && fs.existsSync(sourceInfo.localPath) ? sourceInfo.localPath : '';
-        const sourceUrl = sourceInfo.url || sourceInfo.publicUrl || sourceInfo.remoteUrl || '';
-        const publicUrl = [sourceInfo.publicUrl, sourceInfo.remoteUrl, sourceUrl].find(isPublicUrl) || '';
-        if (!filePath && !sourceUrl) {
-          missing.push(pack.articleTitle || pack.articleId || 'Untitled article');
-          updatedPacks.push({ ...pack, imageAssets: [] });
-          continue;
-        }
-        updatedPacks.push({
-          ...pack,
-          imageAssets: [{
-            id: 'meta-featured-original',
-            platform: 'Social',
-            label: 'Article Featured Image',
-            filePath,
-            fileUrl: filePath ? localPathToFileUrl(filePath) : (localPathFromManagedMediaUrl(sourceUrl) ? sourceUrl : ''),
-            publicUrl,
-            hostedImageUrl: publicUrl,
-            remoteImageUrl: sourceInfo.remoteUrl || publicUrl,
-            imageUrl: publicUrl,
-            sourcePublicUrl: sourceInfo.publicUrl || publicUrl,
-            requiresHostedVariant: false,
-            sourceKind: 'article-featured',
-            sourceLabel: 'Article Featured Image',
-            sourcePinId: '',
-            sourceUrl
-          }]
-        });
+      const pin = sourceAsset?.pinId
+        ? storedPins.find((item) => String(item.id) === String(sourceAsset.pinId))
+        : findPinForPack(pack, storedPins);
+      const sourceInfo = pinImageSource(pin);
+      if (!sourceInfo || (sourceAsset && sourceAsset.kind !== 'pin')) {
+        missing.push(pack.articleTitle || pack.articleId || 'Pinterest Pin');
+        updatedPacks.push({ ...pack, imageAssets: [] });
         continue;
       }
       const buffer = await imageSourceBuffer(sourceInfo);
@@ -4428,6 +4501,7 @@ async function createRepurposeImageVariants({
         const fileName = `${format.id}-${Date.now()}.jpg`;
         const filePath = path.join(folder, fileName);
         await sharp(buffer)
+          .rotate()
           .resize(format.width, format.height, { fit: 'cover', position: 'centre' })
           .jpeg({ quality: 92, mozjpeg: true })
           .toFile(filePath);
@@ -4466,7 +4540,7 @@ async function createRepurposeImageVariants({
         });
       }
       const generatedIds = new Set(wantedFormats.map((format) => format.id));
-      const replacedPlatforms = new Set(sharedMetaPortrait ? ['social', 'instagram', 'facebook'] : []);
+      const replacedPlatforms = new Set(['social', 'instagram', 'facebook']);
       const existingAssets = (pack.imageAssets || []).filter((asset) => (
         asset.label !== 'Instagram/Facebook Feed'
         && !replacedPlatforms.has(String(asset.platform || '').toLowerCase())
@@ -4559,6 +4633,11 @@ secureIpcHandle('save-zip-file', async (event, buffer) => {
 secureIpcHandle('generate-prompt', async (event, url, interests = [], style = 'basic', jobKey, context = {}) => {
   return withCancel(jobKey, async (signal) => {
     try {
+      if (context.promptLabVersionId) {
+        const version = store.get('contentOperations.styleVersions', []).find(v => v.id === context.promptLabVersionId);
+        if (!version) throw new Error('The benchmark candidate is no longer available.');
+        return { success: true, prompt: `${version.prompt}\nRecipe context: ${JSON.stringify(context.recipe || {})}\nExact headline: ${String(context.overlayText || context.title || '').slice(0, 100)}` };
+      }
       if (!initializePinReplicate()) return { success: false, error: 'API token not configured. Please open Settings.' };
       const promptTemplate = getPromptTemplate(style, url, { ...context, interests });
       const promptLedAi = context.imageSourceMode === 'generate-new' && context.textRenderMode !== 'local';
@@ -4724,16 +4803,20 @@ FINAL SEO RULES:
 // IPC: ARTICLES (CRUD)
 // ============================================================================
 secureIpcHandle('get-articles', () => {
-  const articles = store.get('articles', []).map(normalizeArticleMedia);
+  const saved = store.get('articles', []);
+  const library = store.get('settings.affiliateLinks', []);
+  const cleaned = saved.map((article) => removeArticleImpact(article, library));
+  if (JSON.stringify(saved) !== JSON.stringify(cleaned)) store.set('articles', cleaned);
+  const articles = cleaned.map(normalizeArticleMedia);
   return articles;
 });
 
 secureIpcHandle('save-article', (e, article) => {
   const articles = store.get('articles', []);
-  const normalized = normalizeArticleMedia(normalizeArticleIdentity({
+  const normalized = normalizeArticleMedia(normalizeArticleIdentity(removeArticleImpact({
     ...article,
     updatedAt: new Date().toISOString()
-  }));
+  }, store.get('settings.affiliateLinks', []))));
   const idx = articles.findIndex(a => String(a.id) === normalized.id);
   if (idx >= 0) articles[idx] = normalized; else articles.push(normalized);
   store.set('articles', articles);
@@ -4754,6 +4837,25 @@ secureIpcHandle('delete-article', (e, articleId) => {
   store.set('articles', store.get('articles', []).filter(a => String(a.id || '') !== wantedId));
   emitProgress('job-center-updated', { jobs: unifiedJobList() });
   return { success: true };
+});
+
+secureIpcHandle('queue-articles', async (_event, { articles: incoming = [] } = {}) => {
+  if (!Array.isArray(incoming) || incoming.length > 1000 || incoming.some((article) => !article || typeof article.title !== 'string')) {
+    throw new Error('Queue intake requires at most 1000 valid article titles.');
+  }
+  const { filterArticleIntake } = await import('./article-intake.mjs');
+  const saved = store.get('articles', []);
+  const selection = filterArticleIntake(incoming, saved);
+  const ids = new Set(saved.map((article) => String(article.id)));
+  const accepted = selection.accepted.map((article) => {
+    const normalized = normalizeArticleMedia(normalizeArticleIdentity({ ...article, content: '', generatedTitle: null, workflowStatus: 'queued', queueStatus: 'pending', updatedAt: new Date().toISOString() }));
+    if (ids.has(normalized.id)) normalized.id = `${Date.now()}-${randomBytes(12).toString('hex')}`;
+    ids.add(normalized.id);
+    return normalized;
+  });
+  if (accepted.length) store.set('articles', [...saved, ...accepted]);
+  emitProgress('job-center-updated', { jobs: unifiedJobList() });
+  return { success: true, addedCount: accepted.length, skipped: selection.skipped };
 });
 
 function impactCredentials(params = {}) {
@@ -5303,7 +5405,7 @@ secureIpcHandle('discover-affiliates', async (event, params = {}) => withCancel(
     ? settings.affiliateProvider
     : 'impact';
   const readiness = affiliateProviderReadiness(settings);
-  const providerOrder = affiliateProviderOrder(settings);
+  const providerOrder = affiliateProviderOrder({ ...settings, affiliateProvider: 'amazon', affiliateProviderFallback: false }).filter((name) => name !== 'impact');
   const providerResults = [];
   const providerErrors = [];
 
@@ -5739,6 +5841,7 @@ RULES:
 });
 
 secureIpcHandle('generate-article', async (e, { title, settings, jobKey }) => {
+  settings = { ...settings, recipeCardEnabled: true };
   const apiToken = resolveReplicateApiToken(settings);
   if (!apiToken) throw new Error('Replicate API token is missing');
   const promptTemplate = settings.articlePrompt;
@@ -5746,7 +5849,8 @@ secureIpcHandle('generate-article', async (e, { title, settings, jobKey }) => {
   const privateEvidence = performanceSignals.length
     ? `\n\nPRIVATE PINTEREST PERFORMANCE EVIDENCE FOR ANGLE SELECTION ONLY:\n${JSON.stringify(performanceSignals)}\nUse this only to prioritize reader needs and terminology. Never mention analytics, clicks, saves, impressions, or this instruction in the article.`
     : '';
-  const prompt = `${promptTemplate.replace(/{title}/g, title)}${privateEvidence}`;
+  const prompt = `${String(promptTemplate || '').replace(/{title}/g, title)}${privateEvidence}\n\nREADER AND RECIPE REQUIREMENTS: Answer the reader's cooking task immediately with a short useful opening. Include one complete <section id="recipe-card"> with H3 Ingredients and Instructions, measured ingredients, Prep Time, Cook Time, Total Time and positive Servings or Yield. Specify ingredient preparation state, pan size, realistic heat and timing, observable doneness, substitutions with their effects, troubleshooting and recipe-appropriate storage/reheating. Use every ingredient in the method. Times, yield and quantities must agree. Avoid generic filler, unsupported nutrition, fabricated testing, ratings or affiliate product promotion. Make each section solve a distinct cooking problem.`;
+  const editorialPrompt = `${prompt}\n\n${READER_RECIPE_GUIDANCE}`;
   const targetMinWords = Number(String(settings.articleLength || '900-1200').split('-')[0]) || 900;
   const targetMaxWords = Number(String(settings.articleLength || '900-1200').split('-').pop()) || 1200;
   const maxTokens = Math.max(3000, Math.min(6500, Math.round(targetMaxWords * 1.9)));
@@ -5781,14 +5885,16 @@ secureIpcHandle('generate-article', async (e, { title, settings, jobKey }) => {
       const publisherGuidance = [
         settings.seoBrief?.readerTask,
         settings.seoBrief?.contentDifferentiator,
-        settings.seoBrief?.requiredTopics
+        settings.seoBrief?.requiredTopics,
+        READER_RECIPE_GUIDANCE
       ].filter(Boolean).join('\n');
       let predictionId = '';
       let previousNames = [];
       const chunks = [];
 
-      async function generateCollectionPart(partPrompt, partMaxTokens, validator, attempts = 2) {
+      async function generateCollectionPart(partPrompt, partMaxTokens, validator, attempts = 2, preserveCompactDraft = false) {
         let lastIssue = 'Incomplete recipe collection output';
+        let lastOutput = '';
         for (let attempt = 1; attempt <= attempts; attempt += 1) {
           if (controller.signal.aborted) throw new Error('Cancelled by user');
           const response = await replicateRequest(url, {
@@ -5806,10 +5912,14 @@ secureIpcHandle('generate-article', async (e, { title, settings, jobKey }) => {
             signal: controller.signal
           })));
           const validation = validator(output);
+          lastOutput = output;
           if (validation.ok) return output;
           lastIssue = validation.issues.join('; ');
           log.warn(`Recipe collection validation attempt ${attempt} failed for "${title}": ${lastIssue}`);
+          // The queue checkpoints the draft and repairs only its card before buying images.
+          if (preserveCompactDraft && validation.structuralIssues.length === 0) return output;
         }
+        if (preserveCompactDraft && lastOutput.trim()) return lastOutput;
         throw new Error(`Recipe collection section could not pass quality checks: ${lastIssue}`);
       }
 
@@ -5845,7 +5955,7 @@ STRUCTURE:
 <li><strong>Servings:</strong> [number]</li>
 </ul>
 <h3>Ingredients</h3>
-<ul itemprop="recipeIngredient"><li>[at least 4 exact measured ingredients]</li></ul>
+<ul itemprop="recipeIngredient"><li>[all exact measured ingredients needed for this recipe]</li></ul>
 <h3>Instructions</h3>
 <ol itemprop="recipeInstructions"><li>[at least 3 complete actionable steps with timing, heat, temperature, texture, or doneness cues where useful]</li></ol>
 <h3>Notes</h3>
@@ -5856,28 +5966,16 @@ Keep quantities, yield, timing, temperatures, and instructions internally consis
         const content = await generateCollectionPart(
           compactPrompt,
           Math.max(3000, Math.min(6500, Math.round(selectedMaxWords * 2.2))),
-          (output) => {
-            const headings = extractNumberedH2s(output);
-            const numbers = headings.map((heading) => heading.number);
-            const expectedNumbers = Array.from({ length: listicleItemCount }, (_, index) => index + 1);
-            const wordCount = stripHtml(output).split(/\s+/).filter(Boolean).length;
-            const cardValidation = validateRecipeCard(output);
-            const issues = [];
-            if (numbers.join(',') !== expectedNumbers.join(',')) {
-              issues.push(`Expected numbered ideas 1 through ${listicleItemCount}, received ${numbers.join(', ') || 'none'}`);
-            }
-            if (wordCount < Math.max(500, Math.round(targetMinWords * 0.65))) {
-              issues.push(`Compact collection is too short at ${wordCount} words`);
-            }
-            if (!cardValidation.ok) issues.push(...cardValidation.issues);
-            return { ok: issues.length === 0, issues };
-          },
-          2
+          (output) => validateCompactRecipeCollection(output, listicleItemCount, Math.max(500, Math.round(targetMinWords * 0.65))),
+          2,
+          true
         );
+        const checked = validateCompactRecipeCollection(content, listicleItemCount, Math.max(500, Math.round(targetMinWords * 0.65)));
         return {
           content,
           predictionId,
-          qualityPassApplied: true,
+          qualityPassApplied: checked.ok,
+          collectionQualityWarning: checked.structuralIssues.join('; '),
           recipeCollection: {
             itemCount: listicleItemCount,
             chunks: 1,
@@ -5935,7 +6033,7 @@ Return only clean HTML. Create exactly recipes ${range.start} through ${range.en
 
 QUALITY RULES:
 - Every recipe must be meaningfully different and fully cookable without another website.
-- Use at least 4 measured ingredients and at least 3 actionable steps per recipe. Use more when the dish needs them.
+- Use the exact measured ingredients required by the recipe, without padding short ingredient lists. Include at least 3 actionable steps.
 - List ingredients in the same order they are first used. Every ingredient must appear in the method and no undeclared ingredient may appear in the method.
 - State pan size, appliance setting, heat level, chill time, or internal temperature when the result depends on it.
 - Give observable visual, texture, aroma, or temperature cues instead of only saying "until done."
@@ -5993,8 +6091,9 @@ Do not include an H1, jump link, FAQ, Markdown, code fence, or em dash in headin
           const instructionCount = (instructionBlock.match(/<li\b/gi) || []).length;
           const issues = [];
           if (!card) issues.push('Primary recipe card is missing');
-          if (ingredientCount < 4) issues.push('Primary recipe card ingredients are incomplete');
+          if (!ingredientCount) issues.push('Primary recipe card ingredients are incomplete');
           if (instructionCount < 3) issues.push('Primary recipe card instructions are incomplete');
+          issues.push(...validateRecipeCard(output).issues);
           return { ok: issues.length === 0, issues };
         }
       );
@@ -6022,7 +6121,7 @@ Do not include an H1, jump link, FAQ, Markdown, code fence, or em dash in headin
       try {
         const url = getAIModelUrl(settings.aiModel || 'chatgpt');
         const res = await replicateRequest(url, {
-          input: { prompt, max_tokens: maxTokens, temperature: 0.55, top_p: 1 }
+          input: { prompt: editorialPrompt, max_tokens: maxTokens, temperature: 0.55, top_p: 1 }
         }, apiToken, { signal: controller.signal });
 
         let content = await pollReplicate(res.data.id, apiToken, { maxAttempts: 60, intervalMs: 2500, signal: controller.signal });
@@ -6038,11 +6137,14 @@ Do not include an H1, jump link, FAQ, Markdown, code fence, or em dash in headin
           continue;
         }
         let qualityPassApplied = false;
-        if (settings.smartQualityPass !== false) {
+        const editorial = assessEditorialGaps(content);
+        if (settings.smartQualityPass !== false && editorial.needsRevision) {
           try {
             const revisionPrompt = `Act as the final editorial and recipe-consistency reviewer for a people-first recipe publisher.
 
 Topic: ${title}
+Specific gaps to correct: ${editorial.issues.join('; ')}
+${READER_RECIPE_GUIDANCE}
 Primary keyword: ${settings.seoBrief?.targetKeyword || title}
 Search intent: ${settings.seoBrief?.searchIntent || 'informational'}
 Audience: ${settings.seoBrief?.audience || 'home cooks'}
@@ -6107,7 +6209,7 @@ Return only one complete <section id="recipe-card" class="recipe-card" itemscope
 REQUIREMENTS:
 - Preserve the recipe, serving yield, times, temperatures, and method from the source.
 - Include Prep Time, Cook Time, Total Time, and Servings or Yield.
-- Include at least 4 ingredients. Every ingredient needs an explicit useful quantity, such as a number, fraction, pinch, dash, or "to taste".
+- Include every ingredient needed by the recipe, without padding short ingredient lists. Every ingredient needs an explicit useful quantity, such as a number, fraction, pinch, dash, or "to taste".
 - Include at least 3 complete, actionable instructions.
 - At least two instructions must contain a useful timing, temperature, texture, aroma, or observable doneness cue.
 - List ingredients in order of use. Every ingredient must appear in the method, and the method must not introduce undeclared ingredients.
@@ -6139,6 +6241,7 @@ ${articleContext}`;
               } catch (repairError) {
                 if (repairError.message === 'Cancelled by user') throw repairError;
                 log.warn(`Recipe card repair attempt ${repairAttempt} failed for "${title}": ${repairError.message}`);
+                if (repairError.noRetry) break;
               }
             }
           }
@@ -6152,7 +6255,8 @@ ${articleContext}`;
           predictionId: res.data.id,
           qualityPassApplied,
           recipeCardRepairApplied,
-          recipeCardQualityWarning
+          recipeCardQualityWarning,
+          editorialChecks: assessEditorialGaps(content)
         };
       } catch (err) {
         if (err.noRetry || err.message === 'Cancelled by user') throw err;
@@ -6170,6 +6274,29 @@ ${articleContext}`;
 // ============================================================================
 // IPC: IMAGE PROMPT GENERATION
 // ============================================================================
+async function prepareArticleRecipe(article, { settings = {}, jobKey, repair = true } = {}) {
+  const effectiveSettings = { ...store.get('settings', {}), ...settings };
+  const controller = new AbortController();
+  if (jobKey && activeJobs.has(jobKey)) throw new Error('Recipe validation is already running for this article.');
+  if (jobKey) activeJobs.set(jobKey, controller);
+  try {
+    const prepare = createRecipeReadinessService({
+      clean: (value) => sanitizeWordPressArticleHtml(String(value).replace(/^```(?:html)?\s*/i, '').replace(/\s*```$/, '')),
+      generateCard: async (prompt, { attempt, signal }) => {
+        const apiToken = resolveReplicateApiToken(effectiveSettings);
+        if (!apiToken) throw new Error('Replicate API token is missing');
+        const response = await replicateRequest(getAIModelUrl(effectiveSettings.aiModel || 'chatgpt'), {
+          input: { prompt, max_tokens: 3200, temperature: attempt === 1 ? 0.15 : 0.05, top_p: 1 }
+        }, apiToken, { signal, timeout: 90000 });
+        return pollReplicate(response.data.id, apiToken, { maxAttempts: 60, intervalMs: 2500, signal });
+      }
+    });
+    return await prepare(article, { signal: controller.signal, repair });
+  } finally { if (jobKey) activeJobs.delete(jobKey); }
+}
+
+secureIpcHandle('prepare-article-recipe', (_event, params) => prepareArticleRecipe(params.article, params));
+
 secureIpcHandle('generate-image-prompts', async (e, { content, title, count, settings, isListicle, category, jobKey }) => {
   const apiToken = resolveReplicateApiToken(settings);
   if (!apiToken) throw new Error('Replicate API token is missing');
@@ -6199,7 +6326,7 @@ secureIpcHandle('generate-image-prompts', async (e, { content, title, count, set
           const res = await replicateRequest(url, {
             stream: false, input: { prompt: sp, temperature: 0.6, top_p: 1 }
           }, apiToken, { signal: controller.signal });
-          const output = await pollReplicate(res.data.id, apiToken, { maxAttempts: 20, intervalMs: 2000, signal: controller.signal });
+          const output = await pollReplicate(res.data.id, apiToken, { maxAttempts: 60, intervalMs: 2500, signal: controller.signal });
           prompts.push(output.trim());
         } catch (err) {
           if (err.message === 'Cancelled by user') throw err;
@@ -6223,7 +6350,7 @@ secureIpcHandle('generate-image-prompts', async (e, { content, title, count, set
     const res = await replicateRequest(url, {
       stream: false, input: { prompt: p, temperature: 0.6, top_p: 1 }
     }, apiToken, { signal: controller.signal });
-    const output = await pollReplicate(res.data.id, apiToken, { maxAttempts: 20, intervalMs: 2000, signal: controller.signal });
+    const output = await pollReplicate(res.data.id, apiToken, { maxAttempts: 60, intervalMs: 2500, signal: controller.signal });
 
     const prompts = [];
     for (const m of output.matchAll(/\d+\.\s*(.+?)(?=\d+\.|$)/gs)) prompts.push(m[1].trim());
@@ -6236,6 +6363,37 @@ secureIpcHandle('generate-image-prompts', async (e, { content, title, count, set
 // ============================================================================
 // IPC: TRENDS AND KEYWORD RESEARCH
 // ============================================================================
+function googleAnalyticsWorkspace() {
+  return analyticsWorkspace(store.get('trendResearch.googleAnalytics', null), store.get('settings', {}), store.get('articles', []));
+}
+
+let googleAnalyticsSync = null;
+secureIpcHandle('get-google-analytics-workspace', () => googleAnalyticsWorkspace());
+secureIpcHandle('refresh-google-analytics', async () => {
+  if (googleAnalyticsSync) return googleAnalyticsSync;
+  googleAnalyticsSync = (async () => {
+    try {
+      const settings = store.get('settings', {});
+      const config = analyticsConfig(settings);
+      if (!config.propertyId || !config.siteUrl) throw new Error('Save the numeric GA4 property ID and website first. Your G- tracking ID cannot read reports.');
+      const token = await googleAccessToken();
+      const snapshot = await fetchAnalyticsSnapshot({ settings, token, request: (url, body, options) => axios.post(url, body, options) });
+      const knownUrls = new Set(store.get('articles', []).map((article) => analyticsArticleUrl(article.wordpressPostUrl || article.sourceUrl || '', config.siteUrl)).filter(Boolean));
+      snapshot.pages = snapshot.pages.filter((page) => knownUrls.has(page.url));
+      const current = analyticsConfig(store.get('settings', {}));
+      if (current.propertyId !== config.propertyId || current.siteUrl !== config.siteUrl || !googleSettings().refreshToken) throw new Error('Google settings changed during the sync. Refresh again.');
+      store.set('trendResearch.googleAnalytics', snapshot);
+      return { success: true, ...googleAnalyticsWorkspace() };
+    } catch (error) {
+      logProviderError('Google Analytics sync failed:', error);
+      return { success: false, error: error.status === 403 || error.response?.status === 403
+        ? 'Google denied report access. Enable Google Analytics Data API for the OAuth project, use an account with access to this property, and reconnect Google for Analytics permission.'
+        : sanitizeProviderError(error).message || error.message || 'Analytics sync failed.' };
+    }
+  })();
+  try { return await googleAnalyticsSync; } finally { googleAnalyticsSync = null; }
+});
+
 secureIpcHandle('get-trend-workspace', () => {
   const analytics = store.get('trendResearch.pinterestAnalytics', null);
   return {
@@ -6284,22 +6442,27 @@ secureIpcHandle('clear-pinterest-analytics', () => {
   return { success: true };
 });
 
-secureIpcHandle('get-performance-schedule', (event, { count = 0, start = '', intervalHours = 2, pinsPerDay = 8 } = {}) => {
+secureIpcHandle('get-performance-schedule', (event, { count = 0, start = '', intervalHours = 2, pinsPerDay = 8, timezone = '' } = {}) => {
   const analytics = store.get('trendResearch.pinterestAnalytics', {});
-  const profile = buildPerformanceScheduleProfile(analytics?.rows || analytics?.topPins || []);
-  const startDate = start ? new Date(start) : new Date();
+  const account = store.get('pinWorkspace.accounts', []).find(a => a.id === store.get('pinWorkspace.defaultCsvAccountId', ''));
+  const zone = timezone || account?.schedule?.timezone || account?.timezone || 'UTC';
+  const profile = buildPerformanceScheduleProfile(analytics?.rows || analytics?.topPins || [], { timezone: zone });
+  const startDate = start ? new Date(require('./pin-scheduler').utcTime(start, zone)) : new Date();
   const slots = nextPerformanceSlots(count, {
     start: Number.isNaN(startDate.getTime()) ? new Date() : startDate,
     intervalHours,
     pinsPerDay,
+    timezone: zone,
     preferredHours: profile.preferredHours,
     maximumDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
   });
+  if (slots.length !== Number(count)) throw new Error('This Smart Schedule does not fit in the 30-day window. Choose a shorter interval or a higher daily limit. No dates were applied.');
   return { success: true, profile, slots: slots.map((slot) => slot.toISOString()) };
 });
 
 secureIpcHandle('get-pinterest-cluster-workspace', () => ({
   success: true,
+  websiteAnalytics: googleAnalyticsWorkspace(),
   history: store.get('pinterestClusters.history', [])
 }));
 
@@ -6336,10 +6499,15 @@ secureIpcHandle('build-pinterest-clusters', async (event, {
       boardNames
     };
     const fallback = fallbackPinterestClusterPlan(context);
+    const website = googleAnalyticsWorkspace();
+    const sourceEvidence = !website.stale && !website.limited
+      ? website.recommendations.filter((entry) => entry.url === analyticsArticleUrl(source.destinationUrl || requestedUrl, store.get('settings.googleAnalyticsSiteUrl', '')) && entry.sessions >= 30) : [];
+    const websiteSignals = [...sourceEvidence, ...websiteEvidence(website, `${source.title} ${source.description}`)].slice(0, 8);
     const token = resolveReplicateApiToken(settings);
     let plan = fallback;
     let warning = '';
     if (token) {
+      try {
       const performanceEvidence = relevantPinterestSignals(`${source.title} ${source.description}`, 16);
       const researchEvidence = relevantSavedPinterestResearch(`${source.title} ${source.description}`, 12);
       const prompt = `You are a senior Pinterest content strategist for a recipe publisher. Build coherent Pinterest interest clusters for one source URL.
@@ -6357,6 +6525,9 @@ ${JSON.stringify(performanceEvidence)}
 
 Saved research evidence:
 ${JSON.stringify(researchEvidence)}
+
+Verified GA4 landing-page session evidence (not exact article reading time):
+${JSON.stringify(websiteSignals)}
 
 Return ONLY valid JSON:
 {
@@ -6389,6 +6560,7 @@ Rules:
 - Each cluster must represent a different reason to save, cook, plan, or click. Do not create cosmetic keyword variations.
 - Use lifecycle labels only when justified. Without current evidence, use established for evergreen intent and emerging only for a clearly labeled test.
 - Weight outbound clicks first, then Pin clicks, saves, and impressions when performance evidence exists.
+- When GA4 evidence exists, prioritize useful related cooking needs around articles with engaged sessions. Never duplicate the exact winning recipe, invent analytics numbers, or infer sharing from engagement. No Analytics evidence means performance is unknown.
 - Keep image, title, description keywords, destination, and board semantically aligned.
 - Use only facts visible in the source metadata. Never invent ingredients, timing, health claims, popularity, trends, or performance metrics.
 - Do not repeat the same dominant cluster across the plan. Include enough variety for balanced scheduling.
@@ -6407,9 +6579,16 @@ Rules:
           ? 'Source page and imported Pinterest performance'
           : 'Source page and Pinterest use-case reasoning'
       }, context);
+      } catch (error) {
+        if (controller.signal.aborted || error.message === 'Cancelled by user') throw error;
+        logProviderError('Cluster AI expansion unavailable; keeping source-based local plan:', error, 'warn');
+        warning = 'AI expansion was unavailable. The source-based local cluster plan was kept; no extra generation was purchased.';
+      }
     } else {
       warning = 'Replicate token missing, so Content Studio used its local Pinterest cluster planner.';
     }
+    plan.websiteEvidence = websiteSignals;
+    if (sourceEvidence.length) plan.strategyNotes = [...(plan.strategyNotes || []), `GA4: ${sourceEvidence[0].sessions} landing-page sessions, ${sourceEvidence[0].engagedSessions} engaged sessions. Build distinct related intents around this proven destination.`];
     const history = [
       plan,
       ...store.get('pinterestClusters.history', []).filter((item) => item.id !== plan.id)
@@ -6438,6 +6617,7 @@ secureIpcHandle('research-keywords', async (e, { seed = '', geo = 'US', goal = '
   if (jobKey) activeJobs.set(jobKey, controller);
   const analytics = store.get('trendResearch.pinterestAnalytics', null);
   const evidence = pinterestKeywordEvidence(analytics?.rows || []);
+  const websiteSignals = websiteEvidence(googleAnalyticsWorkspace(), cleanSeed);
   let liveTrends = [];
   let warning = '';
   try {
@@ -6451,6 +6631,7 @@ secureIpcHandle('research-keywords', async (e, { seed = '', geo = 'US', goal = '
     const apiToken = resolveReplicateApiToken(settings);
     let research = fallback;
     if (apiToken) {
+      try {
       const allowedBoards = [...new Set([
         ...(settings.pinCreator?.boardNames || settings.boardNames || []),
         ...(analytics?.rows || []).map((row) => row.board)
@@ -6475,6 +6656,9 @@ Primary goal: ${goal}
 
 Verified Pinterest performance evidence from the user's own Pins:
 ${JSON.stringify(evidenceText)}
+
+Verified GA4 landing-page session evidence (not exact time spent reading the recipe):
+${JSON.stringify(websiteSignals)}
 
 Google Trends Trending Now signals:
 ${JSON.stringify(trendText)}
@@ -6510,6 +6694,7 @@ Return ONLY valid JSON:
 Rules:
 - Return 15 to 30 useful long-tail keywords closely related to the seed topic.
 - Weight outbound clicks most, then Pin clicks, saves, and impressions.
+- Use GA4 engaged-session evidence to choose related reader problems around strong articles, not duplicate their recipe. Never invent sessions, retention, conversion, or share metrics.
 - Never invent Pinterest metrics or call something trending unless it appears in supplied evidence.
 - Google Trending Now is a recent surge feed, not monthly search volume. Never describe its traffic label as search volume.
 - A high score requires useful search intent plus evidence or a clear seasonal opportunity.
@@ -6570,6 +6755,12 @@ Rules:
         keywords,
         liveTrends: liveTrends.slice(0, 12)
       };
+      } catch (error) {
+        if (controller.signal.aborted || error.message === 'Cancelled by user') throw error;
+        logProviderError('Research AI expansion unavailable; keeping local evidence:', error, 'warn');
+        warning = [warning, 'AI expansion was unavailable. Live signals and local evidence were kept; no extra generation was purchased.'].filter(Boolean).join(' ');
+        research.keywords = research.keywords.map((item) => ({ ...item, cannibalization: cannibalizationMatch(item.keyword, item.suggestedTitle, existingTitles) }));
+      }
     } else {
       warning = [warning, 'Replicate token missing, so keywords were ranked from Pinterest metrics without AI expansion.'].filter(Boolean).join(' ');
       research.keywords = research.keywords.map((item) => ({
@@ -6577,6 +6768,8 @@ Rules:
         cannibalization: cannibalizationMatch(item.keyword, item.suggestedTitle, existingTitles)
       }));
     }
+    research.websiteEvidence = websiteSignals;
+    if (websiteSignals.length) research.contentPlan = [`Expand related cooking needs around ${websiteSignals[0].title} (${websiteSignals[0].engagedSessions} GA4 engaged sessions); avoid repeating the same recipe.`, ...(research.contentPlan || [])].slice(0, 8);
     const history = [research, ...store.get('trendResearch.history', []).filter((item) => item.id !== research.id)].slice(0, 25);
     store.set('trendResearch.history', history);
     return { success: true, warning, research, history };
@@ -6614,6 +6807,7 @@ secureIpcHandle('export-keyword-research', async (e, research = {}) => {
 // ============================================================================
 // IPC: SOCIAL REPURPOSING
 // ============================================================================
+secureIpcHandle('get-meta-caption-draft', (_event, { article = {}, source = {} } = {}) => ({ success: true, content: automaticMetaContent(article, { title: source.pinterestTitle, description: source.pinterestDescription, csvKeywords: source.pinterestKeywords }) }));
 secureIpcHandle('research-meta-trends', async (e, { article = {}, geo = 'US', goal = 'traffic', settings = {}, jobKey } = {}) => {
   const controller = new AbortController();
   if (jobKey) activeJobs.set(jobKey, controller);
@@ -6725,7 +6919,6 @@ secureIpcHandle('generate-meta-content', async (e, {
   if (jobKey) activeJobs.set(jobKey, controller);
   try {
     const title = article.generatedTitle || article.title || 'Untitled article';
-    const sourceUrl = article.wordpressPostUrl || article.sourceUrl || '';
     const articleText = stripHtml(article.content || '').slice(0, 5000);
     const pinterestSource = {
       title: String(sourceContext.title || '').slice(0, 180),
@@ -6744,7 +6937,7 @@ secureIpcHandle('generate-meta-content', async (e, {
     const prompt = `You are a senior Facebook and Instagram content editor for a recipe publisher.
 
 Article title: ${title}
-Public article URL: ${sourceUrl || 'not published yet'}
+Exact saved recipe preview: ${recipePreview(article) || 'No validated recipe card available; do not invent ingredients, quantities, or instructions.'}
 Goal: ${goal}
 Article excerpt: ${articleText}
 Saved Pinterest source: ${JSON.stringify(pinterestSource)}
@@ -6779,7 +6972,7 @@ Return ONLY valid JSON:
     "reelVoiceover": "short voiceover",
     "reelProductionNotes": "9:16 production directions covering audio, captions, safe zones, and no watermark",
     "carouselSlides": [{"heading":"short heading","body":"one useful idea"}],
-    "cta": "save, share, or profile-link CTA",
+    "cta": "natural invitation to request the full recipe by message",
     "hashtags": ["#specifictag"],
     "imageAltText": "accessible image description"
   }
@@ -6789,10 +6982,11 @@ Rules:
 - Use exact article details and only verified trend angles. Do not invent a trend.
 - Treat the saved Pinterest title, description, and keywords as approved source context. Adapt them to each Meta platform instead of copying them word for word.
 - Make each platform version original and meaningfully different instead of copying the same caption.
-- Facebook: short readable paragraphs, one practical takeaway, one natural question, a link CTA, no engagement bait, and no more than 2 hashtags.
+- Facebook: short readable paragraphs, one practical takeaway, one natural question, no engagement bait, and no more than 2 hashtags.
 - Instagram: put the hook in the first 125 characters, add useful detail and natural spacing, use one save/share CTA, 3 to 8 specific hashtags, and create 6 carousel slides.
 - Reels: use 3 to 6 vertical 9:16 scenes, a visual hook in the first 2 seconds, audio direction, readable captions, key content inside safe zones, and no third-party watermark.
-- Do not place the raw URL in the Instagram caption. The CTA may say link in profile.
+- Neither caption may include an article URL, link-in-bio/profile instruction, or blog link CTA. Invite readers to message for the complete recipe without requiring likes, tags, shares, or a keyword comment. Do not promise automatic delivery.
+- Use only the exact supplied recipe preview; do not invent ingredient amounts or turn a partial preview into a complete recipe. The app appends the source-checked preview after your caption; do not duplicate it.
 - Alt text must describe visible food, setting, and relevant action without keyword stuffing.
 - Keep claims realistic. Avoid unsupported health claims, fake personal stories, engagement bait, and em dashes.`;
 
@@ -6817,7 +7011,7 @@ Rules:
     parsed.instagram.carouselSlides = arrayValue(parsed.instagram.carouselSlides).slice(0, 8);
     parsed.instagram.reelScenes = arrayValue(parsed.instagram.reelScenes).slice(0, 6);
     parsed.instagram.reelProductionNotes = String(parsed.instagram.reelProductionNotes || 'Vertical 9:16. Use original audio or licensed sound, add readable captions, keep text and the dish inside safe zones, and use no third-party watermark.');
-    return { success: true, content: parsed };
+    return { success: true, content: enforceRecipeCaptions(parsed, article) };
   } catch (error) {
     if (error.message === 'Cancelled by user') return { success: false, cancelled: true };
     logProviderError('Meta content generation failed:', error);
@@ -6838,7 +7032,7 @@ function normalizeMetaProjectForRenderer(project = {}) {
 }
 
 function metaProjectSource(project = {}) {
-  const sources = Array.isArray(project.sourceLibrary) ? project.sourceLibrary : [];
+  const sources = Array.isArray(project.sourceLibrary) ? project.sourceLibrary.filter((source) => source.kind === 'pin') : [];
   const selectedId = String(project.selectedSource?.id || project.sourceContext?.imageSourceId || '');
   return sources.find((source) => String(source.id || '') === selectedId)
     || preferredMetaSource(sources)
@@ -6853,6 +7047,7 @@ function metaProjectPack(article = {}, project = {}) {
     articleId: article.id || project.articleId || '',
     articleTitle: article.generatedTitle || article.title || project.articleTitle || project.content?.campaignTitle || 'Meta campaign',
     sourceUrl: article.wordpressPostUrl || article.sourceUrl || project.sourceUrl || '',
+    includeSourceLink: false,
     campaignStyle: `meta-${project.goal || 'traffic'}`,
     platforms: ['instagram', 'facebook'],
     createdAt: project.createdAt || new Date().toISOString(),
@@ -6927,8 +7122,7 @@ async function prepareMetaBulkGhlRows(articleIds = []) {
   const failures = [];
   emitMetaBulkProgress({ status: 'running', current: 0, total: articles.length, percent: 0, failures: [] });
 
-  for (let index = 0; index < articles.length; index++) {
-    const article = articles[index];
+  const prepared = await mapBounded(articles, 2, async (article, index) => {
     const title = article.generatedTitle || article.title || `Article ${index + 1}`;
     emitMetaBulkProgress({
       status: 'running',
@@ -6944,7 +7138,7 @@ async function prepareMetaBulkGhlRows(articleIds = []) {
       const source = metaProjectSource(project);
       let pack = metaProjectPack(article, project);
       if (!hasCompleteMetaPlatformAssets(pack.imageAssets) || !await metaAssetMatchesSource(pack.imageAssets[0], source)) {
-        if (!source) throw new Error('No saved article or Pinterest image is available.');
+        if (!source) throw new Error('No completed Pinterest Pin is available.');
         const imageResult = await createRepurposeImageVariants({
           packs: [pack],
           pins,
@@ -6971,11 +7165,13 @@ async function prepareMetaBulkGhlRows(articleIds = []) {
         };
         projects = [project, ...projects.filter((item) => item.id !== project.id)];
       }
-      preparedPacks.push(pack);
+      return pack;
     } catch (error) {
       failures.push({ articleId: String(article.id || ''), title, error: error.message || 'Meta preparation failed.' });
+      return null;
     }
-  }
+  });
+  preparedPacks.push(...prepared.filter(Boolean));
 
   store.set('metaStudioProjects', projects.slice(0, 500));
   if (!preparedPacks.length) {
@@ -7043,10 +7239,10 @@ secureIpcHandle('get-meta-projects', async () => {
   return { success: true, projects: projects.map(normalizeMetaProjectForRenderer) };
 });
 
-secureIpcHandle('get-meta-bulk-ghl-draft', async () => ({
-  success: true,
-  draft: store.get('metaBulkGhlDraft', null)
-}));
+secureIpcHandle('get-meta-bulk-ghl-draft', async () => {
+  const draft = store.get('metaBulkGhlDraft', null);
+  return { success: true, draft: draft ? { ...draft, rows: metaRowsWithoutLinks(draft.headers || [], draft.rows || []) } : null };
+});
 
 secureIpcHandle('prepare-meta-bulk-ghl-rows', async (e, { articleIds = [] } = {}) => {
   if (metaBulkJob) return metaBulkJob;
@@ -7271,9 +7467,10 @@ secureIpcHandle('prepare-repurpose-ghl-rows', async (e, { packs = [] }) => {
   }
 });
 
-secureIpcHandle('export-repurpose-ghl-rows', async (e, { headers = [], rows = [] }) => {
+secureIpcHandle('export-repurpose-ghl-rows', async (e, { headers = [], rows = [], includeSourceLink = true }) => {
   try {
     if (!Array.isArray(rows) || !rows.length) return { success: false, error: 'No GoHighLevel rows to export' };
+    if (includeSourceLink === false) rows = metaRowsWithoutLinks(headers, rows);
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
     const ownerWindow = BrowserWindow.getFocusedWindow() || mainWindow;
     if (ownerWindow && !ownerWindow.isDestroyed()) {
@@ -7310,11 +7507,12 @@ secureIpcHandle('export-repurpose-ghl-rows', async (e, { headers = [], rows = []
 });
 
 let ghlUploadInFlight = false;
-secureIpcHandle('upload-repurpose-ghl-rows', async (e, { headers = [], rows = [] }) => {
+secureIpcHandle('upload-repurpose-ghl-rows', async (e, { headers = [], rows = [], includeSourceLink = true }) => {
   if (ghlUploadInFlight) return { success: false, error: 'A GoHighLevel upload is already running.' };
   ghlUploadInFlight = true;
   try {
     if (!Array.isArray(rows) || !rows.length) return { success: false, error: 'No GoHighLevel rows to upload' };
+    if (includeSourceLink === false) rows = metaRowsWithoutLinks(headers, rows);
     const rawSettings = store.get('settings', {});
     const apiToken = decryptSecret(rawSettings.ghlApiToken_encrypted || rawSettings.ghlApiToken || '');
     const locationId = String(rawSettings.ghlLocationId || '').trim();
@@ -7531,7 +7729,7 @@ secureIpcHandle('generate-featured-image-prompt', async (e, { content, title, se
       .replace(/{content}/g, content.substring(0, 1500));
     const url = getAIModelUrl(settings.aiModel || 'chatgpt');
     const res = await replicateRequest(url, {
-      stream: false, input: { prompt: p, temperature: 0.7, top_p: 1 }
+      stream: false, input: { prompt: p, max_tokens: 1000, temperature: 0.7, top_p: 1 }
     }, apiToken, { signal: controller.signal });
     const output = await pollReplicate(res.data.id, apiToken, { maxAttempts: 20, intervalMs: 2000, signal: controller.signal });
     return output.trim();
@@ -7562,7 +7760,7 @@ Primary keyword: "${focusKeyword}"
 Reader task: ${readerTask || 'Find a reliable recipe or useful recipe ideas.'}
 
 Article content (first 1500 chars):
-${content}
+${String(content || '').slice(0, 1500)}
 
 Private Pinterest evidence for angle selection only: ${JSON.stringify(performanceSignals)}
 
@@ -7580,7 +7778,7 @@ Return ONLY the title, nothing else. No quotes, no explanations.`;
 
     const url = getAIModelUrl(settings.aiModel || 'chatgpt');
     const res = await replicateRequest(url, {
-      stream: false, input: { prompt, temperature: 0.8, top_p: 1 }
+      stream: false, input: { prompt, max_tokens: 1000, temperature: 0.4, top_p: 1 }
     }, apiToken, { signal: controller.signal });
     let out = (await pollReplicate(res.data.id, apiToken, { maxAttempts: 20, intervalMs: 2000, signal: controller.signal }))
       .trim()
@@ -7589,7 +7787,7 @@ Return ONLY the title, nothing else. No quotes, no explanations.`;
       .replace(/<[^>]+>/g, '')
       .replace(/[*_`#]/g, '')
       .replace(/\s+/g, ' ');
-    out = removeEmDashes(out).slice(0, 70).trim().replace(/[,:;\s-]+$/, '');
+    out = truncateAtWordBoundary(removeEmDashes(out), 70).trim().replace(/[,:;\s-]+$/, '');
     return out.length >= 15 ? out : removeEmDashes(title);
   } catch (err) {
     if (err.message === 'Cancelled by user' || err.noRetry) throw err;
@@ -7602,7 +7800,7 @@ Return ONLY the title, nothing else. No quotes, no explanations.`;
 // ============================================================================
 // IPC: IMAGE GENERATION (Content Studio object args + Pin Creator positional args)
 // ============================================================================
-function pinterestModelRequest(selectedModel, finalPrompt, aspectRatio = '2:3') {
+function pinterestModelRequest(selectedModel, finalPrompt, aspectRatio = '9:16') {
   if (selectedModel === 'ideogram-balanced') {
     return {
       model: 'ideogram-ai/ideogram-v3-balanced',
@@ -7737,6 +7935,7 @@ function selectPinterestSourceImage(snapshot = {}) {
 
 async function validatePublicPinterestImage(url = '', {
   allowTemporary = false,
+  allowOriginalRatio = false,
   requiredWidth = 0,
   requiredHeight = 0
 } = {}) {
@@ -7782,10 +7981,10 @@ async function validatePublicPinterestImage(url = '', {
         const imageBuffer = Buffer.from(response.data);
         const metadata = await sharp(imageBuffer, { animated: false }).metadata();
         const compatibilityError = csvImage ? imageCompatibilityError(metadata, type, imageBuffer.length, url) : '';
-        if (compatibilityError) return { valid: false, error: compatibilityError };
+        if (compatibilityError) return { valid: false, status: response.status, networkChecked: true, contentType: type, error: compatibilityError };
         width = Number(metadata.width || 0);
         height = Number(metadata.height || 0);
-        if (width !== requiredWidth || height !== requiredHeight) {
+        if (!(csvImage && hasPinterestDimensions({ width, height }, allowOriginalRatio)) && (width !== requiredWidth || height !== requiredHeight)) {
           return {
             valid: false,
             width,
@@ -7801,6 +8000,9 @@ async function validatePublicPinterestImage(url = '', {
         valid: true,
         temporary: isTemporaryPinterestMediaUrl(url),
         contentType: type,
+        status: response.status,
+        networkChecked: true,
+        finalUrl: response.request?.res?.responseUrl || url,
         checkedAt: new Date().toISOString(),
         width,
         height,
@@ -7811,7 +8013,7 @@ async function validatePublicPinterestImage(url = '', {
     }
     return { valid: false, error: 'The public URL did not return an image.' };
   } catch (error) {
-    return { valid: false, error: `Could not reach the public image: ${error.message}` };
+    return { valid: false, status: Number(error.response?.status || 0), networkChecked: true, error: `Could not reach the public image: ${error.message}` };
   }
 }
 
@@ -7826,14 +8028,22 @@ async function uploadPinterestImageToWordPress(localPath, blogUrl = '', label = 
   try {
     const siteUrl = normalizeWordPressUrl(site.url);
     const auth = 'Basic ' + Buffer.from(`${site.username}:${apiKey}`).toString('base64');
-    const media = await uploadMediaToWP(siteUrl, auth, localPath, label, {
-      maxWidth: 1000,
-      maxHeight: 1500,
+    const media = await runSerial(siteUrl, () => uploadMediaToWP(siteUrl, auth, localPath, label, {
+      maxWidth: PIN_WIDTH,
+      maxHeight: PIN_HEIGHT,
       quality: 82,
       targetBytes: requirePinterestDimensions ? 0 : 420 * 1024,
       fileName: `${label}-pinterest-pin`,
       outputFormat: 'jpeg'
-    });
+    }));
+    if (requirePinterestDimensions && Number.isInteger(media.id) && media.id > 0 && media.source_url) {
+      const records = store.get('pinterestDelivery.wordpressMedia', []);
+      const known = records.find((item) => item.siteUrl === siteUrl && item.mediaId === media.id);
+      if (!known && !media.reused) store.set('pinterestDelivery.wordpressMedia', [...records, {
+        kind: 'finished-pinterest-pin', siteUrl, mediaId: media.id, url: media.source_url,
+        uploadedAt: new Date().toISOString()
+      }]);
+    }
     const validation = await validatePublicPinterestImage(media.source_url || '', requirePinterestDimensions ? {
       requiredWidth: PIN_WIDTH,
       requiredHeight: PIN_HEIGHT
@@ -7861,7 +8071,7 @@ async function hostFinalPinterestImage(localPath, blogUrl = '', label = 'Pintere
     const safeLocalPath = assertAllowedMediaPath(localPath);
     const localBuffer = await fsp.readFile(safeLocalPath);
     const metadata = await sharp(localBuffer, { animated: false }).metadata();
-    if (Number(metadata.width || 0) !== PIN_WIDTH || Number(metadata.height || 0) !== PIN_HEIGHT) {
+    if (!hasPinterestDimensions({ width: Number(metadata.width || 0), height: Number(metadata.height || 0) })) {
       return {
         success: false,
         error: `The finished local Pin is ${metadata.width || '?'} x ${metadata.height || '?'}, not ${PIN_WIDTH} x ${PIN_HEIGHT}. Regenerate it before hosting.`
@@ -7880,7 +8090,7 @@ async function hostFinalPinterestImage(localPath, blogUrl = '', label = 'Pintere
     if (!identity.matches) {
       return {
         success: false,
-        error: 'The hosted image did not visually match the finished 1000 x 1500 Pin. The CSV Media URL was rejected to prevent an article image or stale upload from being published.'
+        error: 'The hosted image did not visually match the finished Pin. The CSV Media URL was rejected to prevent an article image or stale upload from being published.'
       };
     }
     return {
@@ -7894,7 +8104,7 @@ async function hostFinalPinterestImage(localPath, blogUrl = '', label = 'Pintere
       }
     };
   };
-  if (sourceMode === 'reuse-article' || mediaHost === 'wordpress') {
+  if ((sourceMode === 'reuse-article' && !['imgbb', 'resilient'].includes(mediaHost)) || mediaHost === 'wordpress') {
     const wordpress = await uploadPinterestImageToWordPress(localPath, blogUrl, label, { requirePinterestDimensions: true });
     const verifiedWordPress = bindToFinishedPin(wordpress);
     if (verifiedWordPress.success) return verifiedWordPress;
@@ -7917,6 +8127,7 @@ async function hostFinalPinterestImage(localPath, blogUrl = '', label = 'Pintere
       if (verifiedImgBB.success) return verifiedImgBB;
     }
   }
+  if (mediaHost === 'imgbb') return { success: false, error: imgBBFailureMessage() };
   if (!requirePinterestDimensions && /^https:\/\//i.test(String(fallbackUrl || ''))) {
     const validation = await validatePublicPinterestImage(fallbackUrl, { allowTemporary: true });
     if (validation.valid) {
@@ -7928,7 +8139,7 @@ async function hostFinalPinterestImage(localPath, blogUrl = '', label = 'Pintere
       };
     }
   }
-  if (sourceMode === 'auto' || sourceMode === 'generate-new') {
+  if (mediaHost === 'resilient' || sourceMode === 'auto' || sourceMode === 'generate-new') {
     const wordpress = await uploadPinterestImageToWordPress(localPath, blogUrl, label, { requirePinterestDimensions });
     const verifiedWordPress = bindToFinishedPin(wordpress);
     if (verifiedWordPress.success) return verifiedWordPress;
@@ -7967,7 +8178,7 @@ async function ensurePinterestCsvJpeg(localPath, id = 'pin') {
   if (!sharp) sharp = getSharp();
   const safePath = assertAllowedMediaPath(localPath);
   const metadata = await sharp(safePath).metadata();
-  if (Number(metadata.width || 0) !== PIN_WIDTH || Number(metadata.height || 0) !== PIN_HEIGHT) {
+  if (!hasPinterestDimensions({ width: Number(metadata.width || 0), height: Number(metadata.height || 0) })) {
     throw new Error(`Finished Pin is ${metadata.width || '?'} x ${metadata.height || '?'} instead of ${PIN_WIDTH} x ${PIN_HEIGHT}.`);
   }
   const directory = path.join(imagesDir, 'pinterest-exports');
@@ -7977,10 +8188,26 @@ async function ensurePinterestCsvJpeg(localPath, id = 'pin') {
   return target;
 }
 
-async function ensureDurablePinImage(pin = {}, { mediaHost = 'auto' } = {}) {
+async function ensureDurablePinImage(pin = {}, { mediaHost = 'auto', verificationCache = new Map() } = {}) {
+  const validateCandidate = (url, options) => {
+    const key = JSON.stringify([url, options]);
+    if (!verificationCache.has(key)) verificationCache.set(key, validatePublicPinterestImage(url, options));
+    return verificationCache.get(key);
+  };
   // Export hosting is distinct from generation previews. Prefer the destination
   // site's media library instead of retaining a third-party URL after one GET.
   mediaHost = resolvePinterestExportHost(mediaHost, store.get('settings', {}).wordpressSites || [], pin.url || pin.sourceSnapshot?.canonicalUrl || '');
+  if (mediaHost === 'replicate') {
+    if (pin.generationConfig?.textRenderMode !== 'ai') return { success: false, error: 'Replicate original is available only for one-pass AI-lettered Pins. Locally added text is not present in the original file; choose WordPress or ImgBB.' };
+    const candidate = String(pin.remoteImageUrl || '');
+    if (!isTemporaryPinterestMediaUrl(candidate)) return { success: false, error: 'No original Replicate output is saved for this Pin.' };
+    const validation = await validateCandidate(candidate, { allowTemporary: true, allowOriginalRatio: true, requiredWidth: PIN_WIDTH, requiredHeight: PIN_HEIGHT });
+    if (!validation.valid) return { success: false, error: `Replicate original is unavailable or incompatible. ${validation.error || ''} Choose WordPress or ImgBB to use the saved Pin.` };
+    const expected = await expectedPinterestImageIdentity(pin);
+    const identity = comparePinterestImageIdentity(expected, validation, 14);
+    if (!identity.matches) return { success: false, error: 'Replicate original does not match the finished Pin. Choose WordPress or ImgBB.' };
+    return { success: true, url: candidate, provider: 'replicate', validation: { ...validation, identityVerified: true, identityDistance: identity.distance } };
+  }
   const sourceMode = pin.imageSourceMode || pin.generationConfig?.mode || 'generate-new';
   const reuseArticleImage = sourceMode === 'reuse-article';
   const rawCandidates = reuseArticleImage
@@ -7990,6 +8217,7 @@ async function ensureDurablePinImage(pin = {}, { mediaHost = 'auto' } = {}) {
   // Keep the selected verified URL first. Recovery must not return the same
   // third-party URL that Pinterest already failed to ingest.
   const candidates = rawCandidates
+    .filter((url) => mediaHost !== 'imgbb' || /^https:\/\/i\.ibb\.co\//i.test(String(url || '')))
     .filter((url, index, items) => /^https:\/\//i.test(String(url || '')) && items.indexOf(url) === index && ['.jpg', '.jpeg', '.png', '.mp4'].includes(mediaExtension(url)))
     .filter((url) => mediaHost !== 'wordpress' || (pin.hostingProvider === 'wordpress'
       && normalizedHostname(url) === normalizedHostname(destinationUrl)));
@@ -8006,7 +8234,7 @@ async function ensureDurablePinImage(pin = {}, { mediaHost = 'auto' } = {}) {
   let identityMismatch = false;
   const durableCandidates = candidates.filter((candidate) => !isTemporaryPinterestMediaUrl(candidate));
   for (const candidate of durableCandidates) {
-    const validation = await validatePublicPinterestImage(candidate, {
+    const validation = await validateCandidate(candidate, {
       allowTemporary: false,
       requiredWidth: PIN_WIDTH,
       requiredHeight: PIN_HEIGHT
@@ -8035,7 +8263,7 @@ async function ensureDurablePinImage(pin = {}, { mediaHost = 'auto' } = {}) {
   let repairLocalPath = pin.localPath && fs.existsSync(pin.localPath) ? pin.localPath : '';
   if (!repairLocalPath) {
     for (const candidate of rawCandidates.filter((url) => /^https:\/\//i.test(String(url || '')) && !isTemporaryPinterestMediaUrl(url))) {
-      const validation = await validatePublicPinterestImage(candidate, { allowTemporary: false, requiredWidth: PIN_WIDTH, requiredHeight: PIN_HEIGHT });
+      const validation = await validateCandidate(candidate, { allowTemporary: false, requiredWidth: PIN_WIDTH, requiredHeight: PIN_HEIGHT });
       if (!validation.valid) continue;
       const identity = comparePinterestImageIdentity(expectedIdentity, validation, 14);
       if (!hasExpectedIdentity || !identity.matches) continue;
@@ -8080,7 +8308,7 @@ async function ensureDurablePinImage(pin = {}, { mediaHost = 'auto' } = {}) {
   return hosted;
 }
 
-async function generatePinImage(prompt, aspectRatio = '2:3', model = 'ideogram', blogUrl = '', jobKey) {
+async function generatePinImage(prompt, aspectRatio = '9:16', model = 'ideogram', blogUrl = '', jobKey) {
   return withCancel(jobKey, async (signal) => {
     try {
       log.info(`Pin Creator image: model=${model}, aspect=${aspectRatio}`);
@@ -8128,17 +8356,38 @@ secureIpcHandle('create-pinterest-pin-asset', async (event, {
   font = 'serif-sans',
   pinStyle = 'custom-july-original-ai',
   model = 'ideogram',
-  aspectRatio = '2:3',
+  aspectRatio = '9:16',
   blogUrl = '',
-  jobKey = ''
+  jobKey = '',
+  forceNewGeneration = false
 } = {}) => withCancel(jobKey, async (signal) => {
   try {
     initializeImagesDir();
     if (!sharp) sharp = getSharp();
     const safeSnapshot = sanitizePinSourceSnapshot(sourceSnapshot);
+    const savedPin = pinCreatorPins().find(p => p.id === pinId);
+    const labVersion = savedPin?.promptLabVersionId ? store.get('contentOperations.styleVersions', []).find(v => v.id === savedPin.promptLabVersionId) : null;
+    if (savedPin?.promptLabVersionId) {
+      if (!labVersion) throw new Error('The benchmark candidate is no longer available.');
+      pinStyle = labVersion.styleId;
+      const sourceArticle = store.get('articles', []).find(a => a.id === savedPin.articleId);
+      if (!sourceArticle || createHash('sha256').update(sourceArticle.content || '').digest('hex') !== savedPin.promptLabSourceHash) throw new Error('The source recipe changed. Queue a new benchmark case.');
+      prompt = `${labVersion.prompt}\nRecipe context: ${JSON.stringify(safeSnapshot.recipe || {})}`;
+    }
+    const requestHash = createHash('sha256').update(JSON.stringify({ mode, snapshot: safeSnapshot, prompt, overlayText, placement, font, pinStyle, model, aspectRatio, blogUrl })).digest('hex');
+    if (!forceNewGeneration && savedPin?.generationConfig?.requestHash === requestHash && savedPin.localPath && savedPin.imageQa?.sha256) {
+      try {
+        if ((await fsp.stat(assertAllowedMediaPath(savedPin.localPath))).size > 30 * 1024 * 1024) throw new Error('Cached artwork exceeds 30 MB.');
+        const bytes = await fsp.readFile(assertAllowedMediaPath(savedPin.localPath));
+        if (createHash('sha256').update(bytes).digest('hex') === savedPin.imageQa.sha256) {
+          const meta = await sharp(bytes).metadata();
+          if (meta.width === PIN_WIDTH && meta.height === PIN_HEIGHT) return { ...savedPin, success: true, reused: true, additionalGenerationCost: 0 };
+        }
+      } catch { /* Missing or changed media cannot satisfy the cache. */ }
+    }
     const sourceAspectRatio = ['2:3', '9:16', '1:1'].includes(String(aspectRatio))
       ? String(aspectRatio)
-      : '2:3';
+      : '9:16';
     const originalJulyCenter = mode === 'generate-new' && pinStyle === 'custom-july-original-ai';
     // The default preserves the original one-pass July Ideogram composition. Every
     // other profile uses clean-photo generation plus deterministic local typography.
@@ -8265,10 +8514,14 @@ secureIpcHandle('create-pinterest-pin-asset', async (event, {
       imageQa: finalQa,
       predictionId: generated?.predictionId || '',
       generationConfig: {
+        requestHash,
+        effectivePromptHash: generated?.prompt ? createHash('sha256').update(generated.prompt).digest('hex') : '',
+        promptLabVersionId: labVersion?.id || '',
+        promptLabPromptHash: labVersion?.promptHash || '',
         mode,
         model: generated?.model || 'local-reuse',
         requestedModel: model,
-        aspectRatio: '2:3',
+        aspectRatio,
         sourceAspectRatio: sourceImage?.aspectRatio || sourceAspectRatio,
         placement,
         font: effectiveFont,
@@ -8294,25 +8547,24 @@ secureIpcHandle('prepare-pinterest-export', async (event, { pins = [], boardName
   account = account || publishing.defaultCsvAccountId || '';
   const profile = publishing.accounts?.find(a => a.id === account);
   schedule = { ...(profile?.schedule || {}), ...schedule, accountId: account || 'csv:legacy' };
-  const priorTimes = pinterestBatches().filter((batch) => batch.fileStatus !== 'failed' && (!account || batch.account === account))
-    .flatMap((batch) => batch.rows.map((row) => row.cells[6] ? `${row.cells[6]}Z` : '')).filter(Boolean).sort();
+  if (!['auto', 'wordpress', 'imgbb', 'replicate', 'resilient'].includes(mediaHost)) return { success: false, pins: [], errors: ['Unknown Pinterest image host.'], warnings: [] };
   pins = mediaHost === 'replicate'
     ? pins.map((pin) => ({ ...pin, csvPublishDate: '', csvPublishImmediately: true }))
-    : schedulePinterestPins(pins, schedule, { lastScheduled: priorTimes.at(-1) || '', occupied: [...(typeof legacyPinterestQueueReservations === 'function' ? legacyPinterestQueueReservations() : []), ...(publishing.drafts || [])] });
-  if (!['auto', 'wordpress'].includes(mediaHost)) return { success: false, pins: [], errors: ['Unknown Pinterest image host.'], warnings: [] };
+    : pins;
   const inputPins = Array.isArray(pins) ? pins : [];
-  const sites = store.get('settings', {}).wordpressSites || [];
-  const wordpressExport = inputPins.some((pin) => resolvePinterestExportHost(mediaHost, sites, pin.url || pin.sourceSnapshot?.canonicalUrl || '') === 'wordpress');
+  const verificationCache = new Map();
   const prepared = new Array(inputPins.length);
   const errors = [];
+  const failedPinIds = [];
   let cursor = 0;
   async function prepareNext() {
     while (cursor < inputPins.length) {
       const index = cursor;
       cursor += 1;
       const pin = inputPins[index];
-      const durable = await ensureDurablePinImage(pin, { mediaHost });
+      const durable = await ensureDurablePinImage(pin, { mediaHost, verificationCache }).catch((error) => ({ success: false, error: error.message }));
       if (!durable.success) {
+        failedPinIds.push(pin.id);
         errors.push(`${pin.title || pin.sourceTitle || pin.id || 'Pin'}: ${durable.error}`);
         prepared[index] = pin;
         continue;
@@ -8343,13 +8595,22 @@ secureIpcHandle('prepare-pinterest-export', async (event, { pins = [], boardName
       };
     }
   }
-  await Promise.all(Array.from({ length: Math.min(wordpressExport ? 1 : 4, inputPins.length) }, () => prepareNext()));
-  const validation = rows.length ? validatePinterestRows(rows, Array.isArray(boardNames) ? boardNames : []) : { errors: [], warnings: [] };
-  return { success: errors.length === 0 && validation.errors.length === 0, pins: prepared, errors: [...errors, ...validation.errors], warnings: validation.warnings };
+  await Promise.all(Array.from({ length: Math.min(4, inputPins.length) }, () => prepareNext()));
+  // Pick the nearest future slot after hosting, not after the last downloaded CSV.
+  const scheduled = mediaHost === 'replicate' ? prepared : schedulePinterestPins(prepared, schedule, {
+    occupied: [...(typeof legacyPinterestQueueReservations === 'function' ? legacyPinterestQueueReservations() : []), ...(store.get('pinWorkspace', {}).drafts || [])]
+  });
+  const validation = rows.length ? validatePinterestRows(rows, Array.isArray(boardNames) ? boardNames : [], { allowTemporary: mediaHost === 'replicate' }) : { errors: [], warnings: [] };
+  const failureMessages = errors.map((error) => String(error).replace(/^[^:]{1,200}:\s*/, ''));
+  const uniqueFailures = [...new Set(failureMessages)];
+  const hostingErrors = errors.length > 1 && uniqueFailures.length === 1
+    ? [`Hosting failed for ${errors.length} Pins: ${uniqueFailures[0]}`]
+    : errors;
+  return { success: hostingErrors.length === 0 && validation.errors.length === 0, pins: scheduled, failedPinIds, errors: [...hostingErrors, ...validation.errors], warnings: validation.warnings };
 });
 
-secureIpcHandle('validate-pinterest-export', async (event, { rows = [], boardNames = [], pins = [] } = {}) => {
-  const validation = validatePinterestRows(rows, boardNames);
+secureIpcHandle('validate-pinterest-export', async (event, { rows = [], boardNames = [], pins = [], mediaHost = 'auto' } = {}) => {
+  const validation = validatePinterestRows(rows, boardNames, { allowTemporary: mediaHost === 'replicate' });
   const pinRows = Array.isArray(pins) ? pins : [];
   const mediaErrors = rows.flatMap((row, index) => {
     const pin = pinRows[index];
@@ -8362,8 +8623,7 @@ secureIpcHandle('validate-pinterest-export', async (event, { rows = [], boardNam
       || pin.imageQa?.publicDimensionsVerified !== true
       || pin.imageQa?.publicIdentityVerified !== true
       || pin.imageQa?.publicAssetKind !== 'finished-pinterest-pin'
-      || Number(pin.imageQa?.publicWidth || 0) !== PIN_WIDTH
-      || Number(pin.imageQa?.publicHeight || 0) !== PIN_HEIGHT) {
+      || !hasPinterestDimensions({ width: Number(pin.imageQa?.publicWidth || 0), height: Number(pin.imageQa?.publicHeight || 0) }, mediaHost === 'replicate')) {
       return [`Row ${index + 1}: Media URL is not verified at ${PIN_WIDTH} x ${PIN_HEIGHT}`];
     }
     return [];
@@ -8383,7 +8643,23 @@ function pinterestBatches() { return store.get('pinterestDelivery.batches', []);
 function savePinterestBatch(batch) {
   store.set('pinterestDelivery.batches', [batch, ...pinterestBatches().filter((item) => item.id !== batch.id)]);
 }
-secureIpcHandle('get-pinterest-delivery', () => ({ account: store.get('pinterestDelivery.account', ''), batches: pinterestBatches() }));
+secureIpcHandle('get-pinterest-delivery', () => ({ account: store.get('pinterestDelivery.account', ''), batches: pinterestBatches(), drafts: store.get('pinterestDelivery.receiptDrafts', {}) }));
+secureIpcHandle('save-pinterest-receipt-draft', (_event, { batchId, receipt = '', draft = {} } = {}) => {
+  const batch = pinterestBatches().find(b => b.id === batchId);
+  if (!batch || typeof receipt !== 'string' || receipt.length > 100000 || !draft || typeof draft !== 'object' || Array.isArray(draft)) throw new Error('Invalid receipt draft.');
+  const rows = new Set(batch.rows.map(r => String(r.number)));
+  if (Object.keys(draft).length > rows.size || Object.entries(draft).some(([n, s]) => !rows.has(n) || !['pending', 'confirmed', 'failed', 'review'].includes(s))) throw new Error('Invalid receipt row selection.');
+  const all = store.get('pinterestDelivery.receiptDrafts', {});
+  store.set('pinterestDelivery.receiptDrafts', { ...Object.fromEntries(Object.entries(all).filter(([id]) => pinterestBatches().some(b => b.id === id))), [batchId]: { receipt, draft, updatedAt: new Date().toISOString() } });
+  return { success: true };
+});
+secureIpcHandle('import-pinterest-receipt', async () => {
+  const selection = await dialog.showOpenDialog(BrowserWindow.getFocusedWindow() || mainWindow, { filters: [{ name: 'Pinterest Result Email', extensions: ['eml', 'txt', 'html', 'htm'] }], properties: ['openFile'] });
+  if (selection.canceled || !selection.filePaths?.[0]) return { canceled: true };
+  const file = selection.filePaths[0];
+  if ((await fsp.stat(file)).size > 2 * 1024 * 1024) throw new Error('Receipt exceeds 2 MB.');
+  return { text: await require('./pinterest-receipt').readReceipt(await fsp.readFile(file), file) };
+});
 secureIpcHandle('reveal-pinterest-export', async (event, { batchId } = {}) => {
   const batch = pinterestBatches().find((item) => item.id === batchId);
   if (!batch) throw new Error('Batch not found.');
@@ -8417,11 +8693,15 @@ secureIpcHandle('get-pinterest-retry', (event, { batchId } = {}) => {
   return { account: batch.account, pinIds: rows.map((row) => row.pinId) };
 });
 const exportPinterestCsvFiles = createPinterestExportService({
+  validateLink: (url) => verifyPinterestLink(url, (target) => axios.head(target, {
+    timeout: 6000, maxRedirects: 5, beforeRedirect: assertSafeRemoteRedirect,
+    httpAgent: safePublicHttpAgent, httpsAgent: safePublicHttpsAgent
+  })),
   getPins: pinCreatorPins, identity: expectedPinterestImageIdentity,
   compareIdentity: comparePinterestImageIdentity, getBatches: pinterestBatches,
   saveBatch: savePinterestBatch, saveAccount: (account) => store.set('pinterestDelivery.account', account),
-  validateMedia: async (url) => {
-    if (mediaExtension(url) !== '.mp4') return validatePublicPinterestImage(url, { requiredWidth: PIN_WIDTH, requiredHeight: PIN_HEIGHT });
+  validateMedia: async (url, options = {}) => {
+    if (mediaExtension(url) !== '.mp4') return validatePublicPinterestImage(url, { allowTemporary: options.allowTemporary, allowOriginalRatio: options.allowTemporary, requiredWidth: PIN_WIDTH, requiredHeight: PIN_HEIGHT });
     try {
       const response = await axios.head(url, { timeout: 20000, maxRedirects: 5, beforeRedirect: assertSafeRemoteRedirect,
         httpAgent: safePublicHttpAgent, httpsAgent: safePublicHttpsAgent });
@@ -8439,7 +8719,7 @@ const exportPinterestCsvFiles = createPinterestExportService({
 });
 secureIpcHandle('export-pinterest-csv', async (event, params = {}) => exportPinterestCsvFiles({ ...params, account: params.account || store.get('pinWorkspace.defaultCsvAccountId', '') }));
 
-secureIpcHandle('generate-image', async (e, firstArg, pinAspectRatio = '2:3', pinModel = 'ideogram', blogUrl = '', pinJobKey) => {
+secureIpcHandle('generate-image', async (e, firstArg, pinAspectRatio = '9:16', pinModel = 'ideogram', blogUrl = '', pinJobKey) => {
   if (!firstArg || typeof firstArg !== 'object' || !Object.prototype.hasOwnProperty.call(firstArg, 'settings')) {
     return generatePinImage(firstArg, pinAspectRatio, pinModel, blogUrl, pinJobKey);
   }
@@ -8497,45 +8777,36 @@ secureIpcHandle('generate-image', async (e, firstArg, pinAspectRatio = '2:3', pi
     if (!res.data.id) throw new Error('Failed to start image generation');
 
     const id = res.data.id;
-    let attempts = 0;
-    while (attempts < 30) {
-      if (controller.signal.aborted) throw new Error('Cancelled by user');
-      await new Promise(r => setTimeout(r, 3000));
-      const sr = await axios.get(`https://api.replicate.com/v1/predictions/${id}`, {
-        headers: { 'Authorization': `Bearer ${apiToken}` }, signal: controller.signal
-      });
-      if (sr.data.status === 'succeeded' && sr.data.output) {
-        const imageUrl = Array.isArray(sr.data.output) ? sr.data.output[0] : sr.data.output;
-        const wm = settings.watermarkEnabled ? {
-          enabled: true, path: settings.watermarkPath,
-          position: settings.watermarkPosition || 'bottom-right',
-          size: settings.watermarkSize || 15, opacity: settings.watermarkOpacity || 80
-        } : null;
-        try {
-          const localPath = await downloadImage(imageUrl, wm);
-          const localImageUrl = localPathToFileUrl(localPath);
-          return {
-            imageUrl,
-            remoteImageUrl: imageUrl,
-            displayUrl: localImageUrl,
-            localImageUrl,
-            localPath,
-            prompt,
-            requestedAspectRatio: ratioSelection.requestedRatio,
-            aspectRatio: resolvedAspectRatio,
-            ratioAdjusted: ratioSelection.adjusted,
-            ratioNotice: ratioSelection.notice
-          };
-        } catch (error) {
-          log.error('Generated article image could not be cached locally:', error.message);
-          throw new Error(`Image generated but could not be saved locally: ${error.message}`);
-        }
-      }
-      if (sr.data.status === 'failed') throw new Error('Image generation failed');
-      emitProgress('image-generation-progress', { predictionId: id, status: sr.data.status, attempt: attempts + 1, maxAttempts: 30 });
-      attempts++;
+    const output = await pollReplicate(id, apiToken, {
+      maxAttempts: 30, intervalMs: 3000, signal: controller.signal, preserveOutput: true,
+      onProgress: (progress) => emitProgress('image-generation-progress', progress)
+    });
+    const imageUrl = extractReplicateOutputUrl(output);
+    if (!imageUrl) throw new Error('Image generated, but Replicate did not return a downloadable URL.');
+    const wm = settings.watermarkEnabled ? {
+      enabled: true, path: settings.watermarkPath,
+      position: settings.watermarkPosition || 'bottom-right',
+      size: settings.watermarkSize || 15, opacity: settings.watermarkOpacity || 80
+    } : null;
+    try {
+      const localPath = await downloadImage(imageUrl, wm);
+      const localImageUrl = localPathToFileUrl(localPath);
+      return {
+        imageUrl,
+        remoteImageUrl: imageUrl,
+        displayUrl: localImageUrl,
+        localImageUrl,
+        localPath,
+        prompt,
+        requestedAspectRatio: ratioSelection.requestedRatio,
+        aspectRatio: resolvedAspectRatio,
+        ratioAdjusted: ratioSelection.adjusted,
+        ratioNotice: ratioSelection.notice
+      };
+    } catch (error) {
+      log.error('Generated article image could not be cached locally:', error.message);
+      throw new Error(`Image generated but could not be saved locally: ${error.message}`);
     }
-    throw new Error('Image generation timed out');
   } finally {
     if (jobKey) activeJobs.delete(jobKey);
   }
@@ -8579,26 +8850,15 @@ secureIpcHandle('generate-video', async (e, {
   });
 
   try {
-    const res = await replicateRequest(`https://api.replicate.com/v1/models/${modelConfig.modelPath}/predictions`, { input }, apiToken, { signal: controller.signal });
+    const res = await replicateRequest(`https://api.replicate.com/v1/models/${modelConfig.modelPath}/predictions`, { input }, apiToken, { signal: controller.signal, predictionDeadlineSeconds: 660 });
     if (!res.data.id) throw new Error('Failed to start video generation.');
     const predictionId = res.data.id;
-    let attempts = 0;
     const maxAttempts = 120;
-    while (attempts < maxAttempts) {
-      if (controller.signal.aborted) throw new Error('Cancelled by user');
-      await new Promise((resolve) => setTimeout(resolve, 5000));
-      const status = await axios.get(`https://api.replicate.com/v1/predictions/${predictionId}`, {
-        headers: { Authorization: `Bearer ${apiToken}` },
-        signal: controller.signal
-      });
-      emitProgress('video-generation-progress', {
-        predictionId,
-        status: status.data.status,
-        attempt: attempts + 1,
-        maxAttempts
-      });
-      if (status.data.status === 'succeeded' && status.data.output) {
-        const remoteVideoUrl = extractReplicateOutputUrl(status.data.output);
+    const output = await pollReplicate(predictionId, apiToken, {
+      maxAttempts, intervalMs: 5000, signal: controller.signal, preserveOutput: true,
+      onProgress: (progress) => emitProgress('video-generation-progress', progress)
+    });
+        const remoteVideoUrl = extractReplicateOutputUrl(output);
         if (!remoteVideoUrl) throw new Error('Video generated, but Replicate did not return a downloadable URL.');
         const localPath = await downloadVideo(remoteVideoUrl, prompt);
         const record = videoRecordWithDisplay({
@@ -8622,12 +8882,6 @@ secureIpcHandle('generate-video', async (e, {
         const existing = store.get('generatedVideos', []);
         store.set('generatedVideos', [record, ...existing].slice(0, 200));
         return { success: true, video: record, videos: store.get('generatedVideos', []).map(videoRecordWithDisplay) };
-      }
-      if (status.data.status === 'failed') throw new Error(status.data.error || 'Video generation failed.');
-      if (status.data.status === 'canceled') throw new Error('Video generation was canceled.');
-      attempts++;
-    }
-    throw new Error('Video generation timed out.');
   } catch (err) {
     if (err.message === 'Cancelled by user') return { success: false, error: 'Cancelled', cancelled: true };
     logProviderError('Video generation failed:', err);
@@ -9044,7 +9298,7 @@ function qualifyAffiliateAnchor(tag = '') {
 }
 
 function prepareAffiliateContent(content = '', settings = {}) {
-  let next = String(content || '').replace(
+  let next = removeArticleImpact({ content }, settings.affiliateLinks || []).content.replace(
     /<a\b[^>]*\bdata-affiliate-id=["'][^"']+["'][^>]*>/gi,
     (tag) => qualifyAffiliateAnchor(tag)
   );
@@ -9141,7 +9395,7 @@ function contentStudioStableId(...parts) {
 function wordpressArticleSlug(article = {}) {
   const supplied = String(article.slug || '').trim().toLowerCase();
   if (supplied) return supplied.replace(/[^a-z0-9-]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').slice(0, 180);
-  return String(article.generatedTitle || article.title || 'content-studio-article')
+  return toAscii(article.generatedTitle || article.title || 'content-studio-article')
     .toLowerCase()
     .replace(/&/g, ' and ')
     .replace(/[^a-z0-9]+/g, '-')
@@ -9252,16 +9506,29 @@ function isDefinitiveWordPressRejection(error) {
 
 const wordpressPublishInFlight = new Set();
 secureIpcHandle('push-to-wordpress', async (e, { article, site }) => {
+  article = removeArticleImpact(article, store.get('settings.affiliateLinks', []));
   site = resolveWordPressCredentials(site || {});
   if (!site?.url || !site?.username || !site?.apiKey) throw new Error('WordPress site not configured');
   const url = normalizeWordPressUrl(site.url);
   if (!url) throw new Error('WordPress publishing requires a valid public HTTPS site URL.');
   const auth = 'Basic ' + Buffer.from(`${site.username}:${site.apiKey}`).toString('base64');
-  const publishingArticle = { ...article, slug: wordpressArticleSlug(article) };
+  let publishingArticle = { ...article, slug: wordpressArticleSlug(article) };
   const publicationIdentity = wordpressPublicationIdentity(url, publishingArticle);
   if (wordpressPublishInFlight.has(publicationIdentity)) throw new Error('This article is already being published to this site.');
   wordpressPublishInFlight.add(publicationIdentity);
   try {
+  const savedBeforeRepair = store.get('articles', []).find((item) => String(item.id) === String(article.id));
+  const recipe = await prepareArticleRecipe(publishingArticle, { jobKey: `article:${article.id}:publish-recipe` });
+  const latestArticles = store.get('articles', []);
+  const currentArticle = latestArticles.find((item) => String(item.id) === String(article.id));
+  if (savedBeforeRepair && (!currentArticle || currentArticle.content !== savedBeforeRepair.content)) {
+    throw new Error('This article changed while its recipe was being checked. Reload before publishing.');
+  }
+  publishingArticle = { ...publishingArticle, ...recipe.patch };
+  if (currentArticle) store.set('articles', latestArticles.map((item) => String(item.id) === String(article.id) ? {
+    ...item, ...recipe.patch, ...(recipe.success ? { errorMessage: '' } : { workflowStatus: 'needs-review', errorMessage: recipe.patch.recipeCardQualityWarning }), updatedAt: new Date().toISOString()
+  } : item));
+  if (!recipe.success) throw new Error(`RECIPE_REVIEW_REQUIRED: ${recipe.patch.recipeCardQualityWarning}`);
   const mediaWarnings = [];
   const newlyUploadedMediaIds = [];
   const settings = store.get('settings', {});
@@ -9433,7 +9700,8 @@ secureIpcHandle('push-to-wordpress', async (e, { article, site }) => {
     status: actualStatus,
     rankMathStatus: rankMathResult.status,
     rankMathWarning: rankMathResult.warning || '',
-    mediaWarnings
+    mediaWarnings,
+    recipeArticlePatch: recipe.patch
   };
   } finally { wordpressPublishInFlight.delete(publicationIdentity); }
 });
@@ -9637,10 +9905,65 @@ secureIpcHandle('open-log-file', () => {
   return { success: true };
 });
 
+// Register the isolated Recipe Money Maker module.
+require("./recipe-money-maker")({ handle: secureIpcHandle, ledger: spendingLedger });
+
+if (store) {
+  const { createQualityWorkspace } = require('./quality-workspace');
+  const quality = createQualityWorkspace({
+    store, ledger: spendingLedger, sharp: (...args) => getSharp()(...args),
+    mediaDirectory: () => { initializeImagesDir(); return imagesDir; }, displayUrl: localPathToFileUrl,
+    cachePath: path.join(app.getPath('userData'), 'local-ocr'), fetchPage: fetchPublicHtml,
+    releaseInfo: () => require('./release-provenance').releaseProvenance(app),
+    readMedia: async pin => {
+      if (!pin.localPath) throw new Error('Save the finished Pin locally before checking or templating it.');
+      const file = assertAllowedMediaPath(pin.localPath);
+      if ((await fsp.stat(file)).size > 30 * 1024 * 1024) throw new Error('Image exceeds the 30 MB local review limit.');
+      const bytes = await fsp.readFile(file);
+      if (pin.imageQa?.sha256 && createHash('sha256').update(bytes).digest('hex') !== pin.imageQa.sha256) throw new Error('Saved artwork changed; regenerate or reimport it before review.');
+      return bytes;
+    },
+    saveFile: async (name, bytes, filters, { beforeWrite } = {}) => {
+      const result = await dialog.showSaveDialog(BrowserWindow.getFocusedWindow() || mainWindow, { defaultPath: path.join(app.getPath('downloads'), name), filters });
+      if (result.canceled || !result.filePath) return { canceled: true };
+      beforeWrite?.();
+      await fsp.writeFile(result.filePath, bytes); return { path: result.filePath };
+    },
+    encrypt: encryptSecret, decrypt: decryptSecret,
+    workerFiles: async () => Promise.all(['server.cjs', 'protocol.cjs', 'publish.cjs', 'safe-address.cjs', 'package.json', 'package-lock.json', 'README.md', '.env.example'].map(async name => [name, await fsp.readFile(path.join(__dirname, '../worker', name))])),
+    readPublicImage: async url => { if (!isSafeRemoteMediaUrl(url)) throw new Error('Host the reviewed image at a durable public HTTPS URL first.'); return imageSourceBuffer({ url }); },
+    readReceipt: async () => {
+      const result = await dialog.showOpenDialog(BrowserWindow.getFocusedWindow() || mainWindow, { filters: [{ name: 'Signed Worker Receipt', extensions: ['json'] }], properties: ['openFile'] });
+      if (result.canceled || !result.filePaths?.[0]) return null;
+      if ((await fsp.stat(result.filePaths[0])).size > 2 * 1024 * 1024) throw new Error('Worker receipt exceeds 2 MB.');
+      return JSON.parse(await fsp.readFile(result.filePaths[0], 'utf8'));
+    },
+    pluginFiles: async () => {
+      const dir = path.join(__dirname, 'assets/reader-plugin');
+      return Promise.all(['content-studio-reader.php', 'reader.js', 'reader.css', 'README.txt'].map(async name => [name, await fsp.readFile(path.join(dir, name))]));
+    },
+    refreshEvents: async () => {
+      const settings = store.get('settings', {}), before = analyticsConfig(settings);
+      const events = await require('./recipe-events').fetchRecipeEvents({ settings, token: await googleAccessToken(), request: (url, body, options) => axios.post(url, body, options) });
+      const after = analyticsConfig(store.get('settings', {}));
+      if (before.propertyId !== after.propertyId || before.siteUrl !== after.siteUrl || !googleSettings().refreshToken) throw new Error('Google settings changed during refresh. Try again.');
+      return events;
+    }
+  });
+  secureIpcHandle('quality-workspace', async (_event, { action, params = {} } = {}) => {
+    try {
+      const result = await quality.run(action, params);
+      if (action === 'content:benchmark-queue') emitProgress('pin-queue-updated', { addedCount: 1 });
+      return { success: true, result };
+    }
+    catch (error) { return { success: false, error: sanitizeProviderError(error).message || 'Quality check failed.' }; }
+  });
+}
+
 // The new workspace is additive: existing article, Pin Creator and CSV records stay authoritative.
 function legacyPinterestQueueReservations() {
-  const defaultAccount = store.get('pinWorkspace.defaultCsvAccountId', '') || 'csv:legacy';
-  return pinterestBatches().filter(b=>b.fileStatus !== 'failed').flatMap(b=>(b.rows || []).filter(r=>b.outcomes?.[r.number]?.status !== 'failed' && r.cells?.[6]).map(r=>({
+  const defaultAccount = store.get('pinWorkspace.defaultCsvAccountId', '');
+  return pinterestBatches().filter(b=>b.fileStatus !== 'failed' && (b.account || defaultAccount)).flatMap(b=>(b.rows || []).filter(r=>b.outcomes?.[r.number]?.status !== 'failed' && r.cells?.[6]).map(r=>({
     id:String(r.pinId).replace(/^workspace-/, ''), accountId:b.account || defaultAccount, state:'scheduled',
     scheduledAt:/Z$|[+-]\d\d:\d\d$/.test(r.cells[6]) ? r.cells[6] : `${r.cells[6]}Z`
   })));

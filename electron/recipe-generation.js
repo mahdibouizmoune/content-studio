@@ -1,3 +1,5 @@
+const { parseRecipeCard, durationMinutes, positiveYield } = require('./recipe-card-parser');
+
 function clampInteger(value, min, max, fallback) {
   const parsed = Number.parseInt(value, 10);
   if (!Number.isFinite(parsed)) return fallback;
@@ -61,7 +63,7 @@ function listItemsAfterHeading(section = '', heading = '') {
   );
   const block = String(section).match(headingPattern)?.[1] || '';
   return [...block.matchAll(/<li\b[^>]*>([\s\S]*?)<\/li>/gi)]
-    .map((match) => String(match[1]).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim())
+    .map((match) => String(match[1]).replace(/<[^>]+>/g, ' ').replace(/&(?:deg|#176|#x0*b0);/gi, '\u00b0').replace(/&nbsp;/gi, ' ').replace(/\s+/g, ' ').trim())
     .filter(Boolean);
 }
 
@@ -79,11 +81,13 @@ function validateRecipeChunk(html = '', expectedStart = 1, expectedEnd = 1) {
   for (const section of sections) {
     const ingredients = listItemsAfterHeading(section.html, 'Ingredients');
     const instructions = listItemsAfterHeading(section.html, 'Instructions');
-    if (ingredients.length < 4) issues.push(`Recipe ${section.number} needs at least 4 measured ingredients`);
+    if (!ingredients.length) issues.push(`Recipe ${section.number} needs measured ingredients`);
     if (instructions.length < 3) issues.push(`Recipe ${section.number} needs at least 3 actionable steps`);
     if (!/Prep Time:/i.test(section.html) || !/Total Time:/i.test(section.html) || !/(Servings|Yield):/i.test(section.html)) {
       issues.push(`Recipe ${section.number} is missing prep time, total time, or yield`);
     }
+    const checked = validateRecipeCard(`<section id="recipe-card">${section.html}</section>`);
+    issues.push(...checked.issues.map((issue) => `Recipe ${section.number}: ${issue}`));
   }
 
   return { ok: issues.length === 0, issues, sections };
@@ -113,21 +117,34 @@ function usesCompactRecipeCollection(itemCount = 0, articleLength = '900-1200') 
   return articleLengthMaximum(articleLength) < fullRecipeMinimum;
 }
 
+function validateCompactRecipeCollection(html, itemCount, minimumWords) {
+  const numbers = extractNumberedH2s(html).map((heading) => heading.number);
+  const expected = Array.from({ length: itemCount }, (_, index) => index + 1);
+  const wordCount = String(html).replace(/<[^>]+>/g, ' ').split(/\s+/).filter(Boolean).length;
+  const structuralIssues = [];
+  if (numbers.join(',') !== expected.join(',')) {
+    structuralIssues.push(`Expected numbered ideas 1 through ${itemCount}, received ${numbers.join(', ') || 'none'}`);
+  }
+  if (wordCount < minimumWords) structuralIssues.push(`Compact collection is too short at ${wordCount} words`);
+  const issues = [...structuralIssues, ...validateRecipeCard(html).issues];
+  return { ok: issues.length === 0, issues, structuralIssues };
+}
+
 function validateRecipeCardLegacy(html = '') {
-  const card = String(html).match(/<section[^>]*id=["']recipe-card["'][^>]*>([\s\S]*?)<\/section>/i)?.[1] || '';
-  const ingredients = listItemsAfterHeading(card, 'Ingredients');
-  const instructions = listItemsAfterHeading(card, 'Instructions');
+  const card = parseRecipeCard(html);
+  const { ingredients, instructions } = card;
   const measuredIngredients = ingredients.filter((ingredient) => (
     /(?:\b\d+(?:[./]\d+)?\b|¼|½|¾|⅓|⅔|⅛|⅜|⅝|⅞|\b(?:pinch|dash|to taste)\b)/i.test(ingredient)
   ));
   const issues = [];
-  if (!card) issues.push('Recipe card is missing');
-  if (ingredients.length < 4) issues.push('Recipe card needs at least 4 ingredients');
+  if (!card.html) issues.push('Recipe card is missing');
+  if (card.count > 1) issues.push('Use one primary recipe card, not duplicate recipe-card IDs');
+  if (!ingredients.length) issues.push('Recipe card needs measured ingredients');
   if (instructions.length < 3) issues.push('Recipe card needs at least 3 instructions');
   if (ingredients.length && measuredIngredients.length < Math.ceil(ingredients.length * 0.7)) {
     issues.push('Most recipe card ingredients need explicit quantities');
   }
-  if (!/Prep Time:/i.test(card) || !/Total Time:/i.test(card) || !/(Servings|Yield):/i.test(card)) {
+  if (!card.facts['Prep Time'] || !card.facts['Total Time'] || !(card.facts.Servings || card.facts.Yield)) {
     issues.push('Recipe card is missing prep time, total time, or yield');
   }
   return { ok: issues.length === 0, issues, ingredients, instructions };
@@ -136,10 +153,10 @@ function validateRecipeCardLegacy(html = '') {
 function validateRecipeCard(html = '') {
   const legacy = validateRecipeCardLegacy(html);
   const measuredIngredients = legacy.ingredients.filter((ingredient) => (
-    /(?:\b\d+(?:\s+\d+\/\d+|[./]\d+)?\b|\u00bc|\u00bd|\u00be|\u2153|\u2154|\u215b|\u215c|\u215d|\u215e|\b(?:pinch|dash|to taste)\b)/i.test(ingredient)
+    /(?:\b\d+(?:\s+\d+\/\d+|[./]\d+)?\b|\u00bc|\u00bd|\u00be|\u2153|\u2154|\u215b|\u215c|\u215d|\u215e|\b(?:pinch|dash|to taste)\b|^(?:one|two|three|four|five|six|seven|eight|nine|ten|half|quarter)\b)/i.test(ingredient)
   ));
   const instructionCues = legacy.instructions.filter((step) => (
-    /(?:\b\d+(?:\s*-\s*\d+)?\s*(?:seconds?|minutes?|mins?|hours?|hrs?)\b|\b\d{2,3}\s*(?:\u00b0|degrees?)\s*[cf]\b|until|golden|browned|tender|crisp|thick|set|opaque|bubbling|fragrant|coats? (?:a )?spoon|internal temperature)/i.test(step)
+    /(?:\b\d+(?:\s*[-\u2013]\s*\d+)?\s*(?:seconds?|minutes?|mins?|hours?|hrs?|days?|weeks?)\b|\b\d{2,3}\s*(?:\u00b0|degrees?)\s*[cf]\b|until|golden|browned|tender|crisp|thick|set|opaque|bubbling|fragrant|combined|evenly (?:mixed|coated|distributed)|fully (?:coated|incorporated)|smooth|frothy|foamy|dissolved|chilled|coats? (?:a )?spoon|internal temperature)/i.test(step)
   ));
   const issues = legacy.issues
     .filter((item) => item !== 'Most recipe card ingredients need explicit quantities')
@@ -147,13 +164,30 @@ function validateRecipeCard(html = '') {
   if (legacy.ingredients.length && measuredIngredients.length < Math.ceil(legacy.ingredients.length * 0.7)) {
     issues.push('Most recipe card ingredients need explicit quantities');
   }
-  const card = String(html).match(/<section[^>]*id=["']recipe-card["'][^>]*>([\s\S]*?)<\/section>/i)?.[1] || '';
-  if (!/Prep Time:/i.test(card) || !/Cook Time:/i.test(card) || !/Total Time:/i.test(card) || !/(Servings|Yield):/i.test(card)) {
+  const card = parseRecipeCard(html);
+  if (!card.facts['Prep Time'] || !card.facts['Cook Time'] || !card.facts['Total Time'] || !(card.facts.Servings || card.facts.Yield)) {
     issues.push('Recipe card is missing prep time, cook time, total time, or yield');
   }
   if (legacy.instructions.length && instructionCues.length < Math.min(2, legacy.instructions.length)) {
     issues.push('Recipe instructions need timing, temperature, texture, or doneness cues');
   }
+  const prep = durationMinutes(card.facts['Prep Time']);
+  const cook = durationMinutes(card.facts['Cook Time']);
+  const total = durationMinutes(card.facts['Total Time']);
+  if (prep === null || cook === null || total === null) issues.push('Recipe times need numeric values and second, minute, hour, day, or week units');
+  else if (total < Math.max(prep, cook) || total <= 0) issues.push('Recipe total time contradicts prep or cook time');
+  if (!positiveYield(card.facts.Servings || card.facts.Yield)) issues.push('Recipe yield must be a positive number');
+  const poultry = legacy.ingredients.filter((item) => /\b(?:chicken|turkey|duck|poultry)\b/i.test(item)
+    && !/\b(?:stock|broth|deli|vegan|plant-based)\b/i.test(item));
+  // "Smoked" alone does not establish that poultry is fully cooked.
+  const prepared = /\b(?:cooked|pre-cooked|precooked|rotisserie|canned|leftover|roasted)\b/i;
+  const rawPoultry = poultry.some((item) => /\braw\b/i.test(item) || !prepared.test(item));
+  const reheatedPoultry = poultry.length && !rawPoultry && cook > 0
+    && legacy.instructions.some((step) => /\b(?:reheat|heat|bake|roast|simmer|cook|microwave|saute)\b/i.test(step));
+  const safePoultry = legacy.instructions.some((step) => /(?:165\s*(?:\u00b0|degrees?)?\s*F|(?:73\.9|74|75)\s*(?:\u00b0|degrees?)?\s*C)/i.test(step)
+    && /thermometer|internal|thickest/i.test(step));
+  if (rawPoultry && !safePoultry) issues.push('Raw poultry needs a thermometer-verified internal temperature of 165 F (74 C)');
+  else if (reheatedPoultry && !safePoultry) issues.push('Reheated poultry needs a thermometer-verified internal temperature of 165 F (74 C)');
   return {
     ok: issues.length === 0,
     issues,
@@ -166,11 +200,10 @@ function validateRecipeCard(html = '') {
 
 function replaceRecipeCard(html = '', recipeCard = '') {
   const source = String(html);
-  const card = String(recipeCard).match(/<section[^>]*id=["']recipe-card["'][^>]*>[\s\S]*?<\/section>/i)?.[0] || '';
+  const card = parseRecipeCard(recipeCard).html;
   if (!card) return source;
-  if (/<section[^>]*id=["']recipe-card["'][^>]*>[\s\S]*?<\/section>/i.test(source)) {
-    return source.replace(/<section[^>]*id=["']recipe-card["'][^>]*>[\s\S]*?<\/section>/i, card);
-  }
+  const current = parseRecipeCard(source);
+  if (current.html) return `${source.slice(0, current.start)}${card}${source.slice(current.end)}`;
   return `${source.trim()}\n${card}`.trim();
 }
 
@@ -185,6 +218,7 @@ module.exports = {
   recommendedRecipeCollectionLength,
   replaceRecipeCard,
   validateRecipeChunk,
+  validateCompactRecipeCollection,
   validateRecipeCard,
   usesCompactRecipeCollection
 };

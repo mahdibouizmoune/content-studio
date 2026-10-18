@@ -2,6 +2,9 @@ const path = require('path');
 const { DatabaseSync } = require('node:sqlite');
 
 const WORKSPACE_ROOTS = new Set([
+  'contentOperations',
+  'qualityWorkspace',
+  'generationSpending',
   'pinWorkspace',
   'articles',
   'generatedVideos',
@@ -21,13 +24,14 @@ const WORKSPACE_ROOTS = new Set([
 
 function splitKey(key = '') {
   const parts = String(key || '').split('.').filter(Boolean);
+  if (parts.some(part => ['__proto__', 'constructor', 'prototype'].includes(part))) throw new Error('Unsafe workspace key.');
   return { root: parts.shift() || '', parts };
 }
 
 function nestedGet(value, parts, fallback) {
   let current = value;
   for (const part of parts) {
-    if (!current || typeof current !== 'object' || !(part in current)) return fallback;
+    if (!current || typeof current !== 'object' || !Object.hasOwn(current, part)) return fallback;
     current = current[part];
   }
   return current === undefined ? fallback : current;
@@ -35,13 +39,12 @@ function nestedGet(value, parts, fallback) {
 
 function nestedSet(value, parts, nextValue) {
   if (!parts.length) return nextValue;
-  const root = value && typeof value === 'object' && !Array.isArray(value) ? { ...value } : {};
+  const copy = (value, nextPart) => Array.isArray(value) ? [...value] : value && typeof value === 'object' ? { ...value } : /^(0|[1-9]\d*)$/.test(nextPart) ? [] : {};
+  const root = copy(value, parts[0]);
   let cursor = root;
   for (let index = 0; index < parts.length - 1; index += 1) {
     const part = parts[index];
-    cursor[part] = cursor[part] && typeof cursor[part] === 'object' && !Array.isArray(cursor[part])
-      ? { ...cursor[part] }
-      : {};
+    cursor[part] = copy(Object.hasOwn(cursor, part) ? cursor[part] : undefined, parts[index + 1]);
     cursor = cursor[part];
   }
   cursor[parts[parts.length - 1]] = nextValue;
@@ -50,10 +53,10 @@ function nestedSet(value, parts, nextValue) {
 
 function nestedDelete(value, parts) {
   if (!parts.length) return undefined;
-  const root = value && typeof value === 'object' && !Array.isArray(value) ? structuredClone(value) : {};
+  const root = value && typeof value === 'object' ? structuredClone(value) : {};
   let cursor = root;
   for (let index = 0; index < parts.length - 1; index += 1) {
-    cursor = cursor?.[parts[index]];
+    cursor = cursor && Object.hasOwn(cursor, parts[index]) ? cursor[parts[index]] : undefined;
     if (!cursor || typeof cursor !== 'object') return root;
   }
   delete cursor[parts[parts.length - 1]];
@@ -103,7 +106,7 @@ class WorkspaceDatabase {
   set(key, value) {
     const safeValue = value === undefined ? null : value;
     this.writeStatement.run(String(key), JSON.stringify(safeValue), new Date().toISOString());
-    this.emit();
+    if (!this.replacing) this.emit();
     return safeValue;
   }
 
@@ -118,16 +121,18 @@ class WorkspaceDatabase {
     }));
   }
 
-  replace(values = {}) {
+  replace(values = {}, beforeCommit = () => {}) {
     this.db.exec('BEGIN IMMEDIATE');
+    this.replacing = true;
     try {
       this.db.exec('DELETE FROM workspace_values');
       for (const [key, value] of Object.entries(values)) this.set(key, value);
+      beforeCommit();
       this.db.exec('COMMIT');
     } catch (error) {
       this.db.exec('ROLLBACK');
       throw error;
-    }
+    } finally { this.replacing = false; }
     this.emit();
   }
 
@@ -158,6 +163,8 @@ function createWorkspaceStore(settingsStore, userDataPath) {
   }
 
   const isWorkspaceKey = (key) => WORKSPACE_ROOTS.has(splitKey(key).root);
+  let restoring = false;
+  const listeners = new Set();
   const facade = {
     database,
     migrationChanged,
@@ -182,9 +189,12 @@ function createWorkspaceStore(settingsStore, userDataPath) {
       return facade.get(key, marker) !== marker;
     },
     onDidAnyChange(listener) {
-      const unsubscribeDb = database.onChange(listener);
-      const unsubscribeSettings = settingsStore.onDidAnyChange(listener);
+      const notify = () => { if (!restoring) listener(); };
+      listeners.add(listener);
+      const unsubscribeDb = database.onChange(notify);
+      const unsubscribeSettings = settingsStore.onDidAnyChange(notify);
       return () => {
+        listeners.delete(listener);
         unsubscribeDb?.();
         unsubscribeSettings?.();
       };
@@ -199,8 +209,19 @@ function createWorkspaceStore(settingsStore, userDataPath) {
         if (isWorkspaceKey(key)) workspace[key] = value;
         else settings[key] = value;
       }
-      settingsStore.store = settings;
-      database.replace(workspace);
+      const previousSettings = settingsStore.store;
+      let settingsTouched = false;
+      restoring = true;
+      try {
+        database.replace(workspace, () => { settingsTouched = true; settingsStore.store = settings; });
+      } catch (error) {
+        if (settingsTouched) {
+          try { settingsStore.store = previousSettings; }
+          catch { throw new Error('Workspace restore failed and previous settings could not be restored. Keep the backup for recovery.', { cause: error }); }
+        }
+        throw error;
+      } finally { restoring = false; }
+      for (const listener of listeners) listener();
     }
   };
   return facade;

@@ -1,5 +1,5 @@
 import { Calendar, Filter, Grid3X3, Image as ImageIcon, Link2, List, Send, Search, Trash2 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import ArticleEditor from "@/components/ArticleEditor";
 import { useConfirmDialog } from "@/components/ConfirmDialog";
 import SectionHeader from "@/components/SectionHeader";
@@ -67,6 +67,7 @@ export default function ArticlesList({ articles, settings, saveSettings, refresh
   const [bulkSiteId, setBulkSiteId] = useState(settings.wordpressSites?.[0]?.id || settings.wordpressSites?.[0]?.url || "");
   const [bulkStatus, setBulkStatus] = useState("");
   const [bulkWorking, setBulkWorking] = useState("");
+  const bulkPublishRef = useRef(false);
   const [bulkProgress, setBulkProgress] = useState({ active: false, current: 0, total: 0, label: "" });
   const completed = articles.filter((article) => article.queueStatus === "completed");
   const filtered = useMemo(() => {
@@ -111,6 +112,7 @@ export default function ArticlesList({ articles, settings, saveSettings, refresh
   }
 
   async function bulkPublishToWordPress() {
+    if (bulkWorking || bulkPublishRef.current) return;
     if (!bulkSite) {
       setBulkStatus("Choose a WordPress site first.");
       return;
@@ -124,9 +126,12 @@ export default function ArticlesList({ articles, settings, saveSettings, refresh
       message: `Publish ${selectedArticles.length} article${selectedArticles.length === 1 ? "" : "s"} to ${bulkSite.name || bulkSite.url}?`,
       confirmLabel: "Publish"
     })) return;
+    if (bulkPublishRef.current) return;
+    bulkPublishRef.current = true;
     setBulkWorking("publish");
     setBulkProgress({ active: true, current: 0, total: selectedArticles.length, label: "Starting WordPress publishing..." });
 
+    try {
     let siteForPublish = bulkSite;
     let categorySyncWarning = "";
     if (!siteForPublish.categories?.length && siteForPublish.url) {
@@ -148,13 +153,14 @@ export default function ArticlesList({ articles, settings, saveSettings, refresh
     const warnings = [];
     if (categorySyncWarning) warnings.push(categorySyncWarning);
     for (const article of selectedArticles) {
-      const readyArticle = publishReadyArticle(article, settings);
+      let readyArticle = article;
       const itemNumber = published + needsReview + failures.length + 1;
-      const manualCategory = manualCategoryForSite(readyArticle, siteForPublish);
-      const match = manualCategory
-        ? { category: siteForPublish.categories?.find((category) => String(category.id) === String(manualCategory)), confidence: 100, reason: "Manual category" }
-        : matchWordPressCategory(readyArticle, siteForPublish);
       try {
+        readyArticle = publishReadyArticle(article, settings);
+        const manualCategory = manualCategoryForSite(readyArticle, siteForPublish);
+        const match = manualCategory
+          ? { category: siteForPublish.categories?.find((category) => String(category.id) === String(manualCategory)), confidence: 100, reason: "Manual category" }
+          : matchWordPressCategory(readyArticle, siteForPublish);
         setBulkStatus(`Publishing ${itemNumber}/${selectedArticles.length}: ${readyArticle.generatedTitle || readyArticle.title}`);
         setBulkProgress({ active: true, current: itemNumber - 1, total: selectedArticles.length, label: readyArticle.generatedTitle || readyArticle.title });
         const articleForPublish = { ...readyArticle, wordpressCategoryId: manualCategory || match.category?.id, wordpressCategorySiteUrl: siteForPublish.url.replace(/\/+$/, ""), autoCategory: match };
@@ -164,6 +170,7 @@ export default function ArticlesList({ articles, settings, saveSettings, refresh
         const publicPostUrl = isPublic ? (result.postUrl || readyArticle.wordpressPostUrl) : readyArticle.wordpressPostUrl;
         await electronAPI.saveArticle({
           ...articleForPublish,
+          ...(result.recipeArticlePatch || {}),
           workflowStatus: result.success ? (isPublic ? "published" : "needs-review") : readyArticle.workflowStatus,
           wordpressPublishStatus: result.status || readyArticle.wordpressPublishStatus || "",
           wordpressPostId: result.postId || readyArticle.wordpressPostId,
@@ -185,7 +192,10 @@ export default function ArticlesList({ articles, settings, saveSettings, refresh
         if (isPublic) published++;
         else needsReview++;
       } catch (error) {
-        failures.push(`${readyArticle.generatedTitle || readyArticle.title}: ${error.message}`);
+        if (/RECIPE_REVIEW_REQUIRED/.test(error.message || "")) {
+          needsReview++;
+          warnings.push(`${readyArticle.generatedTitle || readyArticle.title}: ${error.message}`);
+        } else failures.push(`${readyArticle.generatedTitle || readyArticle.title}: ${error.message}`);
       } finally {
         setBulkProgress((current) => ({ ...current, current: Math.min(current.total || selectedArticles.length, itemNumber) }));
       }
@@ -193,7 +203,13 @@ export default function ArticlesList({ articles, settings, saveSettings, refresh
     await refreshArticles();
     setBulkStatus(`Published ${published}. Needs review ${needsReview}. Warnings ${warnings.length}. Failed ${failures.length}${failures.length ? ` - ${failures[0]}` : warnings.length ? ` - ${warnings[0]}` : ""}`);
     setBulkProgress({ active: false, current: selectedArticles.length, total: selectedArticles.length, label: failures.length ? "Finished with errors" : needsReview ? "Finished with posts needing review" : warnings.length ? "Published with warnings" : "Publishing finished" });
-    setBulkWorking("");
+    } catch (error) {
+      setBulkStatus(`Publishing stopped: ${error.message || "Could not finish the batch."}`);
+    } finally {
+      bulkPublishRef.current = false;
+      setBulkWorking("");
+      setBulkProgress((current) => ({ ...current, active: false }));
+    }
   }
 
   async function bulkSendToPinCreator() {
@@ -278,7 +294,7 @@ export default function ArticlesList({ articles, settings, saveSettings, refresh
   }
 
   return (
-    <section className="animate-fade-in">
+    <section className="article-library animate-fade-in">
       <SectionHeader
         eyebrow={publicationFilter === "published" ? "Published" : "Completed"}
         title={publicationFilter === "published" ? "Published Articles" : "Completed Articles"}
@@ -289,10 +305,10 @@ export default function ArticlesList({ articles, settings, saveSettings, refresh
       <div className="mb-5 flex flex-col gap-3 lg:flex-row lg:items-center">
         <label className="relative block flex-1">
           <Search className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" />
-          <input className={`${inputClass} h-14 pl-12 text-base`} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search articles..." />
+          <input aria-label="Search articles" className={`${inputClass} pl-12`} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search articles..." />
         </label>
         <Filter className="hidden h-6 w-6 text-slate-500 lg:block" />
-        <select className={`${inputClass} h-14 lg:w-56`} value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)}>
+        <select aria-label="Article type" className={`${inputClass} lg:w-48`} value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)}>
           <option value="all">All Articles</option>
           <option value="article">Classic Articles</option>
           <option value="listicle">Listicles</option>
@@ -304,12 +320,12 @@ export default function ArticlesList({ articles, settings, saveSettings, refresh
       </div>
 
       <div className="mb-5 rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
-        <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-          <label className="flex items-center gap-3 text-sm font-black text-slate-700">
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="flex shrink-0 items-center gap-3 text-sm font-black text-slate-700">
             <input type="checkbox" className="h-5 w-5" checked={filtered.length > 0 && filtered.every((article) => selectedIds.includes(article.id))} onChange={toggleAllVisible} />
             {selectedArticles.length} selected
           </label>
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <div className="flex min-w-0 flex-1 flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
             <select className={`${inputClass} h-11 sm:w-72`} value={bulkSiteId} onChange={(event) => setBulkSiteId(event.target.value)}>
               {settings.wordpressSites?.length ? (
                 settings.wordpressSites.map((site) => <option key={site.id || site.url} value={site.id || site.url}>{site.name || site.url}</option>)
@@ -343,13 +359,13 @@ export default function ArticlesList({ articles, settings, saveSettings, refresh
         <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
           {filtered.map((article) => (
             <div key={article.id} className="soft-card overflow-hidden rounded-lg transition hover:-translate-y-0.5">
-              {articleImageSrc(article) ? <img className="aspect-[3/1] w-full object-cover" src={articleImageSrc(article)} alt="" /> : <div className="grid aspect-[3/1] place-items-center bg-slate-100 text-slate-400"><ImageIcon className="h-8 w-8" /></div>}
+              {articleImageSrc(article) ? <img className="aspect-[16/10] w-full object-cover" src={articleImageSrc(article)} alt="" loading="lazy" /> : <div className="grid aspect-[16/10] place-items-center bg-slate-100 text-slate-400"><ImageIcon className="h-8 w-8" /></div>}
               <div className="p-4">
                 <div className="mb-2 flex flex-wrap gap-2 text-xs font-black uppercase">
                   <span className="text-indigo-600">{article.type}</span>
                   {isArticlePublished(article) ? <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-emerald-700">Published</span> : null}
                 </div>
-                <h3 className="text-lg font-black leading-snug text-slate-900">{article.generatedTitle || article.title}</h3>
+                <h3 className="text-base font-semibold leading-snug text-slate-900">{article.generatedTitle || article.title}</h3>
                 <p className="mt-2 text-sm leading-6 text-slate-500">{(article.content || "").replace(/<[^>]+>/g, " ").slice(0, 150)}...</p>
                 <div className="mt-4 flex gap-2">
                   <Button onClick={() => setSelected(article)}>View</Button>
@@ -362,16 +378,16 @@ export default function ArticlesList({ articles, settings, saveSettings, refresh
       ) : (
         <div className="soft-card overflow-hidden rounded-lg">
           {filtered.map((article) => (
-            <div key={article.id} className="grid gap-4 border-b border-slate-100 p-5 last:border-b-0 lg:grid-cols-[28px_104px_1fr_auto] lg:items-center">
+            <div key={article.id} className="grid gap-4 border-b border-slate-100 p-4 last:border-b-0 lg:grid-cols-[24px_80px_minmax(0,1fr)_auto] lg:items-center">
               <input type="checkbox" className="mt-1 h-5 w-5 lg:mt-0" checked={selectedIds.includes(article.id)} onChange={() => toggleSelected(article.id)} aria-label={`Select ${article.title}`} />
               {articleImageSrc(article) ? (
-                <img className="h-24 w-28 rounded-md object-cover" src={articleImageSrc(article)} alt="" />
+                <img className="h-20 w-20 rounded-md object-cover" src={articleImageSrc(article)} alt="" loading="lazy" />
               ) : (
-                <div className="grid h-24 w-28 place-items-center rounded-md bg-slate-100 text-slate-400"><ImageIcon className="h-7 w-7" /></div>
+                <div className="grid h-20 w-20 place-items-center rounded-md bg-slate-100 text-slate-400"><ImageIcon className="h-6 w-6" /></div>
               )}
               <div className="min-w-0">
                 <div className="flex min-w-0 flex-wrap items-center gap-2">
-                  <h3 className="min-w-0 text-lg font-black leading-snug text-slate-900 lg:truncate">{article.generatedTitle || article.title}</h3>
+                  <h3 className="min-w-0 text-sm font-semibold leading-snug text-slate-900">{article.generatedTitle || article.title}</h3>
                   {isArticlePublished(article) ? <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-black text-emerald-700">Published</span> : null}
                 </div>
                 <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm font-medium text-slate-500">

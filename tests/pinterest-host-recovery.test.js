@@ -26,7 +26,8 @@ test('hosting selects the most specific WordPress installation and respects path
 
 function load(name, next, overrides = {}) {
   const context = {
-    normalizedHostname, resolvePinterestExportHost, store: { get: () => ({}) }, mediaExtension, PIN_WIDTH: 1000, PIN_HEIGHT: 1500,
+    normalizedHostname, resolvePinterestExportHost, store: { get: () => ({}) }, mediaExtension, PIN_WIDTH: 1080, PIN_HEIGHT: 1920,
+    hasPinterestDimensions: require('../electron/pinterest-delivery').hasPinterestDimensions,
     fs: { existsSync: () => true }, expectedPinterestImageIdentity: async () => ({ sha256: hash }),
     comparePinterestImageIdentity: (expected, actual) => ({ matches: expected.sha256 === actual.sha256, distance: 0 }),
     isTemporaryPinterestMediaUrl: () => false,
@@ -34,7 +35,7 @@ function load(name, next, overrides = {}) {
     ensurePinterestCsvJpeg: async (local) => { assert.equal(local, '/finished.jpg'); return '/export.jpg'; },
     hostFinalPinterestImage: async () => { throw new Error('Unexpected upload'); },
     downloadImage: async () => { throw new Error('Unexpected download'); },
-    log: { warn: () => {} }, ...overrides
+    log: { warn: () => {} }, imgBBFailureMessage: () => 'ImgBB unavailable', ...overrides
   };
   vm.createContext(context);
   const start = source.indexOf(`async function ${name}(`);
@@ -106,9 +107,25 @@ test('automatic hosting never chooses another website or an unconfigured account
   assert.equal(resolvePinterestExportHost('auto', [{ ...configuredSite, apiKey: '' }], pin.url), 'auto');
   assert.equal(resolvePinterestExportHost('auto', [], pin.url), 'auto');
   assert.equal(resolvePinterestExportHost('wordpress', [], pin.url), 'wordpress');
+  assert.equal(resolvePinterestExportHost('resilient', [], pin.url), 'resilient');
 });
 
-test('WordPress-first batch preparation is serial and preserves all twenty rows', async () => {
+test('resilient hosting tries ImgBB first and falls back to matching WordPress media', async () => {
+  const calls = [];
+  const run = load('hostFinalPinterestImage', 'expectedPinterestImageIdentity', {
+    uploadLocalImageToImgBB: async () => { calls.push('imgbb'); return null; },
+    uploadPinterestImageToWordPress: async () => {
+      calls.push('wordpress');
+      return { success: true, url: wp, provider: 'wordpress', validation: valid };
+    }
+  });
+  const result = await run('/finished.jpg', pin.url, pin.title, { mediaHost: 'resilient', sourceMode: 'generate-new' });
+  assert.equal(result.success, true);
+  assert.equal(result.url, wp);
+  assert.deepEqual(calls, ['imgbb', 'wordpress']);
+});
+
+test('WordPress batch verification is bounded and preserves all twenty rows', async () => {
   let handler;
   let active = 0;
   let maximum = 0;
@@ -131,7 +148,7 @@ test('WordPress-first batch preparation is serial and preserves all twenty rows'
   const result = await handler({}, { pins });
   assert.equal(result.success, true);
   assert.equal(result.pins.length, 20);
-  assert.equal(maximum, 1);
+  assert.equal(maximum, 4);
   assert.deepEqual(Array.from(result.pins, item => item.id), pins.map(item => item.id));
 });
 

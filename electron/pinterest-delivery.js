@@ -22,9 +22,15 @@ function imageCompatibilityError(metadata, contentType, bytes, url = '') {
   return '';
 }
 
-function assertFinalAsset(row, pin, check, expected, compareIdentity) {
+function hasPinterestDimensions(check = {}, allowOriginalRatio = false) {
+  return (check.width === 1000 && check.height === 1500)
+    || (check.width === 1080 && check.height === 1920)
+    || (allowOriginalRatio && check.width >= 600 && check.height >= 900 && [2 / 3, 9 / 16].some((ratio) => Math.abs(check.width / check.height - ratio) < 0.005));
+}
+
+function assertFinalAsset(row, pin, check, expected, compareIdentity, allowOriginalRatio = false) {
   if (!pin?.id || pin.imageQa?.publicValidatedUrl !== row[1]) throw new Error('No saved, verified finished Pin matches this Media URL. Prepare the CSV again.');
-  if (!check?.valid || check.width !== 1000 || check.height !== 1500) throw new Error(check?.error || 'Finished Pin dimensions are invalid.');
+  if (!check?.valid || !hasPinterestDimensions(check, allowOriginalRatio)) throw new Error(check?.error || 'Finished Pin dimensions are invalid.');
   if (!compareIdentity(expected, check, 14).matches) throw new Error('The hosted image changed or does not match the saved finished Pin. Rehost before export.');
 }
 
@@ -92,7 +98,7 @@ function retryableRows(batch, batches) {
   return batch.rows.filter((row) => batch.outcomes[row.number]?.status === 'failed' && !confirmed.has(deliveryContentKey(row)) && !outstanding.has(deliveryContentKey(row)));
 }
 
-async function writeVerifiedFiles(files, { io = fs, onCommitted = async () => {} } = {}) {
+async function writeVerifiedFiles(files, { io = fs, onCommitted = async () => {}, beforeCommit = async () => {} } = {}) {
   const staged = [];
   const committed = [];
   try {
@@ -106,6 +112,7 @@ async function writeVerifiedFiles(files, { io = fs, onCommitted = async () => {}
       if (!Buffer.from(file.bytes).equals(written)) throw new Error('File bytes changed while writing.');
       await file.verify?.(written);
     }
+    await beforeCommit();
     for (const file of staged) {
       await io.rename(file.temporary, file.path);
       committed.push(file.path);
@@ -120,4 +127,4 @@ async function writeVerifiedFiles(files, { io = fs, onCommitted = async () => {}
   }
 }
 
-module.exports = { MAX_PIN_IMAGE_BYTES, accountKey, accountScopesOverlap, deliveryContentKey, assertFinalAsset, digest, imageCompatibilityError, makeDeliveryBatch, retryableRows, suggestFailedRows, updateDeliveryOutcomes, writeVerifiedFiles };
+module.exports = { MAX_PIN_IMAGE_BYTES, hasPinterestDimensions, accountKey, accountScopesOverlap, deliveryContentKey, assertFinalAsset, digest, imageCompatibilityError, makeDeliveryBatch, retryableRows, suggestFailedRows, updateDeliveryOutcomes, writeVerifiedFiles };

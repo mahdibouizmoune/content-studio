@@ -272,7 +272,7 @@ export function resolveArticleGenerationSettings({
     squareSocialRatio: resolveValue(article, selectedPreset, smartRecommendations, globalSettings, systemDefaults, "squareSocialRatio"),
     intextImageCount: Number(resolveValue(article, selectedPreset, smartRecommendations, globalSettings, systemDefaults, "intextImageCount")),
     enableIntextImages: resolveBoolean(article, selectedPreset, smartRecommendations, globalSettings, systemDefaults, "enableIntextImages") !== false,
-    recipeCardEnabled: resolveBoolean(article, selectedPreset, smartRecommendations, globalSettings, systemDefaults, "recipeCardEnabled") !== false,
+    recipeCardEnabled: true,
     readerRetentionEnabled: resolveBoolean(article, selectedPreset, smartRecommendations, globalSettings, systemDefaults, "readerRetentionEnabled") !== false,
     readerRetentionAllArticles: resolveBoolean(article, selectedPreset, smartRecommendations, globalSettings, systemDefaults, "readerRetentionAllArticles") === true,
     saveRecipeCtaText: resolveValue(article, selectedPreset, smartRecommendations, globalSettings, systemDefaults, "saveRecipeCtaText"),

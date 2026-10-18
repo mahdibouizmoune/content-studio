@@ -89,13 +89,16 @@ export function stablePinContentId(pin = {}, prefix = "pin") {
   return `${prefix}_${stable || "1"}`;
 }
 
-export function selectPinterestPublicImage(pin = {}) {
+export function selectPinterestPublicImage(pin = {}, { allowTemporary = false } = {}) {
+  const width = Number(pin.imageQa?.publicWidth || 0);
+  const height = Number(pin.imageQa?.publicHeight || 0);
+  const correctSize = (width === 1000 && height === 1500) || (width === 1080 && height === 1920);
+  const originalSize = allowTemporary && width >= 600 && height >= 900 && [2 / 3, 9 / 16].some((ratio) => Math.abs(width / height - ratio) < 0.005);
   if (pin.imageQa?.publicUrlVerified !== true
     || pin.imageQa?.publicDimensionsVerified !== true
     || pin.imageQa?.publicIdentityVerified !== true
     || pin.imageQa?.publicAssetKind !== "finished-pinterest-pin"
-    || Number(pin.imageQa?.publicWidth || 0) !== 1000
-    || Number(pin.imageQa?.publicHeight || 0) !== 1500) return "";
+    || (!correctSize && !originalSize)) return "";
   const validatedUrl = String(pin.imageQa?.publicValidatedUrl || "");
   if (!validatedUrl) return "";
   const candidates = [
@@ -114,6 +117,6 @@ export function selectPinterestPublicImage(pin = {}) {
   return candidates.find((url) => {
     if (url !== validatedUrl) return false;
     const host = new URL(url).hostname;
-    return !/(\.|^)replicate\.delivery$|(\.|^)replicate\.com$/i.test(host);
+    return allowTemporary || !/(\.|^)replicate\.delivery$|(\.|^)replicate\.com$/i.test(host);
   }) || "";
 }

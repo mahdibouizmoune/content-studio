@@ -1,5 +1,6 @@
-import { Clipboard, Download, Image as ImageIcon, Link2, Pause, Play, RefreshCw, Save, Send, Sparkles, Trash2, Upload, UploadCloud } from "lucide-react";
+import { Clipboard, Clock3, Download, Image as ImageIcon, Link2, Pause, Play, RefreshCw, Save, Send, Sparkles, Trash2, Upload, UploadCloud } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { canonicalBoardMatch } from "@/lib/pinterestBoardRules.mjs";
 import SectionHeader from "@/components/SectionHeader";
 import PinterestDeliveryHistory from "@/components/PinterestDeliveryHistory";
 import { useConfirmDialog } from "@/components/ConfirmDialog";
@@ -7,7 +8,7 @@ import { Button, EmptyState, Field, inputClass } from "@/components/ui";
 import { electronAPI } from "@/lib/electron";
 import { scoreSmartBoard, smartPinSignals } from "@/lib/smartContentEngine";
 import { addUtmParams } from "@/lib/utm";
-import { markPinFailure, mergePinResult, mergePreparedPinHosting } from "@/lib/pinBatch.mjs";
+import { markPinFailure, mergePinResult, mergePreparedPinHosting, mergePreparedPinSchedule, pinQueueIdentity } from "@/lib/pinBatch.mjs";
 import {
   buildInterestProfile,
   diversifyByInterest,
@@ -16,6 +17,7 @@ import {
   resolveInterestProfile
 } from "@/lib/pinterestInterestIntelligence.mjs";
 import { selectPinterestPublicImage, stablePinContentId } from "@/lib/pinterestSource.mjs";
+import { selectPinterestExportRows } from "@/lib/pinterestExportSelection.mjs";
 import {
   PINTEREST_SCHEDULE_WINDOW_DAYS,
   PINTEREST_SCHEDULE_WINDOW_MS,
@@ -108,14 +110,7 @@ function dedupePins(items = []) {
   const map = new Map();
   for (const item of Array.isArray(items) ? items : []) {
     if (!item?.url) continue;
-    const normalizedUrl = String(item.url || "").trim().replace(/\/+$/, "").toLowerCase();
-    const key = item.queueType === "internal-link"
-      ? `url:${normalizedUrl}`
-      : item.queueType === "interest-cluster" && item.clusterVariantId
-      ? `cluster:${normalizedUrl}:${String(item.clusterVariantId).trim().toLowerCase()}`
-      : item.articleId
-      ? `article:${String(item.articleId).trim().toLowerCase()}`
-      : `url:${String(item.url || "").trim().replace(/\/+$/, "").toLowerCase()}`;
+    const key = pinQueueIdentity(item);
     if (!key || key === "url:") continue;
     const existing = map.get(key) || {};
     const mergedPin = {
@@ -198,9 +193,7 @@ function rankBoards(pin, boardNames = []) {
 
 function chooseBoard(pin, boardNames = []) {
   if (!boardNames.length) return pin.csvBoard || "";
-  return rankBoards(pin, boardNames)[0]?.board
-    || boardNames.find((board) => /easy recipe finds/i.test(board))
-    || boardNames[0];
+  return canonicalBoardMatch(pin, boardNames).board;
 }
 
 function seoKeywords(pin, board) {
@@ -221,7 +214,7 @@ function seoKeywords(pin, board) {
 }
 
 function publicImage(pin) {
-  return selectPinterestPublicImage(pin);
+  return selectPinterestPublicImage(pin, { allowTemporary: pin.hostingProvider === "replicate" });
 }
 
 function pinCampaignTitle(pin) {
@@ -274,7 +267,7 @@ function hasCurrentAiLetteringReview(pin = {}) {
 }
 
 function normalizedPinterestSourceRatio(value = "") {
-  return ["2:3", "9:16", "1:1"].includes(String(value)) ? String(value) : "2:3";
+  return ["2:3", "9:16", "1:1"].includes(String(value)) ? String(value) : "9:16";
 }
 
 function formatSlot(date) {
@@ -290,7 +283,10 @@ function formatPinterestUtc(value = "") {
 function parseSlot(value = "") {
   const normalized = String(value || "").trim().replace("T", " ");
   const match = normalized.match(/^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})$/);
-  if (!match) return null;
+  if (!match) {
+    const isoDate = new Date(String(value || "").trim());
+    return Number.isNaN(isoDate.getTime()) ? null : isoDate;
+  }
   const [, year, month, day, hour, minute] = match.map(Number);
   const date = new Date(year, month - 1, day, hour, minute, 0, 0);
   return Number.isNaN(date.getTime()) || formatSlot(date) !== normalized ? null : date;
@@ -324,14 +320,22 @@ function slotFromDateTimeLocal(value = "") {
 function validScheduleStart(value, now = Date.now()) {
   const parsed = value instanceof Date ? value : parseSlot(value);
   if (parsed && parsed.getTime() >= now + PINTEREST_SCHEDULE_LEAD_MS && isWithinPinterestScheduleWindow(parsed, now)) return parsed;
-  return new Date(now + PINTEREST_SCHEDULE_LEAD_MS);
+  return new Date(Math.ceil((now + PINTEREST_SCHEDULE_LEAD_MS) / 60000) * 60000);
+}
+
+function utcScheduleInput(pins) {
+  return pins.map((pin) => {
+    const date = pin.csvPublishDate && parseSlot(pin.csvPublishDate);
+    return date ? { ...pin, csvPublishDate: date.toISOString() } : pin;
+  });
 }
 
 function scheduleSummary(total, plan) {
   const spacing = Number(plan?.intervalMinutes || 0);
   const spacingLabel = spacing % 60 === 0 ? `${spacing / 60} hour${spacing === 60 ? "" : "s"}` : `${spacing} minutes`;
   const adjusted = plan?.startAdjusted || plan?.intervalAdjusted ? " Start time or spacing was adjusted automatically to fit every row." : "";
-  return `Scheduled all ${total} rows inside Pinterest's ${PINTEREST_SCHEDULE_WINDOW_DAYS}-day window with ${spacingLabel} between posts.${adjusted}`;
+  const range = plan?.dates?.length ? ` First: ${plan.dates[0].toISOString().slice(0, 16).replace("T", " ")}; last: ${plan.dates.at(-1).toISOString().slice(0, 16).replace("T", " ")} UTC.` : "";
+  return `Scheduled all ${total} rows inside Pinterest's ${PINTEREST_SCHEDULE_WINDOW_DAYS}-day window with ${spacingLabel} between posts.${range}${adjusted}`;
 }
 
 function parseGhlScheduleDate(value = "") {
@@ -354,47 +358,15 @@ function slotTimeOptions(value = "") {
   return timeOptions.includes(current) ? timeOptions : [current, ...timeOptions];
 }
 
-function scheduleSlots(count, settings) {
-  const interval = Math.max(1, Number(settings?.pinCreator?.postInterval || settings?.postInterval || 120));
-  const pinsPerDay = Math.max(1, Number(settings?.pinCreator?.pinsPerDay || settings?.pinsPerDay || 15));
-  const now = new Date();
-  now.setSeconds(0, 0);
-  const intervalMs = interval * 60 * 1000;
-  const start = new Date(Math.ceil((now.getTime() + PINTEREST_SCHEDULE_LEAD_MS) / intervalMs) * intervalMs);
-  const slots = [];
-  let current = start;
-  let currentDay = current.getDate();
-  let usedToday = 0;
-  while (slots.length < count) {
-    if (current.getDate() !== currentDay) {
-      currentDay = current.getDate();
-      usedToday = 0;
-    }
-    if (usedToday >= pinsPerDay) {
-      current = new Date(current);
-      current.setDate(current.getDate() + 1);
-      current.setHours(0, 0, 0, 0);
-      currentDay = current.getDate();
-      usedToday = 0;
-    }
-    if (!isWithinPinterestScheduleWindow(current, now)) break;
-    slots.push(formatSlot(current));
-    usedToday++;
-    current = new Date(current.getTime() + intervalMs);
-  }
-  if (slots.length === count) return slots;
-  return fitPinterestSchedule({ count, start, intervalMinutes: interval, now }).dates.map(formatSlot);
-}
-
 function applyScheduleFrom(index, firstValue, pins, settings) {
   const start = parseSlot(firstValue);
-  if (!start) return pins.map((pin, rowIndex) => rowIndex === index ? { ...pin, csvPublishDate: firstValue, csvPublishImmediately: !firstValue } : pin);
+  if (!start) return pins.map((pin, rowIndex) => rowIndex === index ? { ...pin, csvPublishDate: firstValue, csvPublishImmediately: !firstValue, csvScheduleOrigin: "manual" } : pin);
   const interval = Math.max(1, Number(settings?.pinCreator?.postInterval || settings?.postInterval || 120));
   return pins.map((pin, rowIndex) => {
     if (rowIndex < index) return pin;
     const date = new Date(start.getTime() + (rowIndex - index) * interval * 60 * 1000);
     const csvPublishDate = formatSlot(date);
-    return { ...pin, csvPublishDate, csvPublishImmediately: !csvPublishDate };
+    return { ...pin, csvPublishDate, csvPublishImmediately: !csvPublishDate, csvScheduleOrigin: "manual" };
   });
 }
 
@@ -459,8 +431,8 @@ function buildSocialPack(pin, index = 0) {
     imageAssets: pin.localPath || displayImage(pin) ? [{
       label: "Pinterest Pin",
       platform: "Pinterest",
-      width: 1000,
-      height: 1500,
+      width: 1080,
+      height: 1920,
       filePath: pin.localPath || "",
       fileUrl: displayImage(pin),
       publicUrl: publicImage(pin),
@@ -486,6 +458,7 @@ function pinAiContext(pin = {}, imageSourceMode = pin.imageSourceMode || "genera
   const snapshot = pin.sourceSnapshot || {};
   const interestProfile = resolveInterestProfile(pin);
   return {
+    promptLabVersionId: pin.promptLabVersionId || '',
     sourceTitle: snapshot.title || pin.sourceTitle || pin.title || "",
     title: pin.title || "",
     description: pin.description || snapshot.excerpt || "",
@@ -525,7 +498,7 @@ function pinQuality(pin = {}, allPins = [], boardNames = []) {
   const checks = [
     { label: "Image", ok: Boolean(displayImage(pin)), weight: 10 },
     { label: usesAiText ? "AI lettering requested" : "Exact overlay", ok: usesAiText ? pin.imageQa?.aiTextRequested === true : pin.imageQa?.overlayVerified === true, weight: 8 },
-    { label: "2:3 dimensions", ok: pin.imageQa?.dimensionsVerified === true, weight: 5 },
+    { label: "Pin dimensions", ok: pin.imageQa?.dimensionsVerified === true, weight: 5 },
     { label: usesAiText ? "AI placement requested" : "Safe text area", ok: usesAiText ? pin.imageQa?.aiTextRequested === true : pin.imageQa?.safeZoneVerified === true, weight: 5 },
     { label: "Durable media", ok: pin.imageQa?.publicUrlVerified === true && Boolean(publicImage(pin)), weight: 10 },
     { label: "Title length", ok: title.length >= 50 && title.length <= 100, weight: 12 },
@@ -541,7 +514,7 @@ function pinQuality(pin = {}, allPins = [], boardNames = []) {
   return { score, issues: checks.filter((check) => !check.ok).map((check) => check.label) };
 }
 
-export default function PinCreatorView({ settings }) {
+export default function PinCreatorView({ settings, setActiveScreen }) {
   const confirmAction = useConfirmDialog();
   const [urlText, setUrlText] = useState("");
   const [pins, setPins] = useState([]);
@@ -559,17 +532,13 @@ export default function PinCreatorView({ settings }) {
   const [csvOpen, setCsvOpen] = useState(false);
   const [csvHosting, setCsvHosting] = useState(false);
   const [csvMediaHost, setCsvMediaHost] = useState("auto");
-  const [csvAccount, setCsvAccount] = useState("");
+  const [csvAutoSchedule, setCsvAutoSchedule] = useState(true);
   const [deliveryRefresh, setDeliveryRefresh] = useState(0);
-  useEffect(() => {
-    let active = true;
-    electronAPI.getPinterestDelivery?.().then((result) => { if (active) setCsvAccount((current) => current || result.account || ""); }).catch(() => {});
-    return () => { active = false; };
-  }, []);
   const [csvValidationReport, setCsvValidationReport] = useState(null);
   const [visiblePinCount, setVisiblePinCount] = useState(20);
-  const [csvIntervalHours, setCsvIntervalHours] = useState(String(Math.max(1, Math.round(Number(settings?.pinCreator?.postInterval || settings?.postInterval || 120) / 60))));
-  const [csvStartTime, setCsvStartTime] = useState("");
+  const [csvIntervalHours, setCsvIntervalHours] = useState("1.5");
+  const [csvStartTime, setCsvStartTime] = useState(() => dateTimeLocalFromSlot(formatSlot(validScheduleStart(null))));
+  const [csvStartIsManual, setCsvStartIsManual] = useState(false);
   const [repurposePacks, setRepurposePacks] = useState([]);
   const [ghlHeaders, setGhlHeaders] = useState([]);
   const [ghlRows, setGhlRows] = useState([]);
@@ -592,7 +561,7 @@ export default function PinCreatorView({ settings }) {
     ...settings,
     pinCreator: {
       ...(settings?.pinCreator || {}),
-      postInterval: Math.max(1, Number(csvIntervalHours || 1)) * 60
+      postInterval: Math.max(1, Number(csvIntervalHours || 1.5)) * 60
     }
   }), [settings, csvIntervalHours]);
   const styleOptions = useMemo(() => {
@@ -665,13 +634,13 @@ export default function PinCreatorView({ settings }) {
     pinsRef.current = pins;
   }, [pins]);
 
-  const firstPinCsvPublishDate = pins[0]?.csvPublishDate || "";
-
   useEffect(() => {
-    if (!csvOpen || !pins.length) return;
-    const firstSlot = firstPinCsvPublishDate || scheduleSlots(1, csvScheduleSettings)[0];
-    setCsvStartTime((current) => current || dateTimeLocalFromSlot(firstSlot));
-  }, [csvOpen, pins.length, firstPinCsvPublishDate, csvScheduleSettings]);
+    if (!csvOpen || csvStartIsManual) return;
+    const refreshStart = () => setCsvStartTime(dateTimeLocalFromSlot(formatSlot(validScheduleStart(null))));
+    refreshStart();
+    const timer = setInterval(refreshStart, 60000);
+    return () => clearInterval(timer);
+  }, [csvOpen, csvStartIsManual]);
 
   useEffect(() => {
     return () => {
@@ -815,7 +784,7 @@ export default function PinCreatorView({ settings }) {
       titledPin.interestProfile = buildInterestProfile(titledPin);
       titledPin.relatedTopics = titledPin.interestProfile.relatedTopics;
       const boardMatches = rankBoards(titledPin, boardNames);
-      const board = boardMatches[0]?.board || chooseBoard(titledPin, boardNames);
+      const board = chooseBoard(titledPin, boardNames);
       return { ...titledPin, csvBoard: board, csvBoardAuto: true, boardMatches, csvKeywords: seoKeywords(titledPin, board), status: pin.prompt ? "ready" : "loaded" };
     }, { concurrency: 2 });
   }
@@ -845,7 +814,7 @@ export default function PinCreatorView({ settings }) {
       status: result.imageQa?.dimensionsVerified === true ? "completed" : "error",
       error: result.imageQa?.dimensionsVerified === true
         ? ""
-        : "The final Pinterest image is not verified at 1000 x 1500. Regenerate this Pin."
+        : "The final Pinterest image is not verified at 1080 x 1920. Regenerate this Pin."
     };
   }
 
@@ -892,38 +861,40 @@ export default function PinCreatorView({ settings }) {
   }
 
   async function generateFullPack() {
-    const titlesComplete = await generateTitles();
-    if (!titlesComplete) return;
-    const missingTitleIds = pinsRef.current.filter((pin) => !pin.title || !pin.description).map((pin) => pin.id);
-    if (missingTitleIds.length) {
-      await new Promise((resolve) => setTimeout(resolve, 1200));
-      const titleRetryComplete = await generateTitles(missingTitleIds);
-      if (!titleRetryComplete) return;
-    }
-    const promptsComplete = await generatePrompts();
-    if (!promptsComplete) return;
-    const missingPromptIds = pinsRef.current.filter((pin) => {
-      const desiredMode = pin.imageSourceMode || imageSourceMode;
-      return !pin.prompt || pin.promptStyle !== selectedStyle || pin.promptImageSourceMode !== desiredMode;
-    }).map((pin) => pin.id);
-    if (missingPromptIds.length) {
-      await new Promise((resolve) => setTimeout(resolve, 1200));
-      const promptRetryComplete = await generatePrompts(missingPromptIds);
-      if (!promptRetryComplete) return;
-    }
-    const imagesComplete = await generateImages();
-    if (!imagesComplete) return;
-    const missingImageIds = pinsRef.current.filter((pin) => pin.prompt && !displayImage(pin)).map((pin) => pin.id);
-    if (missingImageIds.length) {
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-      await generateImages(missingImageIds);
-    }
-    const normalizedPins = pinsRef.current.map((pin) => isPinComplete(pin) ? { ...pin, status: "completed", error: "" } : pin);
-    await savePins(normalizedPins);
-    const incomplete = normalizedPins.filter((pin) => !isPinComplete(pin));
-    setStatus(incomplete.length
-      ? `Generated ${pinsRef.current.length - incomplete.length} of ${pinsRef.current.length} pins. ${incomplete.length} pin${incomplete.length === 1 ? " needs" : "s need"} retry.`
-      : `Generated all ${pinsRef.current.length} pins successfully.`);
+    await runStep("Creating Pins", (pin) => !isPinComplete(pin), async (pin) => {
+      const mode = pin.imageSourceMode || imageSourceMode;
+      if (!pin.title || !pin.description) {
+        const result = await electronAPI.generateTitleDescription(pin.url, pinInterestTerms(pin), selectedStyle, `native-title-${pin.id}`, pinAiContext(pin, mode, selectedStyle));
+        if (!result.success) throw new Error(result.error || "Title generation failed.");
+        pin = { ...pin, title: result.title, description: result.description, overlayText: result.overlayText || result.title };
+        pin.interestProfile = buildInterestProfile(pin);
+        pin.relatedTopics = pin.interestProfile.relatedTopics;
+        const board = chooseBoard(pin, boardNames);
+        pin = { ...pin, csvBoard: board, csvBoardAuto: true, boardMatches: rankBoards(pin, boardNames), csvKeywords: seoKeywords(pin, board) };
+        await savePins(mergePinResult(pinsRef.current, pin.id, pin));
+      }
+      await waitWhilePaused();
+      if (cancelRef.current) throw new Error("Cancelled by user");
+      if (!pin.prompt || pin.promptStyle !== selectedStyle || pin.promptImageSourceMode !== mode || pin.promptTextRenderMode !== effectiveTextRenderMode) {
+        const result = await electronAPI.generatePrompt(pin.url, pinInterestTerms(pin), `${selectedStyle}::placement:${textPlacement}`, `native-prompt-${pin.id}`, { ...pinAiContext(pin, mode, selectedStyle), imageSourceMode: mode });
+        if (!result.success) throw new Error(result.error || "Prompt generation failed.");
+        pin = { ...pin, prompt: result.prompt, promptStyle: selectedStyle, promptImageSourceMode: mode, promptTextRenderMode: effectiveTextRenderMode };
+        await savePins(mergePinResult(pinsRef.current, pin.id, pin));
+      }
+      await waitWhilePaused();
+      if (cancelRef.current) throw new Error("Cancelled by user");
+      if (!displayImage(pin) || pin.imageQa?.dimensionsVerified !== true) {
+        const result = await electronAPI.createPinterestPinAsset({
+          pinId: pin.id, mode, sourceSnapshot: pin.sourceSnapshot || {}, prompt: pin.prompt,
+          overlayText: pin.overlayText || pin.title || pin.sourceTitle, placement: textPlacement,
+          font: overlayFont, pinStyle: selectedStyle, textRenderMode: effectiveTextRenderMode,
+          model: imageModel, aspectRatio, blogUrl: pin.url, jobKey: `native-image-${pin.id}`
+        });
+        if (!result.success) throw new Error(result.error || "Image generation failed.");
+        pin = generatedAssetPatch(pin, result);
+      }
+      return { ...pin, status: isPinComplete(pin) ? "completed" : "error" };
+    }, { concurrency: 2 });
   }
 
   async function retryPins(pinIds) {
@@ -973,7 +944,8 @@ export default function PinCreatorView({ settings }) {
         model: imageModel,
         aspectRatio,
         blogUrl: pin.url,
-        jobKey: `native-regen-${pin.id}`
+        jobKey: `native-regen-${pin.id}`,
+        forceNewGeneration: true
       });
       if (!result.success) throw new Error(result.error || "Image generation failed.");
       await savePins(pinsRef.current.map((item) => item.id === pinId ? generatedAssetPatch({ ...item, prompt: imagePrompt }, result) : item));
@@ -1045,7 +1017,7 @@ export default function PinCreatorView({ settings }) {
           publicIdentityDistance: null
         };
         updated.mediaValidatedAt = "";
-        updated.hostingError = "Media URL changed. Reopen or export the CSV to verify it at 1000 x 1500.";
+        updated.hostingError = "Media URL changed. Reopen or export the CSV to verify it at 1080 x 1920.";
       }
       if (patch.title !== undefined || patch.description !== undefined || patch.csvBoard !== undefined) {
         updated.interestProfile = buildInterestProfile(updated);
@@ -1095,7 +1067,7 @@ export default function PinCreatorView({ settings }) {
     const rows = scheduledPins.map((pin, index) => {
       const board = pin.csvBoard || chooseBoard(pin, boardNames);
       const keywords = pin.csvKeywords ?? "";
-      const publishDate = pin.csvPublishImmediately === true ? "" : pin.csvPublishDate || "";
+      const publishDate = csvMediaHost === "replicate" || pin.csvPublishImmediately === true ? "" : pin.csvPublishDate || "";
       return [
         pin.title || pin.sourceTitle || "",
         publicImage(pin),
@@ -1108,7 +1080,16 @@ export default function PinCreatorView({ settings }) {
       ];
     });
     return { headers, rows, scheduledPins, immediateCount: rows.filter((row) => !row[6]).length };
-  }, [boardNames]);
+  }, [boardNames, csvMediaHost]);
+
+  function pinterestExportSchedule() {
+    const selectedStart = csvStartIsManual ? validScheduleStart(slotFromDateTimeLocal(csvStartTime), Date.now()) : null;
+    return {
+      enabled: csvMediaHost !== "replicate" && csvAutoSchedule,
+      startAt: selectedStart?.toISOString() || "",
+      intervalHours: Math.max(1, Number(csvIntervalHours || 1.5))
+    };
+  }
 
   async function repairPinterestCsvData(sourcePins = pinsRef.current) {
     const repairablePins = sourcePins.map((pin, index) => {
@@ -1124,7 +1105,7 @@ export default function PinCreatorView({ settings }) {
         || pin.sourceSnapshot?.excerpt
         || `${title} recipe with ingredients, instructions, and practical serving tips.`
       ).replace(/\*\*(.*?)\*\*/g, "$1").trim();
-      const board = pin.csvBoard || chooseBoard({ ...pin, title, description }, boardNames);
+      const board = pin.csvBoardAuto === false && pin.csvBoard ? pin.csvBoard : chooseBoard({ ...pin, title, description }, boardNames);
       const keywords = pin.csvKeywords ?? "";
       let url = String(pin.url || "").trim();
       try {
@@ -1142,14 +1123,15 @@ export default function PinCreatorView({ settings }) {
       };
     });
 
-    const hosting = await electronAPI.preparePinterestExport?.({ pins: repairablePins, boardNames, rows: [], mediaHost: csvMediaHost })
+    const hosting = await electronAPI.preparePinterestExport?.({ pins: utcScheduleInput(repairablePins), boardNames, rows: [], mediaHost: csvMediaHost, schedule: pinterestExportSchedule() })
       || { success: true, pins: repairablePins, errors: [], warnings: [] };
-    const hostedPins = mergePreparedPinHosting(repairablePins, hosting.pins || []);
+    const hostedPins = mergePreparedPinSchedule(mergePreparedPinHosting(repairablePins, hosting.pins || []), hosting.pins || []);
     const firstPass = buildCsvRows(hostedPins);
     const firstValidation = await electronAPI.validatePinterestExport?.({
       rows: firstPass.rows,
       boardNames,
-      pins: firstPass.scheduledPins
+      pins: firstPass.scheduledPins,
+      mediaHost: csvMediaHost
     }) || { valid: true, errors: [], warnings: [], rows: firstPass.rows };
     const normalizedRows = firstValidation.rows || firstPass.rows;
     const normalizedById = new Map(firstPass.scheduledPins.map((pin, index) => {
@@ -1177,7 +1159,8 @@ export default function PinCreatorView({ settings }) {
     const validation = await electronAPI.validatePinterestExport?.({
       rows: finalRows.rows,
       boardNames,
-      pins: finalRows.scheduledPins
+      pins: finalRows.scheduledPins,
+      mediaHost: csvMediaHost
     }) || { valid: true, errors: [], warnings: [], rows: finalRows.rows };
     const errors = [...(hosting.errors || []), ...(validation.errors || [])];
     for (const error of firstValidation.errors || []) {
@@ -1225,12 +1208,13 @@ export default function PinCreatorView({ settings }) {
     setStatus("Pinterest CSV editor opened. Public Media URLs are preparing in the background...");
     try {
       const hosting = await electronAPI.preparePinterestExport?.({
-        pins: pinsRef.current,
+        pins: utcScheduleInput(pinsRef.current),
         boardNames,
         mediaHost: csvMediaHost,
+        schedule: pinterestExportSchedule(),
         rows: []
       });
-      const preparedPins = mergePreparedPinHosting(pinsRef.current, hosting?.pins || []);
+      const preparedPins = mergePreparedPinSchedule(mergePreparedPinHosting(pinsRef.current, hosting?.pins || []), hosting?.pins || []);
       await savePins(preparedPins);
       const missingCount = preparedPins.filter((pin) => !publicImage(pin)).length;
       if (missingCount) {
@@ -1257,11 +1241,11 @@ export default function PinCreatorView({ settings }) {
       setStatus("No Pinterest CSV rows to schedule.");
       return;
     }
-    const startSlot = slotFromDateTimeLocal(csvStartTime);
+    const startSlot = csvStartIsManual ? slotFromDateTimeLocal(csvStartTime) : "";
     const now = Date.now();
     const start = validScheduleStart(startSlot, now);
     setCsvStartTime(dateTimeLocalFromSlot(formatSlot(start)));
-    const intervalHours = Math.max(1, Number(csvIntervalHours || 1));
+    const intervalHours = Math.max(1, Number(csvIntervalHours || 1.5));
     const smart = settings?.performanceSchedulingEnabled !== false
       ? await electronAPI.getPerformanceSchedule?.({
         count: pinsRef.current.length,
@@ -1284,7 +1268,8 @@ export default function PinCreatorView({ settings }) {
     const scheduled = orderedPins.map((pin, index) => ({
       ...pin,
       csvPublishDate: formatSlot(plan.dates[index]),
-      csvPublishImmediately: false
+      csvPublishImmediately: false,
+      csvScheduleOrigin: "manual"
     }));
     const scheduledById = new Map(scheduled.map((pin) => [pin.id, pin]));
     const next = pinsRef.current.map((pin) => scheduledById.get(pin.id) || pin);
@@ -1293,22 +1278,24 @@ export default function PinCreatorView({ settings }) {
     setStatus(`Used ${source}. ${scheduleSummary(next.length, plan)}`);
   }
 
-  async function applyPinterestTime() {
+  async function applyPinterestTime({ fromNow = false } = {}) {
     if (!pinsRef.current.length) {
       setStatus("No Pinterest CSV rows to schedule.");
       return;
     }
-    const startSlot = slotFromDateTimeLocal(csvStartTime);
+    const startSlot = !fromNow && csvStartIsManual ? slotFromDateTimeLocal(csvStartTime) : "";
     const now = Date.now();
     const start = validScheduleStart(startSlot, now);
     setCsvStartTime(dateTimeLocalFromSlot(formatSlot(start)));
-    const intervalHours = Math.max(1, Number(csvIntervalHours || 1));
+    if (fromNow) setCsvStartIsManual(false);
+    const intervalHours = Math.max(1, Number(csvIntervalHours || 1.5));
     const orderedPins = diversifyByInterest(pinsRef.current);
     const plan = fitPinterestSchedule({ count: orderedPins.length, start, intervalMinutes: intervalHours * 60, now });
     const scheduled = orderedPins.map((pin, index) => ({
       ...pin,
       csvPublishDate: formatSlot(plan.dates[index]),
-      csvPublishImmediately: false
+      csvPublishImmediately: false,
+      csvScheduleOrigin: startSlot ? "manual" : "automatic"
     }));
     const scheduledById = new Map(scheduled.map((pin) => [pin.id, pin]));
     const next = pinsRef.current.map((pin) => scheduledById.get(pin.id) || pin);
@@ -1323,26 +1310,22 @@ export default function PinCreatorView({ settings }) {
     setCsvHosting(true);
     setStatus("Auto-fixing fields and checking final Pinterest CSV requirements...");
     try {
-      let targetAccount = csvAccount.trim();
+      let targetAccount = "";
       let exportPins = testOnly ? diversifyByInterest(pinsRef.current).slice(0, 1) : pinsRef.current;
       if (retryBatchId) {
         const retry = await electronAPI.getPinterestRetry({ batchId: retryBatchId });
         targetAccount = retry.account;
         exportPins = retry.pinIds.map((id) => pinsRef.current.find((pin) => String(pin.id) === id));
         if (exportPins.some((pin) => !pin)) throw new Error("A failed Pin is no longer in the editor. Restore its saved Pin before retrying.");
-        setCsvAccount(targetAccount);
       }
       const repaired = await repairPinterestCsvData(exportPins);
-      const { rows, scheduledPins, preparedPins, validation, report } = repaired;
+      const { rows, scheduledPins: allScheduledPins, preparedPins, validation, report } = repaired;
       setCsvValidationReport(report || null);
-      const qaErrors = scheduledPins.flatMap((pin, index) => [
-        pin.generationConfig?.textRenderMode !== "ai" && pin.imageQa?.overlayVerified !== true ? `Row ${index + 1}: exact overlay was not verified` : "",
-        pin.imageQa?.dimensionsVerified !== true ? `Row ${index + 1}: final image is not verified at 1000 x 1500` : "",
-        pin.imageQa?.publicDimensionsVerified !== true ? `Row ${index + 1}: hosted image dimensions are not verified at 1000 x 1500` : "",
-        pin.imageQa?.publicIdentityVerified !== true ? `Row ${index + 1}: hosted image does not have a verified match to the finished Pin` : "",
-        pin.generationConfig?.textRenderMode !== "ai" && pin.imageQa?.safeZoneVerified !== true ? `Row ${index + 1}: text safe area was not verified` : "",
-        pin.imageQa?.publicUrlVerified !== true ? `Row ${index + 1}: durable public image was not verified` : ""
-      ].filter(Boolean));
+      const selection = selectPinterestExportRows({
+        rows: validation?.rows || rows, pins: allScheduledPins,
+        errors: report?.errors || [], failedPinIds: repaired.hosting?.failedPinIds || []
+      });
+      const scheduledPins = selection.pins;
       const seenImageHashes = new Map();
       const duplicateImageWarnings = scheduledPins.flatMap((pin, index) => {
         const hash = String(pin.imageQa?.perceptualHash || "");
@@ -1359,11 +1342,9 @@ export default function PinCreatorView({ settings }) {
       const aiTextWarnings = pendingAiTextReview.length
         ? [`Review ${pendingAiTextReview.length} AI-lettered image${pendingAiTextReview.length === 1 ? "" : "s"} for spelling, wording, and placement. This reminder will not return unless an image changes.`]
         : [];
-      const errors = [...new Set([...(report?.errors || []).map(preflightMessage), ...qaErrors])];
       const warnings = [...new Set([...(report?.warnings || []).map(preflightMessage), ...duplicateImageWarnings, ...aiTextWarnings])];
-      if (errors.length) {
-        window.alert(`Pinterest export is blocked until these items are fixed:\n\n${errors.slice(0, 16).join("\n")}${errors.length > 16 ? "\n..." : ""}`);
-        setStatus(`Pinterest preflight found ${errors.length} issue${errors.length === 1 ? "" : "s"}.`);
+      if (!scheduledPins.length) {
+        setStatus(`No valid Pins remain. ${selection.rejected.length} Pin(s) were excluded; saved Pins were kept for repair.`);
         return;
       }
       if (warnings.length) {
@@ -1377,35 +1358,53 @@ export default function PinCreatorView({ settings }) {
           return;
         }
       }
-      const exported = await electronAPI.exportPinterestCsv?.({ rows: validation?.rows || rows, boardNames, pinIds: scheduledPins.map((pin) => pin.id), account: targetAccount, retryBatchId });
+      const exportRequest = { rows: validation?.rows || rows, boardNames, pinIds: allScheduledPins.map((pin) => pin.id), skipRows: selection.rejected, account: targetAccount, retryBatchId, mediaHost: csvMediaHost };
+      let exported = await electronAPI.exportPinterestCsv?.(exportRequest);
+      if (exported?.duplicateDownloadAvailable) {
+        const accepted = await confirmAction({
+          title: "Download Existing Export Again?",
+          message: "These Pins already belong to an unresolved or confirmed Pinterest export. You can save another identical CSV copy without creating a second delivery attempt. Do not upload both copies to Pinterest.",
+          confirmLabel: "Download Copy"
+        });
+        if (!accepted) {
+          setStatus("Pinterest CSV copy download canceled. The existing delivery history was not changed.");
+          return;
+        }
+        exported = await electronAPI.exportPinterestCsv?.({ ...exportRequest, redownloadExisting: true });
+      }
       setCsvValidationReport(exported?.validation || validation || null);
       if (exported?.canceled) {
         setStatus("Pinterest export canceled.");
         return;
       }
       if (!exported?.success) {
-        const exportErrors = (exported?.validation?.errors || []).map(preflightMessage);
+        const exportErrors = (exported?.validation?.errors || [{ message: exported?.error || 'Export failed.' }]).map(preflightMessage);
         window.alert(`Pinterest export is blocked until these items are fixed:\n\n${exportErrors.slice(0, 16).join("\n")}`);
-        setStatus(`Pinterest CSV writer blocked ${exportErrors.length} invalid row issue${exportErrors.length === 1 ? "" : "s"}.`);
+        setStatus(exported?.error || `Pinterest export could not finish: ${exportErrors.join("; ")}`);
         return;
       }
-      const reviewedIds = new Set(pendingAiTextReview.map((pin) => pin.id));
-      const exportedAt = new Date().toISOString();
-      const exportedPins = preparedPins.map((pin) => ({
-        ...pin,
-        exportedAt,
-        imageQa: reviewedIds.has(pin.id)
-          ? {
-            ...(pin.imageQa || {}),
-            aiLetteringReviewed: true,
-            aiLetteringReviewedAt: exportedAt,
-            aiLetteringReviewedFor: aiLetteringReviewKey(pin)
-          }
-          : pin.imageQa
-      }));
-      await savePins(pinsRef.current.map((pin) => exportedPins.find((exportedPin) => exportedPin.id === pin.id) || pin));
+      if (!exported.redownloaded) {
+        const reviewedIds = new Set(pendingAiTextReview.map((pin) => pin.id));
+        const exportedAt = new Date().toISOString();
+        const exportedIds = new Set(exported.pinIds || scheduledPins.map((pin) => pin.id));
+        const exportedPins = preparedPins.filter((pin) => exportedIds.has(pin.id)).map((pin) => ({
+          ...pin,
+          exportedAt,
+          imageQa: reviewedIds.has(pin.id)
+            ? {
+              ...(pin.imageQa || {}),
+              aiLetteringReviewed: true,
+              aiLetteringReviewedAt: exportedAt,
+              aiLetteringReviewedFor: aiLetteringReviewKey(pin)
+            }
+            : pin.imageQa
+        }));
+        await savePins(pinsRef.current.map((pin) => exportedPins.find((exportedPin) => exportedPin.id === pin.id) || pin));
+      }
       const audit = exported.validation?.scheduleAudit;
-      setStatus(`Exported ${rows.length} Pinterest row(s): ${audit?.scheduledRows ?? rows.filter((row) => row[6]).length} scheduled, ${audit?.immediateRows ?? rows.filter((row) => !row[6]).length} with no schedule. CSV and validation report saved. Pinterest import is not yet confirmed.`);
+      setStatus(exported.redownloaded
+        ? `Downloaded another copy of ${exported.rowCount ?? rows.length} Pinterest row(s). No new delivery attempt was created.`
+        : `Exported ${exported.rowCount ?? rows.length} Pinterest row(s): ${audit?.scheduledRows ?? 0} scheduled, ${audit?.immediateRows ?? 0} immediate. ${exported.rejectedCount || 0} rejected; review the separate REJECTED file when present. Pinterest import is not yet confirmed.`);
     } catch (error) {
       setStatus(error.message || "Pinterest export preflight failed.");
     } finally {
@@ -1565,16 +1564,15 @@ export default function PinCreatorView({ settings }) {
   const titled = pins.filter((pin) => pin.title && pin.description).length;
   const progressPercent = progress.total ? Math.round((progress.current / progress.total) * 100) : 0;
   const { headers, rows, scheduledPins } = useMemo(() => buildCsvRows(pins), [pins, buildCsvRows]);
+  const csvScheduledTimes = rows.map((row) => row[6]).filter(Boolean).sort();
   const visiblePins = useMemo(() => pins.slice(0, visiblePinCount), [pins, visiblePinCount]);
 
   return (
-    <section className="min-w-0 max-w-full overflow-x-hidden animate-fade-in">
-      <SectionHeader eyebrow="Pinterest" title="Pin Creator">
-        Create Pinterest pins, match each pin to your saved boards, export Pinterest CSV, and build GHL social posts from the same tab.
-      </SectionHeader>
+    <section className="pin-workspace min-w-0 max-w-full overflow-x-hidden animate-fade-in">
+      <SectionHeader eyebrow="Pinterest" title="Pin Creator" />
 
       <div className="mb-5 grid min-w-0 gap-4">
-        <div className="soft-card min-w-0 rounded-lg p-4">
+        <div className="workspace-band min-w-0">
           <Field label="URLs">
             <textarea className={`${inputClass} min-h-40 resize-y leading-6`} value={urlText} onChange={(event) => setUrlText(event.target.value)} placeholder="https://yourblog.com/easy-weeknight-dinner/" />
           </Field>
@@ -1589,13 +1587,13 @@ export default function PinCreatorView({ settings }) {
           </div>
         </div>
 
-        <div className="soft-card min-w-0 rounded-lg p-4">
-          <div className="grid grid-cols-3 gap-2 text-center">
-            <div className="rounded-md bg-white p-3 ring-1 ring-slate-200"><div className="text-xl font-black">{pins.length}</div><div className="text-xs font-bold text-slate-500">Loaded</div></div>
-            <div className="rounded-md bg-white p-3 ring-1 ring-slate-200"><div className="text-xl font-black">{titled}</div><div className="text-xs font-bold text-slate-500">Titles</div></div>
-            <div className="rounded-md bg-white p-3 ring-1 ring-slate-200"><div className="text-xl font-black">{completed}</div><div className="text-xs font-bold text-slate-500">Images</div></div>
+        <div className="pin-configuration workspace-band min-w-0">
+          <div className="pin-counts flex items-center gap-6 border-b border-slate-200 pb-4">
+            <div><span className="mr-2 text-lg font-semibold tabular-nums">{pins.length}</span><span className="text-xs text-slate-500">Loaded</span></div>
+            <div><span className="mr-2 text-lg font-semibold tabular-nums">{titled}</span><span className="text-xs text-slate-500">Titles</span></div>
+            <div><span className="mr-2 text-lg font-semibold tabular-nums">{completed}</span><span className="text-xs text-slate-500">Images</span></div>
           </div>
-          <div className="mt-4 grid gap-3">
+          <div className="pin-appearance mt-4 grid gap-4 lg:grid-cols-2">
             <Field label="Pin style">
               <select className={inputClass} value={selectedStyle} onChange={(event) => {
                 const nextStyle = event.target.value;
@@ -1683,24 +1681,32 @@ export default function PinCreatorView({ settings }) {
             </Field>
             <Field label="Generated photo ratio">
               <select className={inputClass} value={aspectRatio} onChange={(event) => setAspectRatio(event.target.value)}>
-                <option value="2:3">2:3 Recommended</option>
+                <option value="2:3">2:3 Source Photo</option>
                 <option value="9:16">9:16 Portrait Source</option>
                 <option value="1:1">1:1 Square Source</option>
               </select>
-              <p className="mt-1 text-xs font-semibold text-slate-500">Final Pinterest image is always optimized to 1000 x 1500.</p>
+              <p className="mt-1 text-xs font-semibold text-slate-500">Final Pinterest image is always optimized to 1080 x 1920.</p>
             </Field>
           </div>
-          <div className="mt-4 grid gap-2">
+          <div className="pin-delivery-controls mt-4 grid gap-2">
+            <label className="flex items-center gap-2 text-sm font-bold text-slate-700">
+              <input type="checkbox" checked={csvMediaHost !== "replicate" && csvAutoSchedule} onChange={(event) => setCsvAutoSchedule(event.target.checked)} disabled={working || csvHosting || csvMediaHost === "replicate"} />
+              Fill undated Pins using the start time and interval below
+            </label>
             <label className="block text-sm font-bold text-slate-700">
               CSV image hosting
-              <select className={`${inputClass} mt-1 w-full`} value={csvMediaHost} onChange={(event) => setCsvMediaHost(event.target.value)} disabled={working || csvHosting}>
-                <option value="auto">Automatic (prefer matching WordPress site)</option>
+              <select className={`${inputClass} mt-1 w-full`} value={csvMediaHost} onChange={(event) => { const host = event.target.value; setCsvMediaHost(host); if (host === "replicate") setCsvAutoSchedule(false); }} disabled={working || csvHosting}>
+                <option value="auto">Automatic: matching WordPress first (recommended)</option>
                 <option value="wordpress">WordPress Media Library only</option>
+                <option value="resilient">ImgBB preferred, WordPress fallback</option>
+                <option value="imgbb">ImgBB only</option>
+                <option value="replicate">Replicate original (temporary)</option>
               </select>
             </label>
-            <label className="block text-sm font-bold text-slate-700">Pinterest account label (optional)
-              <input className={`${inputClass} mt-1 w-full`} placeholder="Profile name" maxLength={160} value={csvAccount} onChange={(event) => setCsvAccount(event.target.value)} disabled={working || csvHosting} />
-            </label>
+            {csvMediaHost === "replicate" && <p role="alert" className="text-sm font-semibold text-amber-700">Immediate publishing is enforced for Replicate originals because the links normally expire after one hour. Native 2:3 outputs such as 832 x 1248 are accepted. Use WordPress or ImgBB for scheduling.</p>}
+            {csvMediaHost === "auto" && <p className="text-sm font-semibold text-slate-500">Finished Pins are hosted in the WordPress Media Library matching each destination article. ImgBB is used only when no matching WordPress connection exists.</p>}
+            {csvMediaHost === "resilient" && <p className="text-sm font-semibold text-slate-500">Uses verified ImgBB URLs first. If ImgBB is rate-limited or unavailable, optimized Pins are uploaded serially to the matching WordPress site so the CSV can still complete.</p>}
+            {csvMediaHost === "imgbb" && <p className="text-sm font-semibold text-slate-500">Uses ImgBB only and stops immediately during a provider cooldown. No WordPress fallback is used.</p>}
             <Button variant="secondary" onClick={togglePinterestCsvEditor} disabled={!pins.length}><Link2 className="h-4 w-4" />{csvOpen ? "Hide" : "Edit"} Pinterest CSV</Button>
             <Button variant="secondary" onClick={autoFixPinterestCsv} disabled={!pins.length || working || csvHosting}><RefreshCw className="h-4 w-4" />Check and Auto Fix CSV</Button>
             <Button variant="secondary" onClick={exportPinterestCsv} disabled={!pins.length || csvHosting}><Download className="h-4 w-4" />{csvHosting ? "Preparing Media..." : "Export Pinterest CSV"}</Button>
@@ -1739,6 +1745,7 @@ export default function PinCreatorView({ settings }) {
             <div>
               <h2 className="text-lg font-black text-slate-900">Pinterest CSV Editor</h2>
               <p className="mt-1 text-sm font-semibold text-slate-500">{pins.length} Pins, {rows.filter((row) => row[6]).length} scheduled, {rows.filter((row) => !row[6]).length} publish immediately.</p>
+              {csvScheduledTimes.length > 0 && <p aria-label="CSV schedule range" className="mt-1 text-xs font-semibold text-slate-500">First: {csvScheduledTimes[0].replace("T", " ")} UTC<br />Last: {csvScheduledTimes.at(-1).replace("T", " ")} UTC</p>}
             </div>
             <div className="flex flex-wrap items-end gap-2">
               <label className="block text-xs font-black uppercase text-slate-500">
@@ -1746,18 +1753,20 @@ export default function PinCreatorView({ settings }) {
                 <input
                   className={`${inputClass} mt-1 h-10 w-56`}
                   type="datetime-local"
+                  aria-label="CSV start time"
                   min={dateTimeLocalFromSlot(formatSlot(new Date(Date.now() + PINTEREST_SCHEDULE_LEAD_MS)))}
                   max={dateTimeLocalFromSlot(formatSlot(new Date(Date.now() + PINTEREST_SCHEDULE_WINDOW_MS)))}
                   value={csvStartTime}
-                  onChange={(event) => setCsvStartTime(event.target.value)}
+                  onChange={(event) => { setCsvStartTime(event.target.value); setCsvStartIsManual(!!event.target.value); }}
                 />
                 <span className="mt-1 block normal-case text-slate-400">Local preview, saved as UTC</span>
               </label>
               <label className="block text-xs font-black uppercase text-slate-500">
                 Interval Hours
-                <input className={`${inputClass} mt-1 h-10 w-36`} type="number" min="1" step="1" value={csvIntervalHours} onChange={(event) => setCsvIntervalHours(event.target.value)} />
+                <input aria-label="CSV interval hours" className={`${inputClass} mt-1 h-10 w-36`} type="number" min="1" step="0.5" value={csvIntervalHours} onChange={(event) => setCsvIntervalHours(event.target.value)} />
               </label>
               <Button variant="secondary" className="h-10" onClick={applyPinterestTime} disabled={!pins.length}>Apply Time</Button>
+              <Button variant="secondary" className="h-10" onClick={() => applyPinterestTime({ fromNow: true })} disabled={!pins.length || working || csvHosting}><Clock3 className="h-4 w-4" />Start From Now</Button>
               <Button variant="secondary" className="h-10" onClick={applyPinterestSchedule} disabled={!pins.length}>Smart Schedule</Button>
               <Button variant="secondary" className="h-10" onClick={autoFixPinterestCsv} disabled={working || csvHosting}><RefreshCw className="h-4 w-4" />Check and Auto Fix</Button>
               <Button className="h-10" onClick={exportPinterestCsv} disabled={working || csvHosting}><Download className="h-4 w-4" />Export CSV</Button>
@@ -1953,7 +1962,7 @@ export default function PinCreatorView({ settings }) {
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
                   <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-black capitalize text-slate-600" title={interestProfile.lifecycle.basis}>{interestProfile.lifecycle.stage}</span>
-                  <span className={`rounded-full px-2.5 py-1 text-xs font-black ${quality.score >= 80 ? "bg-emerald-100 text-emerald-700" : quality.score >= 60 ? "bg-violet-100 text-violet-700" : "bg-slate-100 text-slate-600"}`} title={quality.issues.length ? `Needs: ${quality.issues.join(", ")}` : "Ready to publish"}>Quality {quality.score}</span>
+                  <span className={`rounded-full px-2.5 py-1 text-xs font-black ${quality.score >= 80 ? "bg-emerald-100 text-emerald-700" : quality.score >= 60 ? "bg-violet-100 text-violet-700" : "bg-slate-100 text-slate-600"}`} title={quality.issues.length ? `Needs: ${quality.issues.join(", ")}` : "Metadata and export checks passed; not a visual quality rating"}>Readiness {quality.score}</span>
                   <Button variant="danger" className="h-9 px-3" onClick={() => savePins(pins.filter((item) => item.id !== pin.id))}><Trash2 className="h-4 w-4" /></Button>
                 </div>
               </div>
@@ -1970,7 +1979,7 @@ export default function PinCreatorView({ settings }) {
               ) : null}
               <div className="grid min-w-0 max-w-full gap-5 md:grid-cols-[minmax(220px,280px)_minmax(0,1fr)] 2xl:grid-cols-[minmax(260px,340px)_minmax(0,1fr)]">
                 <div className="min-w-0 overflow-hidden rounded-md bg-slate-100 ring-1 ring-slate-200">
-                  {displayImage(pin) ? <img src={displayImage(pin)} alt={pin.title || "Generated pin"} className="aspect-[2/3] w-full object-cover" /> : <div className="grid aspect-[2/3] place-items-center text-slate-400"><ImageIcon className="h-10 w-10" /></div>}
+                  {displayImage(pin) ? <img src={displayImage(pin)} alt={pin.title || "Generated pin"} className="h-auto w-full object-contain" /> : <div className="grid aspect-[9/16] place-items-center text-slate-400"><ImageIcon className="h-10 w-10" /></div>}
                 </div>
                 <div className="min-w-0 max-w-full space-y-3 overflow-hidden">
                   <Field label="Title"><input className={inputClass} value={pin.title || ""} onChange={(event) => updatePin(pin.id, { title: event.target.value })} /></Field>
@@ -2011,6 +2020,7 @@ export default function PinCreatorView({ settings }) {
                   <div className={`rounded-md px-3 py-2 text-xs font-bold leading-5 ${alignment.score >= 75 ? "bg-emerald-50 text-emerald-700" : "bg-violet-50 text-violet-700"}`}>Cluster alignment {alignment.score}/100{alignment.issues.length ? `: ${alignment.issues.join(", ")}` : ": ready"}</div>
                   {quality.issues.length ? <div className="rounded-md bg-violet-50 px-3 py-2 text-xs font-bold leading-5 text-violet-700">Preflight needs: {quality.issues.join(", ")}</div> : null}
                   <div className="flex flex-wrap gap-2">
+                    {setActiveScreen ? <Button variant="secondary" onClick={() => setActiveScreen('quality-studio')}>Review Text &amp; Image</Button> : null}
                     <Button variant="secondary" onClick={() => copy([pin.title, pin.description].filter(Boolean).join("\n\n"))}><Clipboard className="h-4 w-4" />Copy</Button>
                     <Button variant="secondary" onClick={() => regeneratePrompt(pin.id)} disabled={working || !pin.url}><Sparkles className="h-4 w-4" />Regenerate Prompt</Button>
                     <Button variant="secondary" onClick={() => regenerateImage(pin.id)} disabled={working || !pin.prompt}><RefreshCw className="h-4 w-4" />Regenerate Image</Button>

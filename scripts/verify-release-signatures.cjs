@@ -7,6 +7,12 @@ function assertSignatures(results) {
 }
 
 async function verifyReleaseSignatures(buildResult) {
+  const macArtifacts = (buildResult.artifactPaths || []).filter(file => /\.dmg$/i.test(file));
+  if (macArtifacts.length && process.env.CONTENT_STUDIO_ALLOW_UNSIGNED !== '1') {
+    if (process.platform !== 'darwin') throw new Error('Signed Mac releases must be verified on macOS.');
+    for (const file of macArtifacts) execFileSync('spctl', ['--assess', '--type', 'open', '--context', 'context:primary-signature', '--verbose=2', file], { stdio: 'pipe' });
+  }
+  if (macArtifacts.length && process.env.CONTENT_STUDIO_ALLOW_UNSIGNED === '1' && !macArtifacts.every(file => /unsigned[ -]test/i.test(file))) throw new Error('Unsigned Mac test artifacts must include UNSIGNED TEST in their filename.');
   const artifacts = (buildResult.artifactPaths || []).filter((file) => /\.(exe|msi|msix|appx)$/i.test(file));
   if (!artifacts.length) return [];
   if (process.env.CONTENT_STUDIO_ALLOW_UNSIGNED === '1') {

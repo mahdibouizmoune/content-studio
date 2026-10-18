@@ -11,7 +11,7 @@ export const DEFAULT_PIN_CUSTOM_STYLES = {
   "custom-july-original-ai": {
     name: "Ingredient Closeup Pin",
     prompt: [
-      "Create one complete vertical 2:3 recipe Pin with an ultra-realistic, full-bleed close-up of the exact freshly finished dish or drink. Make one generous hero serving and its most delicious source-supported texture instantly recognizable at phone size.",
+      "Create one complete vertical 9:16 recipe Pin with an ultra-realistic, full-bleed close-up of the exact freshly finished dish or drink. Make one generous hero serving and its most delicious source-supported texture instantly recognizable at phone size.",
       "Use a real full-frame food-photography look, natural close perspective, large diffused side-window light, soft bounce fill, truthful white balance, controlled highlights, and open natural shadows. Preserve believable crumbs, fibers, browning, moisture, sauce viscosity, condensation, or fresh crunch supported by the recipe, with subtle handmade irregularity.",
       "Render the supplied short recipe headline exactly once in the center, in large bold uppercase white sans-serif lettering inside a compact translucent rounded panel colored from the food.",
       "Keep the food visible around and through the panel. Add no other words, number, subtitle, CTA, footer, collage, URL, logo, icon, badge, label, packaging, or watermark. Avoid fake steam, excessive glaze, oily pools, plastic perfection, neon saturation, invented garnish, duplicated food, CGI, and illustration."
@@ -20,7 +20,7 @@ export const DEFAULT_PIN_CUSTOM_STYLES = {
   "custom-modern-recipe-magazine": {
     name: "Modern Recipe Magazine",
     prompt: [
-      "Create a premium vertical 2:3 editorial food photograph of the exact finished recipe, like a modern cooking magazine cover photographed with a real camera.",
+      "Create a premium vertical 9:16 editorial food photograph of the exact finished recipe, like a modern cooking magazine cover photographed with a real camera.",
       "Show one generous hero serving from the most flattering close overhead, 30-45 degree, or eye-level angle. Let it fill 72-86% of the frame and leave a calm upper quarter for the app's editorial masthead.",
       "Use a real full-frame camera look, large diffused side-window light, soft bounce fill, accurate white balance, controlled highlights, and open natural shadows. Keep the hero bite and surrounding food sharp, with recipe-supported browned edges, natural sauce viscosity, moist crumb, creamy layers, fresh crunch, or condensation.",
       "Use only one or two source-relevant props. Generate no text, labels, panels, logos, or watermarks. Avoid fake steam, excessive gloss, invented garnish, duplicate food, distorted utensils, plastic texture, harsh HDR, muddy shadows, heavy orange casts, neon saturation, CGI, and illustration."
@@ -29,7 +29,7 @@ export const DEFAULT_PIN_CUSTOM_STYLES = {
   "custom-minimal-editorial": {
     name: "Minimal Editorial",
     prompt: [
-      "Create a refined vertical 2:3 food-editorial photograph of the exact finished recipe with one unmistakable hero subject and clean visual restraint.",
+      "Create a refined vertical 9:16 food-editorial photograph of the exact finished recipe with one unmistakable hero subject and clean visual restraint.",
       "Crop close enough for appetite and mobile recognition, but preserve purposeful breathing room in the upper quarter for direct local typography. Use a simple neutral surface and no more than one source-relevant prop.",
       "Use large soft directional daylight, realistic contrast, truthful ingredient color, open natural shadows, crisp focal texture, and gentle background falloff without blurring the important food. Preserve a freshly prepared look and small handmade irregularities.",
       "Generate no text, panels, ribbons, labels, buttons, logos, or watermarks. Avoid fake steam, excess glaze, invented ingredients, excessive garnish, duplicate food, synthetic symmetry, plastic shine, harsh HDR, dark restaurant lighting, neon saturation, CGI, and illustration."

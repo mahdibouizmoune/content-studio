@@ -19,3 +19,5 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 debug.log
+electron/assets/release-provenance.json
+worker/node_modules/

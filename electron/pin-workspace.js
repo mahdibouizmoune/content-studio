@@ -99,7 +99,7 @@ function createPinWorkspace({
   function writeDraft(params) {
     const data = get(),
       old = params.id ? draft(data, params.id) : null;
-    if (old && ["published", "publishing", "reconciling"].includes(old.state))
+    if (old && ["published", "publishing", "reconciling", "remote_pending"].includes(old.state))
       throw new Error("Published or unresolved Pins cannot be edited.");
     const pin = {
       id: old?.id || randomUUID(),
@@ -161,7 +161,7 @@ function createPinWorkspace({
     const data = get();
     for (const id of ids) {
       const pin = draft(data, id);
-      if (["published", "publishing", "reconciling"].includes(pin.state))
+      if (["published", "publishing", "reconciling", "remote_pending"].includes(pin.state))
         throw new Error(
           "This Pin is published or has an unresolved publication.",
         );
@@ -216,7 +216,7 @@ function createPinWorkspace({
     );
     const prepared = ids.map((id) => {
       const d = draft(before, id);
-      if (["published", "publishing", "reconciling"].includes(d.state))
+      if (["published", "publishing", "reconciling", "remote_pending"].includes(d.state))
         throw new Error("Selection contains a published or unresolved Pin.");
       const destination = new URL(allowed.destination || d.destination);
       for (const k of clearTracking) destination.searchParams.delete(String(k));
@@ -253,7 +253,7 @@ function createPinWorkspace({
     if (!entry) throw new Error("Undo is unavailable.");
     if (
       entry.drafts.some((p) =>
-        ["published", "publishing", "reconciling"].includes(
+        ["published", "publishing", "reconciling", "remote_pending"].includes(
           draft(data, p.id).state,
         ),
       )
@@ -310,6 +310,7 @@ function createPinWorkspace({
       );
     }
     for (const pin of selected) {
+      if (!["approved", "scheduled"].includes(pin.state)) throw new Error('This Pin is published, awaiting approval or owned by another publisher.');
       validate(data, pin);
       if (
         pin.accountId !== accountId ||
@@ -680,7 +681,7 @@ function createPinWorkspace({
     const data = get();
     for (const id of ids) {
       const p = draft(data, id);
-      if (["published", "publishing", "reconciling"].includes(p.state))
+      if (["published", "publishing", "reconciling", "remote_pending"].includes(p.state))
         throw new Error("Cannot reset a published or unresolved Pin.");
       p.lockedTime = false;
       if (!unlockOnly) {

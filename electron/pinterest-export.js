@@ -3,6 +3,7 @@
 const { parse } = require('csv-parse/sync');
 const { stringify } = require('csv-stringify/sync');
 const { TextDecoder } = require('node:util');
+const { toAscii } = require('./ascii.js');
 const { isSafeRemoteMediaUrl } = require('./media-security');
 
 const PINTEREST_CSV_HEADERS = Object.freeze(['Title', 'Media URL', 'Pinterest board', 'Thumbnail', 'Description', 'Link', 'Publish date', 'Keywords']);
@@ -59,8 +60,15 @@ function isTemporaryPinterestMediaUrl(value = '') {
 }
 
 function normalizePinterestKeywords(value) {
+  const seen = new Set();
   return (Array.isArray(value) ? value : sanitizePinterestCsvValue(value).split(','))
-    .map(sanitizePinterestCsvValue).filter(Boolean).join(', ');
+    .map((item) => toAscii(sanitizePinterestCsvValue(item)))
+    .filter((item) => {
+      const key = item.toLowerCase();
+      if (!key || seen.has(key) || /\b(?:than|with|for|and|the|at|of|to|in|on|by)$/i.test(item)) return false;
+      seen.add(key);
+      return true;
+    }).slice(0, 10).join(', ');
 }
 
 function normalizePinterestPublishDate(value, { selected = true, now = Date.now() } = {}) {
@@ -91,9 +99,9 @@ function normalizePinterestRow(row = [], options = {}) {
   const cells = Array.isArray(row) ? row : PINTEREST_CSV_HEADERS.map((header) => row?.[header]);
   const mediaUrl = normalizePublicUrl(cells[1]);
   return [
-    truncateAtWordBoundary(cells[0], 100), mediaUrl, sanitizePinterestCsvValue(cells[2]),
+    truncateAtWordBoundary(toAscii(sanitizePinterestCsvValue(cells[0])), 100), mediaUrl, toAscii(sanitizePinterestCsvValue(cells[2])),
     mediaExtension(mediaUrl) === '.mp4' ? normalizePublicUrl(cells[3]) : '',
-    truncateAtWordBoundary(cells[4], 500), normalizePublicUrl(cells[5]),
+    truncateAtWordBoundary(toAscii(sanitizePinterestCsvValue(cells[4])), 500), normalizePublicUrl(cells[5]),
     options.deferDate ? cells[6] : normalizePinterestPublishDate(cells[6], options),
     normalizePinterestKeywords(cells[7])
   ];
@@ -104,7 +112,7 @@ function validatePinterestRows(rows = [], boardNames = [], options = {}) {
   const warnings = [];
   const now = Number(options.now ?? Date.now());
   const inputRows = Array.isArray(rows) ? rows : [];
-  const boards = new Set(boardNames.map(sanitizePinterestCsvValue));
+  const boards = new Set(boardNames.map((name) => toAscii(sanitizePinterestCsvValue(name))));
   const seenMedia = new Map();
   const issue = (index, row, field, rule, message, level = 'error') => ({
     row: index + 1, rowIndex: index + 1, title: row[0], field, rule, message, level
@@ -115,11 +123,17 @@ function validatePinterestRows(rows = [], boardNames = [], options = {}) {
     if (!Array.isArray(input) || input.length !== 8) add('row', 'column_count', 'Expected exactly 8 columns.');
     if (!row[0]) add('Title', 'required', 'Title is required.');
     if (!row[2]) add('Pinterest board', 'required', 'Pinterest board is required.');
-    else if (boards.size && !boards.has(row[2])) warnings.push(issue(index, row, 'Pinterest board', 'exact_board_match', 'Selected board is not in the saved board list.', 'warning'));
+    else if (boards.size && !boards.has(row[2])) add('Pinterest board', 'exact_board_match', 'Select an exact board from the saved account board list.');
     if (!isPublicUrl(row[1])) add('Media URL', 'public_https', 'Media URL must be a public HTTP or HTTPS URL without spaces or credentials.');
     const extension = mediaExtension(row[1]);
     if (!SUPPORTED_MEDIA_EXTENSIONS.has(extension)) add('Media URL', 'supported_extension', 'Use a direct .png, .jpg, .jpeg, or .mp4 media file, not a gallery or page URL.');
-    if (isTemporaryPinterestMediaUrl(row[1])) add('Media URL', 'durable_url', 'Temporary Replicate URLs cannot be exported.');
+    if (isTemporaryPinterestMediaUrl(row[1])) {
+      if (!options.allowTemporary) add('Media URL', 'durable_url', 'Select Replicate original explicitly to use temporary links.');
+      else {
+        warnings.push(issue(index, row, 'Media URL', 'temporary_url', 'Replicate output normally expires after one hour. Import immediately; acceptance is not guaranteed.', 'warning'));
+        if (row[6]) add('Publish date', 'temporary_schedule', 'Replicate links cannot be used for scheduled CSV rows. Choose WordPress or ImgBB, or explicitly select Publish immediately.');
+      }
+    }
     if (extension === '.mp4' && !(/^(?:\d+(?:\.\d+)?|\d+:[0-5]\d)$/.test(row[3]) || isPublicUrl(row[3]))) {
       add('Thumbnail', 'video_thumbnail', 'Video requires a public thumbnail URL, seconds, or mm:ss.');
     }
@@ -132,6 +146,8 @@ function validatePinterestRows(rows = [], boardNames = [], options = {}) {
     if (row[1] && seenMedia.has(row[1])) add('Media URL', 'duplicate_media', `Media URL duplicates row ${seenMedia.get(row[1])}.`);
     else if (row[1]) seenMedia.set(row[1], index + 1);
     row.forEach((cell, columnIndex) => {
+      const nonAscii = String(cell).match(/[^\x00-\x7f]/u)?.[0];
+      if (nonAscii) add(PINTEREST_CSV_HEADERS[columnIndex], 'non_ascii', `Non-ASCII character ${JSON.stringify(nonAscii)} U+${nonAscii.codePointAt(0).toString(16).toUpperCase()} must be encoded upstream.`);
       if (CONTROL.test(cell)) add(PINTEREST_CSV_HEADERS[columnIndex], 'control_character', 'Unexpected control character survived normalization.');
     });
     return row;
@@ -158,6 +174,10 @@ function assertPinterestCsvBytes(bytes, expectedRows, options = {}) {
   const records = parse(text, { bom: false, relax_quotes: false, relax_column_count: false });
   if (records.length - 1 !== expectedRows) throw new Error(`Pinterest CSV row count mismatch: expected ${expectedRows}, read ${records.length - 1}.`);
   const data = records.slice(1);
+  data.forEach((row, index) => row.forEach((cell, column) => {
+    const character = cell.match(/[^\x00-\x7f]/u)?.[0];
+    if (character) throw new Error(`Row ${index + 1} ${PINTEREST_CSV_HEADERS[column]}: non-ASCII ${JSON.stringify(character)} U+${character.codePointAt(0).toString(16).toUpperCase()}`);
+  }));
   const validation = validatePinterestRows(data, [], options);
   if (!validation.valid) throw new Error(`Pinterest CSV validation failed: ${validation.errors.map((error) => `Row ${error.rowIndex} ${error.field}: ${error.message}`).join('\n')}`);
   if (JSON.stringify(data) !== JSON.stringify(validation.rows)) throw new Error('Pinterest CSV contains unnormalized field values.');

@@ -1,7 +1,7 @@
 import { AlertTriangle, ArrowRight, Check, ExternalLink, FolderTree, Link2, LoaderCircle, Plus, Search, Sparkles } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import SectionHeader from "@/components/SectionHeader";
-import { useConfirmDialog } from "@/components/ConfirmDialog";
+import WebsitePerformance from "@/components/WebsitePerformance";
 import { Button, EmptyState, Field, inputClass } from "@/components/ui";
 import { electronAPI } from "@/lib/electron";
 import { buildClusterPlan, detectCannibalization } from "@/lib/contentPlanning";
@@ -10,7 +10,6 @@ import { resolveArticleGenerationSettings } from "@/lib/articleGenerationSetting
 import { buildInterestProfile } from "@/lib/pinterestInterestIntelligence.mjs";
 
 export default function ClusterPlanner({ articles, settings, refreshArticles, setActiveScreen, setArticlesWorkflowStage }) {
-  const confirmAction = useConfirmDialog();
   const [seedTopic, setSeedTopic] = useState("");
   const [count, setCount] = useState(10);
   const [plan, setPlan] = useState([]);
@@ -177,15 +176,11 @@ export default function ClusterPlanner({ articles, settings, refreshArticles, se
 
   async function addClusterToQueue() {
     if (!plan.length) return;
-    if (warnings.length && !await confirmAction({
-      title: "Possible content overlap",
-      message: `${warnings.length} article idea${warnings.length === 1 ? "" : "s"} may overlap existing content.`,
-      confirmLabel: "Add Anyway"
-    })) return;
     setWorking(true);
     try {
       const now = Date.now();
       const clusterId = `cluster-${now}`;
+      const drafts = [];
       for (const [index, item] of plan.entries()) {
         const interestProfile = interestProfiles.get(item.id) || buildInterestProfile(item);
         const articleDraft = {
@@ -209,7 +204,7 @@ export default function ClusterPlanner({ articles, settings, refreshArticles, se
           smartRecommendations: smart,
           globalSettings: settings
         });
-        await electronAPI.saveArticle({
+        drafts.push({
           id: `${clusterId}-${index}`,
           title: item.title,
           generatedTitle: null,
@@ -249,8 +244,11 @@ export default function ClusterPlanner({ articles, settings, refreshArticles, se
           createdAt: new Date(now + index).toISOString()
         });
       }
+      const intake = await electronAPI.queueArticles({ articles: drafts });
+      if (!intake?.success) throw new Error(intake?.error || 'Could not queue cluster articles.');
       await refreshArticles();
-      setStatus(`Added ${plan.length} cluster article${plan.length === 1 ? "" : "s"} to the queue.`);
+      setStatus(`Added ${intake.addedCount} cluster articles. Skipped ${intake.skipped?.length || 0} overlapping ideas.`);
+      if (!intake.addedCount) return;
       setArticlesWorkflowStage?.("queued");
       setActiveScreen("articles");
     } catch (error) {
@@ -265,6 +263,8 @@ export default function ClusterPlanner({ articles, settings, refreshArticles, se
       <SectionHeader eyebrow="Planning" title="Content Cluster Planner">
         Build specific Pinterest use cases with pillar articles, support posts, adjacent interests, SEO briefs, and internal-link targets.
       </SectionHeader>
+
+      <WebsitePerformance actionLabel="Plan Clusters" onChoose={(item) => { setSourceUrl(item.url); setSeedTopic(item.topic || item.title); setStatus(`Selected ${item.title}. Build the source-based cluster plan below.`); }} onSettings={() => setActiveScreen('settings')} />
 
       <div className="mb-8 border-b border-slate-200 pb-8">
         <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-end md:justify-between">

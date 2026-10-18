@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import Sidebar from "@/components/Sidebar";
+import WorkspaceHeader from "@/components/WorkspaceHeader";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import ArticlesWorkflow from "@/components/ArticlesWorkflow";
 import { electronAPI, isElectronApp } from "@/lib/electron";
@@ -20,7 +21,10 @@ const Settings = lazy(() => import("@/components/Settings"));
 const PinCreatorView = lazy(() => import("@/components/PinCreatorView"));
 const PinPublishingWorkspace = lazy(() => import("@/components/PinPublishingWorkspace"));
 const JobCenter = lazy(() => import("@/components/JobCenter"));
+const QualityStudio = lazy(() => import("@/components/QualityStudio"));
+const ContentOperations = lazy(() => import("@/components/ContentOperations"));
 const MetaStudio = lazy(() => import("@/components/MetaStudio"));
+const RecipeMoneyMaker = lazy(() => import("@/components/RecipeMoneyMaker"));
 const VideoStudio = lazy(() => import("@/components/VideoStudio"));
 const TrendsResearch = lazy(() => import("@/components/TrendsResearch"));
 const ClusterPlanner = lazy(() => import("@/components/ClusterPlanner"));
@@ -274,6 +278,9 @@ function fillPromptDefaults(settings) {
       ghlUserId: "",
       googleClientId: "",
       googleClientSecret: "",
+      googleAnalyticsMeasurementId: "",
+      googleAnalyticsPropertyId: "",
+      googleAnalyticsSiteUrl: "",
       googleSearchConsoleProperty: "",
       googleSearchConsoleSites: [],
       googleSearchConsoleConnected: false,
@@ -360,6 +367,8 @@ function fillPromptDefaults(settings) {
 
 export default function App() {
   const [activeScreen, setActiveScreen] = useState("articles");
+  const [visitedScreens, setVisitedScreens] = useState(() => new Set(['articles']));
+  useEffect(() => { setVisitedScreens(current => current.has(activeScreen) ? current : new Set([...current, activeScreen])); }, [activeScreen]);
   const [mode, setMode] = useState("article");
   const [settings, setSettings] = useState(null);
   const [articles, setArticles] = useState([]);
@@ -466,6 +475,7 @@ export default function App() {
   };
 
   const screens = {
+    "quality-studio": <QualityStudio {...screenProps} />,
     jobs: <JobCenter {...screenProps} />,
     "cluster-planner": <ClusterPlanner {...screenProps} />,
     "image-library": <ImageLibrary {...screenProps} />,
@@ -499,9 +509,12 @@ export default function App() {
   }
 
   return (
-    <div className="flex min-h-screen text-ink">
-      <Sidebar activeScreen={activeScreen} setActiveScreen={setActiveScreen} counts={counts} theme={theme} setTheme={setTheme} settings={settings} />
-      <main className="min-w-0 flex-1 p-4 pb-24 sm:p-6 md:pb-8 lg:p-8">
+    <div className="studio-shell flex min-h-screen text-ink">
+      <a className="skip-link" href="#workspace-content">Skip to content</a>
+      <Sidebar activeScreen={activeScreen} setActiveScreen={setActiveScreen} counts={counts} theme={theme} setTheme={setTheme} settings={settings} openArticleErrors={() => setArticlesWorkflowStage("errors")} />
+      <div className="min-w-0 flex-1">
+      <WorkspaceHeader activeScreen={activeScreen} setActiveScreen={setActiveScreen} counts={counts} theme={theme} setTheme={setTheme} settings={settings} />
+      <main id="workspace-content" tabIndex={-1} className="workspace-content min-w-0 pb-24 md:pb-8">
         {notice ? (
           <div className="mb-4 rounded-md border border-violet-200 bg-violet-50 px-4 py-3 text-sm font-medium text-violet-700 shadow-sm">
             {notice}
@@ -522,21 +535,28 @@ export default function App() {
               <ArticlesWorkflow {...screenProps} />
             </div>
             <div className={activeScreen === "pin-creator" ? "" : "hidden"}>
-              <PinCreatorView {...screenProps} />
+              {(visitedScreens.has('pin-creator') || activeScreen === 'pin-creator') && <PinCreatorView {...screenProps} />}
             </div>
             <div className={activeScreen === "meta-studio" ? "" : "hidden"}>
-              <MetaStudio {...screenProps} />
+              {(visitedScreens.has('meta-studio') || activeScreen === 'meta-studio') && <MetaStudio {...screenProps} />}
+            </div>
+            <div className={activeScreen === "recipe-money-maker" ? "" : "hidden"}>
+              {(visitedScreens.has('recipe-money-maker') || activeScreen === 'recipe-money-maker') && <RecipeMoneyMaker {...screenProps} />}
             </div>
             <div className={activeScreen === "video-studio" ? "" : "hidden"}>
-              <VideoStudio {...screenProps} />
+              {(visitedScreens.has('video-studio') || activeScreen === 'video-studio') && <VideoStudio {...screenProps} />}
             </div>
             <div className={activeScreen === "trends" ? "" : "hidden"}>
-              <TrendsResearch {...screenProps} />
+              {(visitedScreens.has('trends') || activeScreen === 'trends') && <TrendsResearch {...screenProps} />}
             </div>
-            {!['articles', 'pin-creator', 'meta-studio', 'video-studio', 'trends'].includes(activeScreen) ? screen : null}
+            <div className={activeScreen === 'content-pipeline' ? '' : 'hidden'}>
+              {(visitedScreens.has('content-pipeline') || activeScreen === 'content-pipeline') && <ContentOperations {...screenProps} />}
+            </div>
+            {!['articles', 'pin-creator', 'meta-studio', 'recipe-money-maker', 'video-studio', 'trends', 'content-pipeline'].includes(activeScreen) ? screen : null}
           </Suspense>
         </ErrorBoundary>
       </main>
+      </div>
     </div>
   );
 }
