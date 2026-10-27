@@ -157,6 +157,13 @@ export default function ArticlesList({ articles, settings, saveSettings, refresh
       const itemNumber = published + needsReview + failures.length + 1;
       try {
         readyArticle = publishReadyArticle(article, settings);
+        // Match the single-article editor: critical quality blockers need a recorded override.
+        const blockers = readyArticle.qualityReport?.blockers || [];
+        if (blockers.length && !article.qualityOverride?.reason) {
+          needsReview++;
+          warnings.push(`${readyArticle.generatedTitle || readyArticle.title}: not published. ${blockers.length} critical quality issue${blockers.length === 1 ? "" : "s"}: ${blockers.map((blocker) => blocker.reason || blocker.id).join("; ")}`);
+          continue;
+        }
         const manualCategory = manualCategoryForSite(readyArticle, siteForPublish);
         const match = manualCategory
           ? { category: siteForPublish.categories?.find((category) => String(category.id) === String(manualCategory)), confidence: 100, reason: "Manual category" }

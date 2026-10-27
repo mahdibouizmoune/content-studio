@@ -184,7 +184,7 @@ function validateRecipeCard(html = '') {
   const rawPoultry = poultry.some((item) => /\braw\b/i.test(item) || !prepared.test(item));
   const reheatedPoultry = poultry.length && !rawPoultry && cook > 0
     && legacy.instructions.some((step) => /\b(?:reheat|heat|bake|roast|simmer|cook|microwave|saute)\b/i.test(step));
-  const safePoultry = legacy.instructions.some((step) => /(?:165\s*(?:\u00b0|degrees?)?\s*F|(?:73\.9|74|75)\s*(?:\u00b0|degrees?)?\s*C)/i.test(step)
+  const safePoultry = legacy.instructions.some((step) => /(?:\b165\s*(?:\u00b0|degrees?)?\s*F|\b(?:73\.9|74|75)\s*(?:\u00b0|degrees?)?\s*C)/i.test(step)
     && /thermometer|internal|thickest/i.test(step));
   if (rawPoultry && !safePoultry) issues.push('Raw poultry needs a thermometer-verified internal temperature of 165 F (74 C)');
   else if (reheatedPoultry && !safePoultry) issues.push('Reheated poultry needs a thermometer-verified internal temperature of 165 F (74 C)');

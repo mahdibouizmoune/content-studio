@@ -58,13 +58,19 @@ function valueFrom(record = {}, aliases = []) {
 
 function normalizeRevenueRows(records = [], fileName = "") {
   const importedAt = new Date().toISOString();
-  return (records || []).map((record, index) => {
+  const { createHash } = require("node:crypto");
+  const occurrences = new Map();
+  return (records || []).map((record) => {
+    // Content-derived IDs make re-importing the same report update rows instead of duplicating totals.
+    const fingerprint = createHash("sha256").update(JSON.stringify(record || {})).digest("hex").slice(0, 24);
+    const occurrence = (occurrences.get(fingerprint) || 0) + 1;
+    occurrences.set(fingerprint, occurrence);
     const amountValue = valueFrom(record, ["amount", "revenue", "commission", "earnings"]);
     const amount = amountValue
       ? Number(String(amountValue).replace(/[^0-9.-]/g, ""))
       : Number.NaN;
     return cleanRecord({
-      id: `revenue-import-${Date.now()}-${index + 1}`,
+      id: `revenue-import-${fingerprint}-${occurrence}`,
       articleId: valueFrom(record, ["article id", "article_id", "articleid"]),
       campaignId: valueFrom(record, ["campaign id", "campaign_id", "campaignid"]),
       source: valueFrom(record, ["source", "provider", "network", "platform"]) || "CSV import",

@@ -6,8 +6,9 @@ function buildWordPressPostPayload({
   defaultStatus = "publish",
   now = Date.now()
 } = {}) {
-  const requestedStatus = article.publishStatusOverride || defaultStatus;
-  const status = ["publish", "draft", "future"].includes(requestedStatus) ? requestedStatus : "publish";
+  const requestedStatus = String(article.publishStatusOverride || defaultStatus || "").trim().toLowerCase();
+  // Fail closed: an unrecognised status must never make a post public.
+  const status = ["publish", "draft", "future"].includes(requestedStatus) ? requestedStatus : "draft";
   const scheduledAt = status === "future" ? new Date(article.scheduledAt || "") : null;
   if (status === "future" && (!scheduledAt || Number.isNaN(scheduledAt.getTime()) || scheduledAt.getTime() <= now)) {
     throw new Error("Choose a valid future publication date and time before scheduling.");

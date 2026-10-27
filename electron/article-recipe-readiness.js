@@ -76,9 +76,15 @@ function createRecipeReadinessService({ generateCard, clean = (value) => value }
         }
       }
     }
+    const recipeQuality = inspectRecipe({ ...article, content });
+    // A complete collection publishes every recipe, so each one must pass, not only the primary card.
+    if (validation.ok && collection?.depth === 'complete-recipes' && recipeQuality.status === 'needs-repair') {
+      const collectionIssues = recipeQuality.issues.filter((issue) => issue.severity === 'error').map((issue) => issue.message);
+      validation = { ok: false, issues: collectionIssues };
+    }
     const warning = validation.ok ? '' : `Recipe needs review: ${validation.issues.join('; ')}${errors.length ? ` (repair: ${errors.at(-1)})` : ''}`;
     return { success: validation.ok, repaired, issues: validation.issues, patch: {
-      content, recipeRequired: true, recipeCardEnabled: true, recipeQuality: inspectRecipe({ ...article, content }),
+      content, recipeRequired: true, recipeCardEnabled: true, recipeQuality,
       ...(validation.ok ? { structuredData: validatedRecipeSchema(article, content) } : {}),
       recipeCardRepairApplied: repaired || article.recipeCardRepairApplied === true,
       recipeCardQualityWarning: warning, recipeValidation: { ok: validation.ok, issues: validation.issues, checkedAt: new Date().toISOString() }

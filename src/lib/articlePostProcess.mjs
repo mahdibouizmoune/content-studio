@@ -307,13 +307,18 @@ function extractRecipeValue(card = "", text = "", label = "") {
   return textMatch?.[1]?.trim() || "";
 }
 
-function durationToIso(value = "") {
-  const text = value.toLowerCase();
+const UNICODE_FRACTIONS = { "¼": 0.25, "½": 0.5, "¾": 0.75, "⅓": 1 / 3, "⅔": 2 / 3 };
+
+export function durationToIso(value = "") {
+  // "1 1/2 hours", "1/2 hour" and "1½ hours" become decimals before unit matching.
+  const text = String(value).toLowerCase()
+    .replace(/(\d+)?\s*([¼½¾⅓⅔])/g, (_, whole, fraction) => String(Number(whole || 0) + UNICODE_FRACTIONS[fraction]))
+    .replace(/(?:(\d+)\s+)?(\d+)\s*\/\s*(\d+)/g, (match, whole, numerator, denominator) => Number(denominator) ? String(Number(whole || 0) + Number(numerator) / Number(denominator)) : match);
   const hours = Number((text.match(/(\d+(?:\.\d+)?)\s*(hours|hour|hrs|hr|h)\b/) || [])[1] || 0);
   const minutes = Number((text.match(/(\d+(?:\.\d+)?)\s*(minutes|minute|mins|min|m)\b/) || [])[1] || 0);
   const days = Number((text.match(/(\d+(?:\.\d+)?)\s*(days|day)\b/) || [])[1] || 0);
   const weeks = Number((text.match(/(\d+(?:\.\d+)?)\s*(weeks|week)\b/) || [])[1] || 0);
-  const totalMinutes = minutes + hours * 60 + days * 1440 + weeks * 10080;
+  const totalMinutes = Math.round(minutes + hours * 60 + days * 1440 + weeks * 10080);
   if (!Number.isFinite(totalMinutes) || totalMinutes < 0 || (!totalMinutes && !/\b0\s*(minutes?|mins?|hours?|hrs?)\b/i.test(text))) return undefined;
   return `PT${totalMinutes}M`;
 }
@@ -397,7 +402,9 @@ export function buildMetadata(article, content) {
     if (generatedDescription.length >= 120) break;
     generatedDescription = `${generatedDescription.replace(/[.!?]*$/, ".")} ${part}`;
   }
-  const metaDescription = article.metaDescription || generatedDescription.slice(0, 160).replace(/\s+\S*$/, "").replace(/[,:;]$/, "") || title;
+  // Only trim a partial last word when the text actually exceeds the 160-character limit.
+  const fittedDescription = generatedDescription.length > 160 ? generatedDescription.slice(0, 161).replace(/\s+\S*$/, "") : generatedDescription;
+  const metaDescription = article.metaDescription || fittedDescription.replace(/[,:;]$/, "") || title;
   const focusKeyword = article.rankMathFocusKeyword || articleBrief.primaryKeyword || brief.targetKeyword || title;
   const tags = [focusKeyword, ...(brief.secondaryKeywords || "").split(",")]
     .map((item) => item?.trim())
