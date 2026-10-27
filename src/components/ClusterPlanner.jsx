@@ -53,7 +53,7 @@ export default function ClusterPlanner({ articles, settings, refreshArticles, se
       parsed = new URL(sourceUrl.trim());
       if (!["http:", "https:"].includes(parsed.protocol)) throw new Error();
     } catch {
-      setStatus("Enter a valid public Pinterest Pin or article URL.");
+      setStatus("Enter the original recipe website URL.");
       return;
     }
     const jobKey = `pinterest-clusters-${Date.now()}`;
@@ -277,7 +277,7 @@ export default function ClusterPlanner({ articles, settings, refreshArticles, se
 
         <div className="soft-card rounded-lg p-5">
           <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_160px_auto] lg:items-end">
-            <Field label="Pinterest Pin or article link">
+            <Field label="Original recipe article link">
               <div className="relative">
                 <Link2 className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" />
                 <input

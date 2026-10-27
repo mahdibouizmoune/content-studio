@@ -4,6 +4,7 @@ const path = require("node:path");
 const { randomUUID, createHash } = require("node:crypto");
 const { createPinWorkspace } = require("./pin-workspace");
 const { createPinterestApi } = require("./pinterest-api");
+const { assertArticleSource } = require('./source-policy');
 const { createCommerce, catalogRows } = require("./pin-commerce");
 const { createPinApiServer } = require("./pin-api-server");
 const {
@@ -368,6 +369,9 @@ function registerPinWorkspace(deps) {
       const a = data.accounts.find((a) => a.id === p.accountId);
       if (!a) throw new Error("Unknown account.");
       a.connected = false;
+      delete a.profile; delete a.boards; delete a.username; delete a.syncedAt; delete a.sampled;
+      data.research = data.research.filter(r => r.accountId !== p.accountId);
+      data.audits = data.audits.filter(r => r.accountId !== p.accountId);
       workspace.save(data);
       return a;
     }
@@ -376,10 +380,9 @@ function registerPinWorkspace(deps) {
       if (!a) throw new Error("Unknown account.");
       const synced = await pinterest.syncBoards(a);
       const data = workspace.get();
-      Object.assign(
-        data.accounts.find((item) => item.id === a.id),
-        synced,
-      );
+      const current = data.accounts.find((item) => item.id === a.id);
+      if (!current?.connected) throw new Error('Account disconnected during board sync. No boards were retained.');
+      Object.assign(current, synced);
       workspace.save(data);
       return synced;
     }
@@ -388,6 +391,7 @@ function registerPinWorkspace(deps) {
       if (!a) throw new Error("Unknown account.");
       const result = await pinterest.audit(a);
       const data = workspace.get();
+      if (!data.accounts.find(current => current.id === a.id)?.connected) throw new Error('Account disconnected during the audit. No report was retained.');
       data.audits = [result, ...data.audits].slice(0, 100);
       workspace.save(data);
       return result;
@@ -407,11 +411,13 @@ function registerPinWorkspace(deps) {
       return source;
     }
     if (action === "extractPhotos") {
+      assertArticleSource(p.url);
       if (!publicUrl(p.url))
         throw new Error(
           "Choose a public HTTPS source page without embedded credentials.",
         );
       const page = await fetchPage(p.url);
+      assertArticleSource(page.finalUrl || p.url);
       if (page.status < 200 || page.status >= 300)
         throw new Error(`Source page returned ${page.status}.`);
       const candidates = extractPhotos(page.html, page.finalUrl, p),

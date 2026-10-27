@@ -192,6 +192,10 @@ function createPinterestExportService(deps) {
       if (!destination) return { success: false, canceled: true };
       await recheckAcceptedRows();
       batch = { ...batch, rows: makeDeliveryBatch({ rows: validation.rows, pins, identities, account, parentBatchId: retryBatchId }).rows };
+      batch.rows = batch.rows.map((row, index) => ({ ...row, sourceRow: acceptedIndexes[index] + 1 }));
+      batch.selectedRowCount = rows.length;
+      batch.rejectedRows = rejected.map(item => ({ sourceRow: item.row, title: item.cells?.[0] || '', reason: item.reason }));
+      batch.scheduleContract = { owner: 'pinterest-csv-import', timeBasis: 'UTC', selectedDatesPreserved: true };
       assertDeliveryState();
       const parsed = path.parse(destination);
       const chunks = splitPinterestRows(validation.rows, 200);
@@ -215,7 +219,7 @@ function createPinterestExportService(deps) {
         redownloadOf: redownloadOnly ? existingBatchIds : [],
         summary: { inputRows: originalRowCount, rowsWritten: validation.rows.length, rowsRejected: rejected.length },
         rejected, linkChecks,
-        rowChecks: validation.rows.map((row, index) => ({ sourceRow: acceptedIndexes[index] + 1, asciiClean: true, boardCanonical: boardNames.includes(row[2]), boardFallback: canonicalBoardMatch({ title: row[0], description: row[4] }, boardNames).fallback, scheduledUtc: row[6], titleLength: row[0].length, descriptionLength: row[4].length, keywordCount: row[7] ? row[7].split(',').length : 0 })),
+        rowChecks: validation.rows.map((row, index) => ({ sourceRow: acceptedIndexes[index] + 1, encoding: 'utf-8', boardCanonical: boardNames.includes(row[2]), boardFallback: canonicalBoardMatch({ title: row[0], description: row[4] }, boardNames).fallback, scheduledUtc: row[6], titleLength: row[0].length, descriptionLength: row[4].length, keywordCount: row[7] ? row[7].split(',').length : 0 })),
         files: batch.files, valid: true, scheduleAudit: validation.scheduleAudit, mediaChecks,
         errors: [], warnings: validation.warnings };
       files.push({ path: reportPath, bytes: Buffer.from(JSON.stringify(report, null, 2)), verify: (bytes) => JSON.parse(bytes) });

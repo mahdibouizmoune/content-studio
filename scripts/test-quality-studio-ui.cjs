@@ -62,6 +62,13 @@ async function main() {
     await reader.getByRole('button', { name: 'Save Recipe', exact: true }).click(); await reader.getByRole('button', { name: 'Saved on This Device', exact: true }).waitFor();
     await reader.getByRole('button', { name: 'Shopping List', exact: true }).click(); assert.match(await reader.getByRole('textbox', { name: 'Shopping list', exact: true }).inputValue(), /1 cup rice/);
     await reader.getByRole('button', { name: 'Cook Mode', exact: true }).click(); assert.equal(await reader.getByRole('button', { name: 'Cook Mode', exact: true }).getAttribute('aria-pressed'), 'true');
+    await reader.getByRole('checkbox', { name: 'Step 1 complete', exact: true }).check();
+    await reader.getByText(/1 of \d+ steps checked/).waitFor();
+    await reader.getByLabel('Timer minutes', { exact: true }).fill('1');
+    await reader.getByRole('button', { name: 'Start Timer', exact: true }).click();
+    assert.equal(await reader.getByLabel('Timer minutes', { exact: true }).isDisabled(), true);
+    await reader.getByRole('button', { name: 'Cancel Timer', exact: true }).click();
+    await reader.getByText('Timer cancelled.', { exact: true }).waitFor();
     assert.deepEqual(await reader.evaluate(() => window.csTestEvents), []); await reader.screenshot({ path: path.resolve('artifacts/reader-controls-mobile.png') }); await reader.close();
   } finally { await browser.close(); await server.close(); }
 }

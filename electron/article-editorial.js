@@ -1,5 +1,17 @@
 const { parseDocument } = require('htmlparser2');
 const { validateRecipeCard } = require('./recipe-generation');
+const editorialRules = require('./assets/editorial-rules.json');
+function hasEditorialInstructionLeak(content = '') {
+  const stack = [parseDocument(String(content))], parts = [];
+  while (stack.length) {
+    const node = stack.pop();
+    if (['script', 'style'].includes(node.name)) continue;
+    if (node.type === 'text') parts.push(node.data || '');
+    stack.push(...[...(node.children || [])].reverse());
+  }
+  const text = parts.join(' ').replace(/\s+/g, ' ').trim();
+  return editorialRules.promptLeakPatterns.some(pattern => new RegExp(pattern, 'i').test(text));
+}
 
 const READER_RECIPE_GUIDANCE = `READER-FIRST RECIPE EDITORIAL STANDARD:
 Deliver the exact dish or number of ideas promised, not a keyword-stuffed headline. Open in 2 short paragraphs with flavor, texture, realistic effort and who the dish suits. Never delay the answer with a personal story or generic introduction.
@@ -32,6 +44,7 @@ function assessEditorialGaps(content = '') {
   }
   const plain = text(document);
   const issues = [];
+  if (editorialRules.promptLeakPatterns.some(pattern => new RegExp(pattern, 'i').test(plain))) issues.push('Remove generation instructions from reader-facing content');
   if (headings.length < 3) issues.push('Add useful cooking sections');
   if (!/substitut|swap|alternative|replacement/i.test(plain)) issues.push('Explain a useful substitution and its limits');
   if (!/troubleshoot|avoid|mistake|rescue|too (?:dry|wet|thick|thin)|overcook|undercook/i.test(plain)) issues.push('Explain a likely failure and prevention or rescue');
@@ -42,4 +55,4 @@ function assessEditorialGaps(content = '') {
   return { needsRevision: issues.length > 0, issues, recipeReady: validateRecipeCard(content).ok };
 }
 
-module.exports = { READER_RECIPE_GUIDANCE, assessEditorialGaps };
+module.exports = { READER_RECIPE_GUIDANCE, assessEditorialGaps, hasEditorialInstructionLeak };

@@ -1,0 +1,78 @@
+import { useCallback, useEffect, useState } from 'react';
+import { CalendarClock, Check, Download, Eye, Plus, RefreshCw, Save, Trash2 } from 'lucide-react';
+import { electronAPI } from '@/lib/electron';
+import { Button, Field, inputClass } from '@/components/ui';
+const kinds = [['kitchen-test', 'Kitchen Test'], ['substitution', 'Substitution'], ['allergen', 'Allergen Review'], ['appliance', 'Pan / Appliance'], ['leftover', 'Next Meal'], ['unit-conversion', 'Measured Conversion'], ['reader-outcome', 'Reader Outcome']];
+const when = value => value ? new Date(value).toLocaleString('en-US', { timeZone: 'UTC', timeZoneName: 'short' }) : 'Not recorded';
+export default function RecipeEvidenceWorkbench({ pipeline = [], pins = [], navigate }) {
+  const [data, setData] = useState(null), [busy, setBusy] = useState(false), [message, setMessage] = useState(''), [section, setSection] = useState('Today');
+  const [articleId, setArticleId] = useState(''), [report, setReport] = useState(null), [kind, setKind] = useState('kitchen-test'), [note, setNote] = useState(''), [evidence, setEvidence] = useState(''), [author, setAuthor] = useState(''), [referenceUrl, setReferenceUrl] = useState(''), [relatedArticleId, setRelatedArticleId] = useState('');
+  const [pinId, setPinId] = useState(''), [claim, setClaim] = useState(''), [claimEvidence, setClaimEvidence] = useState('');
+  const [ids, setIds] = useState([]), [multiplier, setMultiplier] = useState('1'), [plan, setPlan] = useState(null);
+  const [label, setLabel] = useState(''), [dueAt, setDueAt] = useState(''), [decision, setDecision] = useState(false), [bundle, setBundle] = useState(null);
+  const call = useCallback(async (action, params = {}) => {
+    const response = await electronAPI.qualityWorkspace(`content:evidence:${action}`, params);
+    if (!response.success) throw new Error(response.error);
+    return response.result;
+  }, []);
+  const load = useCallback(async () => setData(await call('snapshot')), [call]);
+  useEffect(() => { load().catch(e => setMessage(e.message)); }, [load]);
+  async function run(action, params = {}) {
+    setBusy(true); setMessage('');
+    try {
+      const result = await call(action, params); await load();
+      if (articleId && !['article', 'planning', 'incident-preview', 'incident-export'].includes(action)) setReport(await call('article', { articleId }));
+      setMessage(result?.canceled ? 'Download cancelled.' : result?.path ? `Saved: ${result.path}` : 'Updated.'); return result;
+    } catch (e) { setMessage(e.message); return null; } finally { setBusy(false); }
+  }
+  async function chooseArticle(id) {
+    setArticleId(id); setReport(null); setPinId(''); setNote(''); setEvidence(''); setClaim(''); setClaimEvidence('');
+    if (id) setReport(await run('article', { articleId: id }));
+  }
+  const picker = <Field label="Evidence article"><select aria-label="Evidence article" className={inputClass} disabled={busy} value={articleId} onChange={e => chooseArticle(e.target.value)}><option value="">Choose article</option>{pipeline.map(a => <option key={a.id} value={a.id}>{a.title}</option>)}</select></Field>;
+  return <div className="space-y-5" aria-busy={busy}>
+    <div className="flex flex-wrap gap-2" role="tablist" aria-label="Review desk">{['Today', 'Recipe Evidence', 'Meal Planning', 'Reader Impact', 'Reviews', 'Diagnostics'].map(t => <button key={t} type="button" role="tab" aria-selected={section === t} className={`rounded px-3 py-2 text-sm font-semibold ${section === t ? 'bg-teal-700 text-white' : 'text-slate-600'}`} onClick={() => setSection(t)}>{t}</button>)}<Button variant="ghost" title="Refresh review desk" aria-label="Refresh review desk" disabled={busy} onClick={() => run('snapshot')}><RefreshCw size={16} /></Button></div>
+    {message && <p role="status" className="break-words border-l-4 border-teal-600 py-2 pl-3 text-sm">{message}</p>}
+    {!data ? <p>Loading review records...</p> : <>
+      {section === 'Today' && <div className="space-y-5">
+        <div className="grid grid-cols-2 gap-4 border-y border-slate-200 py-4 md:grid-cols-4">{[['Article changes', pipeline.filter(a => a.sourceState === 'source-changed').length], ['Open jobs', data.jobs.length], ['Evidence records', data.evidenceCount], ['Pin claims', data.claimCount]].map(([name, n]) => <div key={name}><p className="text-xs text-slate-500">{name}</p><p className="text-2xl font-semibold">{n}</p></div>)}</div>
+        {data.jobs.map(j => <div key={j.id} className="flex items-center justify-between gap-3 border-b border-slate-200 py-3"><p className="min-w-0 break-words text-sm">{j.title} <span className="text-slate-500">{j.status}</span></p><Button variant="secondary" onClick={() => navigate('jobs')}><Eye size={16} />Jobs</Button></div>)}
+        <h3 className="font-semibold">CSV Import Results</h3>
+        {!data.delivery.length && <p className="text-sm text-slate-500">No CSV batches recorded.</p>}
+        {data.delivery.slice(0, 30).map(b => <div key={b.id} className="border-b border-slate-200 py-3 text-sm"><p className="font-medium">{when(b.createdAt)} · File {b.fileStatus}</p><p>{b.selected ?? 'Unknown'} selected · {b.written ?? 'Unknown'} written · {b.rejected ?? 'Unknown'} rejected · {b.confirmed} confirmed · {b.failed} failed · {b.unknown} unknown · {b.review} need review</p></div>)}
+        <h3 className="font-semibold">Image Availability</h3>
+        {data.assets.slice(0, 30).map(a => <p key={a.pinId} className="border-b border-slate-200 py-2 text-sm">{pins.find(p => p.id === a.pinId)?.title || a.pinId} · {a.protected ? a.reasons.join('; ') : `Cleanup review after ${when(a.reviewAfter)}`}</p>)}
+      </div>}
+      {section === 'Recipe Evidence' && <div className="space-y-5">{picker}
+        {report && <>
+          <div className="border-y border-slate-200 py-3 text-sm"><p className="font-semibold">{report.structural.status} · {report.structural.recipeCount} recipes · Coverage: {report.coverage.status}</p><p className="mt-1 text-slate-500">{report.caution}</p>{report.coverage.expected != null && <p>Headline promises {report.coverage.expected}; {report.coverage.visible} visible recipes.</p>}{[...report.structural.issues.map(i => i.message), ...report.editorial.issues].map((s, i) => <p key={i} className="mt-2 text-amber-700">{s}</p>)}</div>
+          <div className="grid gap-4 md:grid-cols-2"><Field label="Evidence category"><select aria-label="Evidence category" className={inputClass} value={kind} onChange={e => setKind(e.target.value)}>{kinds.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></Field><Field label="Tester / contributor"><input maxLength={120} className={inputClass} value={author} onChange={e => setAuthor(e.target.value)} /></Field></div>
+          <Field label="Observation"><textarea aria-label="Recipe observation" rows={3} maxLength={2000} className={inputClass} value={note} onChange={e => setNote(e.target.value)} /></Field>
+          <Field label="Supporting evidence"><textarea aria-label="Supporting recipe evidence" rows={3} maxLength={2000} className={inputClass} value={evidence} onChange={e => setEvidence(e.target.value)} /></Field>
+          <Field label="Reference URL (optional)"><input type="url" className={inputClass} value={referenceUrl} onChange={e => setReferenceUrl(e.target.value)} /></Field>
+          {kind === 'leftover' && <Field label="Next-meal recipe"><select aria-label="Next-meal recipe" className={inputClass} value={relatedArticleId} onChange={e => setRelatedArticleId(e.target.value)}><option value="">Choose recipe</option>{pipeline.filter(a => a.id !== articleId).map(a => <option key={a.id} value={a.id}>{a.title}</option>)}</select></Field>}
+          <Button disabled={busy || !note.trim() || !evidence.trim()} onClick={async () => { const r = await run('note-save', { articleId, sourceHash: report.sourceHash, kind, note, evidence, author, referenceUrl, relatedArticleId: kind === 'leftover' ? relatedArticleId : '' }); if (r) { setNote(''); setEvidence(''); } }}><Save size={16} />Save Evidence</Button>
+          {report.notes.map(n => <article key={n.id} className="border-b border-slate-200 py-3 text-sm"><div className="flex justify-between gap-3"><h4 className="font-semibold">{kinds.find(([v]) => v === n.kind)?.[1]} · {n.revisionState}</h4><Button variant="ghost" title="Delete evidence record" aria-label="Delete evidence record" disabled={busy} onClick={() => run('record-delete', { collection: 'notes', id: n.id })}><Trash2 size={16} /></Button></div><p className="whitespace-pre-wrap break-words">{n.note}</p><p className="mt-2 whitespace-pre-wrap break-words text-slate-500">{n.evidence}</p><p className="mt-1 text-xs">{n.author || 'Contributor not recorded'} · User supplied · {when(n.createdAt)}</p></article>)}
+          <h3 className="border-t border-slate-200 pt-4 font-semibold">Pin Promise Manifest</h3>
+          <Field label="Related finished Pin"><select aria-label="Related finished Pin" className={inputClass} value={pinId} onChange={e => setPinId(e.target.value)}><option value="">Choose Pin</option>{report.impact.pins.map(p => <option key={p.id} value={p.id}>{p.title || p.id}</option>)}</select></Field>
+          <Field label="Displayed claim"><input aria-label="Displayed claim" maxLength={300} className={inputClass} value={claim} onChange={e => setClaim(e.target.value)} /></Field>
+          <Field label="Exact recipe excerpt"><textarea aria-label="Exact recipe excerpt" rows={2} className={inputClass} value={claimEvidence} onChange={e => setClaimEvidence(e.target.value)} /></Field>
+          <Button disabled={busy || !pinId || !claim.trim() || !claimEvidence.trim()} onClick={() => run('promise-save', { articleId, sourceHash: report.sourceHash, pinId, claim, evidence: claimEvidence })}><Check size={16} />Record Claim Evidence</Button>
+          {report.claims.map(c => <p key={c.id} className="border-b border-slate-200 py-2 text-sm">{c.claim} · {c.state}<span className="block text-slate-500">{c.evidence}</span></p>)}
+          <details className="border-t border-slate-200 pt-3"><summary className="font-semibold">Original Photo Shot List</summary>{report.shots.map((s, i) => <p key={i} className="mt-3 text-sm"><strong>{s.subject} · {s.shot}</strong><span className="block text-slate-500">{s.detail}</span></p>)}</details>
+        </>}
+      </div>}
+      {section === 'Meal Planning' && <div className="space-y-4"><div className="max-h-72 overflow-auto">{pipeline.map(a => <label key={a.id} className="flex items-start gap-3 border-b border-slate-200 py-3 text-sm"><input type="checkbox" checked={ids.includes(a.id)} onChange={() => { setPlan(null); setIds(current => current.includes(a.id) ? current.filter(x => x !== a.id) : [...current, a.id]); }} /><span>{a.title}</span></label>)}</div><Field label="Ingredient quantity multiplier"><input aria-label="Ingredient quantity multiplier" className={inputClass} type="number" min="0.25" max="20" step="0.25" value={multiplier} onChange={e => { setMultiplier(e.target.value); setPlan(null); }} /></Field><Button disabled={busy || !ids.length || ids.length > 7} onClick={async () => setPlan(await run('planning', { ids, multiplier: Number(multiplier) }))}><Plus size={16} />Review Meal Plan</Button>{plan && <><ul className="space-y-2 border-y border-slate-200 py-3 text-sm">{plan.warnings.map(w => <li key={w}>{w}</li>)}</ul><h3 className="font-semibold">Shared Ingredients</h3>{!plan.shared.length && <p className="text-sm text-slate-500">No measured ingredient overlap found.</p>}{plan.shared.map((s, i) => <p key={i} className="text-sm">{s.description} · {s.recipes.join(', ')}</p>)}<h3 className="font-semibold">Shopping Quantities</h3>{plan.shopping.map((s, i) => <p key={i} className="border-b border-slate-200 py-2 text-sm">{s.quantity == null ? s.original : `${Number(s.quantity.toFixed(3))}${s.quantity2 == null ? '' : `-${Number(s.quantity2.toFixed(3))}`} ${s.unit} ${s.description}`}</p>)}</>}</div>}
+      {section === 'Reviews' && <div className="space-y-4">{picker}
+        <Field label="Review title"><input aria-label="Review title" className={inputClass} maxLength={300} value={label} onChange={e => setLabel(e.target.value)} /></Field>
+        <Field label="Review due (UTC)"><input aria-label="Review due" type="datetime-local" className={inputClass} value={dueAt} onChange={e => setDueAt(e.target.value)} /></Field>
+        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={decision} onChange={e => setDecision(e.target.checked)} />Evidence-backed decision</label>
+        {decision && <Field label="Decision evidence"><textarea aria-label="Decision evidence" className={inputClass} rows={3} value={evidence} onChange={e => setEvidence(e.target.value)} /></Field>}
+        <Button disabled={busy || !articleId || !dueAt || !label.trim()} onClick={() => { const date = new Date(`${dueAt}Z`); if (!Number.isFinite(date.getTime())) { setMessage('Choose a valid UTC review date.'); return; } run(decision ? 'decision-save' : 'deadline-save', { articleId, label, evidence, dueAt: date.toISOString(), reviewAt: date.toISOString() }); }}><CalendarClock size={16} />Save Review</Button>
+        {[...data.deadlines.map(d => ({ ...d, collection: 'deadlines', date: d.dueAt, state: d.stale ? 'Recipe changed' : d.overdue ? 'Overdue' : 'Pending review' })), ...data.decisions.map(d => ({ ...d, collection: 'decisions', date: d.reviewAt }))].map(r => <div key={r.id} className="flex items-start justify-between gap-3 border-b border-slate-200 py-3 text-sm"><div className="min-w-0 break-words"><h3 className="font-semibold">{r.label}</h3><p>{r.title} · {when(r.date)} · {r.state}</p>{r.evidence && <p className="mt-1 text-slate-500">{r.evidence}</p>}</div><Button variant="ghost" title="Remove review record" aria-label="Remove review record" disabled={busy} onClick={() => run('record-delete', { collection: r.collection, id: r.id })}><Trash2 size={16} /></Button></div>)}
+      </div>}
+      {section === 'Diagnostics' && <div className="space-y-4">{data.capabilities.map(c => <div key={c.name} className="border-b border-slate-200 py-3 text-sm"><h3 className="font-semibold">{c.name} · {c.state}</h3><p className="mt-1 text-slate-500">{c.detail}</p></div>)}<Button variant="secondary" disabled={busy} onClick={async () => setBundle(await run('incident-preview'))}><Eye size={16} />Preview Incident Bundle</Button>{bundle && <><pre className="max-h-80 overflow-auto whitespace-pre-wrap break-all border border-slate-200 p-3 text-xs">{JSON.stringify(bundle.report, null, 2)}</pre><Button disabled={busy} onClick={() => run('incident-export', { fingerprint: bundle.fingerprint })}><Download size={16} />Export Reviewed Bundle</Button></>}</div>}
+      {section === 'Reader Impact' && <div className="space-y-4"><p className="text-sm text-slate-500">{data.attribution.unit || 'No connected report.'}</p>{data.attribution.gaps.map(g => <p key={g} className="border-l-2 border-amber-400 pl-3 text-sm">{g}</p>)}{data.attribution.rows.map((r, i) => <article key={i} className="border-b border-slate-200 py-3 text-sm"><h3 className="break-words font-semibold">{pins.find(p => p.id === r.pinId)?.title || r.creative || 'Unattributed activity'}</h3><p className="mt-1 break-all text-xs text-slate-500">{r.url} · {r.attribution}</p><p className="mt-2">{r.sessions ?? 'Unknown'} Pinterest sessions · {r.engagedSessions ?? 'Unknown'} engaged sessions</p>{Object.entries(r.events).map(([event, count]) => <p key={event}>{event}: {count} occurrences</p>)}</article>)}{data.attribution.limitation && <p className="text-xs text-slate-500">{data.attribution.limitation}</p>}</div>}
+    </>}
+  </div>;
+}

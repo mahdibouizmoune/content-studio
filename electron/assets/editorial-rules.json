@@ -1,0 +1,11 @@
+{
+  "promptLeakPatterns": [
+    "deliver (?:a|the) complete,? realistic recipe with ingredient roles",
+    "reader-first recipe editorial standard",
+    "never invent nutrition, ratings, author credentials",
+    "the app adds recipe navigation",
+    "(?:write|generate) (?:the|an?) (?:article|recipe) (?:in|using) (?:html|markdown)",
+    "(?:system|assistant)\\s*(?:prompt|instructions)\\s*:",
+    "(?:^|[.!?]\\s+)brief intro\\s*(?:[.:]|$)|insert (?:recipe|article) (?:here|below)"
+  ]
+}

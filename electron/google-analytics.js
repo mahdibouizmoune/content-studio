@@ -29,6 +29,10 @@ function articleUrl(value, siteUrl) {
   } catch { return ''; }
 }
 
+function isPinterestSource(value) {
+  const source = String(value || '').split(' / ')[0].toLowerCase();
+  return /^(?:www\.|m\.|l\.)?pinterest(?:\.(?:com|co\.uk|com\.au|co\.nz|[a-z]{2}))?$/.test(source) || source === 'pin.it';
+}
 function aggregateReport(report, siteUrl) {
   const dimensions = (report.dimensionHeaders || []).map((header) => header.name);
   const metrics = (report.metricHeaders || []).map((header) => header.name);
@@ -40,13 +44,16 @@ function aggregateReport(report, siteUrl) {
     const url = articleUrl(dimension('landingPagePlusQueryString'), siteUrl);
     if (!url) continue;
     const metric = (name) => Math.max(0, Number(row.metricValues?.[metrics.indexOf(name)]?.value) || 0);
-    const page = pages.get(url) || { url, sessions: 0, engagedSessions: 0, engagementSeconds: 0, pinterestSessions: 0 };
+    const page = pages.get(url) || { url, sessions: 0, engagedSessions: 0, engagementSeconds: 0, pinterestSessions: 0, pinterestEngagedSessions: 0, pinterestEngagementSeconds: 0 };
     const sessions = metric('sessions');
     page.sessions += sessions;
     page.engagedSessions += metric('engagedSessions');
     page.engagementSeconds += metric('userEngagementDuration');
-    const source = dimension('sessionSourceMedium').split(' / ')[0].toLowerCase();
-    if (/^(?:www\.|m\.|l\.)?pinterest(?:\.(?:com|co\.uk|com\.au|co\.nz|[a-z]{2}))?$/.test(source) || source === 'pin.it') page.pinterestSessions += sessions;
+    if (isPinterestSource(dimension('sessionSourceMedium'))) {
+      page.pinterestSessions += sessions;
+      page.pinterestEngagedSessions += metric('engagedSessions');
+      page.pinterestEngagementSeconds += metric('userEngagementDuration');
+    }
     pages.set(url, page);
   }
   return pages;
@@ -60,6 +67,7 @@ function buildAnalyticsSnapshot({ current, previous, config, now = new Date() })
     return {
       ...page,
       previousSessions: before,
+      pinterestEngagementRate: page.pinterestSessions ? Math.min(1, page.pinterestEngagedSessions / page.pinterestSessions) : null,
       growthPercent: before >= 30 ? Math.round((page.sessions - before) / before * 100) : null,
       engagementRate: page.sessions ? Math.min(1, page.engagedSessions / page.sessions) : 0,
       averageEngagementSeconds: page.sessions ? Math.round(page.engagementSeconds / page.sessions) : 0,
@@ -70,7 +78,8 @@ function buildAnalyticsSnapshot({ current, previous, config, now = new Date() })
     ...config, fetchedAt: now.toISOString(), range: analyticsDateRanges(now, 28),
     timeZone: current.metadata?.timeZone || '',
     limited: [current, previous].some((report) => report.metadata?.subjectToThresholding || report.metadata?.dataLossFromOtherRow || report.metadata?.samplingMetadatas?.some((sample) => Number(sample.samplesReadCount) < Number(sample.samplingSpaceSize))),
-    pages
+    pages,
+    creatives: creativeSessions(current, config.siteUrl)
   };
 }
 
@@ -85,7 +94,7 @@ async function fetchAnalyticsSnapshot({ settings, token, request, now = new Date
     for (let offset = 0; offset < 20000; offset += 5000) {
       const response = await request(`https://analyticsdata.googleapis.com/v1beta/properties/${config.propertyId}:runReport`, {
         dateRanges: [range],
-        dimensions: [{ name: 'landingPagePlusQueryString' }, { name: 'sessionSourceMedium' }],
+        dimensions: [{ name: 'landingPagePlusQueryString' }, { name: 'sessionSourceMedium' }, { name: 'sessionManualAdContent' }],
         metrics: [{ name: 'sessions' }, { name: 'engagedSessions' }, { name: 'userEngagementDuration' }],
         dimensionFilter: { filter: { fieldName: 'hostName', stringFilter: { matchType: 'EXACT', value: new URL(config.siteUrl).hostname, caseSensitive: false } } },
         limit: 5000, offset, orderBys: [{ metric: { metricName: 'sessions' }, desc: true }]
@@ -130,4 +139,23 @@ function websiteEvidence(workspace, topic = '') {
   return (workspace.recommendations || []).filter((entry) => entry.sessions >= 30 && [...tokens].filter((word) => new RegExp(`\\b${word}\\b`, 'i').test(`${entry.title} ${entry.topic}`)).length >= 2).slice(0, 8);
 }
 
-module.exports = { analyticsConfig, articleUrl, aggregateReport, buildAnalyticsSnapshot, fetchAnalyticsSnapshot, analyticsWorkspace, websiteEvidence };
+function creativeSessions(report, siteUrl) {
+  const dimensions = (report.dimensionHeaders || []).map(h => h.name), metrics = (report.metricHeaders || []).map(h => h.name);
+  if (!dimensions.includes('sessionManualAdContent')) return null;
+  const groups = new Map();
+  for (const row of report.rows || []) {
+    const dim = name => row.dimensionValues?.[dimensions.indexOf(name)]?.value || '';
+    if (!isPinterestSource(dim('sessionSourceMedium'))) continue;
+    const url = articleUrl(dim('landingPagePlusQueryString'), siteUrl); if (!url) continue;
+    const creative = dim('sessionManualAdContent'), key = `${url}|${creative}`;
+    const g = groups.get(key) || { url, creative, sessions: 0, engagedSessions: 0 };
+    for (const field of ['sessions', 'engagedSessions']) {
+      const count = Number(row.metricValues?.[metrics.indexOf(field)]?.value);
+      if (!Number.isFinite(count) || count < 0) throw new Error('Invalid creative session count.');
+      g[field] += count;
+    }
+    groups.set(key, g);
+  }
+  return [...groups.values()];
+}
+module.exports = { analyticsConfig, articleUrl, aggregateReport, buildAnalyticsSnapshot, fetchAnalyticsSnapshot, analyticsWorkspace, websiteEvidence, isPinterestSource, creativeSessions };

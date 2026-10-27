@@ -7,8 +7,8 @@ const { createTextChecker } = require('./pin-text-check');
 const { renderExactTemplate } = require('./exact-pin-template');
 const { analyticsConfig } = require('./google-analytics');
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
-function createQualityWorkspace({ store, ledger, readMedia, sharp, mediaDirectory, displayUrl, cachePath, saveFile, fetchPage, refreshEvents, pluginFiles, releaseInfo, encrypt, decrypt, readPublicImage, readReceipt, workerFiles }) {
-  const operations = require('./content-operations').createContentOperations({ store, ledger, saveFile, readMedia });
+function createQualityWorkspace({ store, ledger, readMedia, sharp, mediaDirectory, displayUrl, cachePath, saveFile, fetchPage, refreshEvents, pluginFiles, releaseInfo, encrypt, decrypt, readPublicImage, readReceipt, workerFiles, readModelMetadata, readArchive }) {
+  const operations = require('./content-operations').createContentOperations({ store, ledger, saveFile, readMedia, readArchive });
   let checker;
   const get = () => ({ reports: {}, collections: [], ...store.get('qualityWorkspace', {}) });
   const save = d => store.set('qualityWorkspace', d);
@@ -25,6 +25,13 @@ function createQualityWorkspace({ store, ledger, readMedia, sharp, mediaDirector
   async function run(action, params = {}) {
     if (typeof action === 'string' && action.startsWith('content:')) return operations.run(action.slice(8), params);
     switch (action) {
+      case 'model-readiness': {
+        if (!/^[a-z0-9][a-z0-9_-]{0,80}\/[a-z0-9][a-z0-9._-]{0,100}$/i.test(params.model || '')) throw new Error('Enter a provider model name as owner/model.');
+        if (!readModelMetadata) throw new Error('Model metadata checks are unavailable in this build.');
+        const metadata = await readModelMetadata(params.model);
+        const input = metadata?.latest_version?.openapi_schema?.components?.schemas?.Input;
+        return { model: params.model, checkedAt: new Date().toISOString(), version: metadata?.latest_version?.id || null, status: input?.properties ? 'metadata-available' : 'input-schema-unavailable', requiredInputs: input?.required || [], inputNames: Object.keys(input?.properties || {}), paidPredictionsSubmitted: 0, limitation: 'Metadata access does not prove output quality, price or prediction availability.' };
+      }
       case 'snapshot': {
         const d = get(); let config = {}, analyticsError = '';
         try { config = analyticsConfig(store.get('settings', {})); } catch (error) { analyticsError = error.message; }
@@ -53,7 +60,7 @@ function createQualityWorkspace({ store, ledger, readMedia, sharp, mediaDirector
       case 'shopping-list': {
         const selected = articles().filter(a => (params.ids || []).includes(a.id));
         if (!selected.length) throw new Error('Select recipes first.');
-        return saveFile('recipe-shopping-list.html', Buffer.from(shoppingHtml(selected, Number(params.multiplier || 1))), [{ name: 'Printable Shopping List', extensions: ['html'] }]);
+        return saveFile('recipe-shopping-list.html', Buffer.from(shoppingHtml(selected, Number(params.multiplier ?? 1))), [{ name: 'Printable Shopping List', extensions: ['html'] }]);
       }
       case 'source-recipe': {
         const result = await fetchPage(String(params.url || ''));
@@ -89,12 +96,15 @@ function createQualityWorkspace({ store, ledger, readMedia, sharp, mediaDirector
         const { p, bytes } = await artwork(params.id);
         if (p.imageSourceMode !== 'reuse-article' && p.imageQa?.overlayVerified !== false && params.cleanPhotoConfirmed !== true) throw new Error('Use a clean photograph. Confirm it has no existing lettering before adding another headline.');
         if (params.cleanPhotoConfirmed !== true) throw new Error('Confirm the selected photo contains no lettering.');
-        const output = await renderExactTemplate({ sharp, bytes, text: String(params.text || ''), placement: params.placement, fontData: await fs.readFile(path.join(__dirname, 'assets/fonts/Montserrat-Bold.ttf')) });
+        const ratio = params.ratio || '9:16';
+        if (!['9:16', '2:3'].includes(ratio)) throw new Error('Choose 9:16 or 2:3 portrait.');
+        const [width, height] = ratio === '2:3' ? [1000, 1500] : [1080, 1920];
+        const output = await renderExactTemplate({ sharp, bytes, width, height, text: String(params.text || ''), placement: params.placement, fontData: await fs.readFile(path.join(__dirname, 'assets/fonts/Montserrat-Bold.ttf')) });
         const id = randomUUID(), localPath = path.join(mediaDirectory(), `exact-pin-${id}.jpg`); await fs.writeFile(localPath, output, { flag: 'wx' });
-        const next = { id, title: p.title, description: p.description, url: p.url, board: p.board, csvBoard: p.csvBoard, interests: p.interests,
+        const next = { id, title: p.title, description: p.description, url: p.url, board: p.board, csvBoard: p.csvBoard, interests: p.interests, articleId: p.articleId, sourceSnapshot: p.sourceSnapshot,
           localPath, displayUrl: displayUrl(localPath), imageUrl: displayUrl(localPath), imageSourceMode: p.imageSourceMode,
           status: 'completed', createdAt: new Date().toISOString(), style: 'local-exact-template', expectedOverlayText: String(params.text),
-          imageQa: { sha256: digest(output), dimensionsVerified: true, width: 1080, height: 1920, overlayVerified: true, safeZoneVerified: true }, templateSourcePinId: p.id };
+          imageQa: { sha256: digest(output), dimensionsVerified: true, width, height, overlayVerified: true, safeZoneVerified: true }, templateSourcePinId: p.id };
         store.set('pinCreatorPins', [next, ...pins()]); return { pin: next };
       }
       case 'spending-configure': return ledger.configure(params);

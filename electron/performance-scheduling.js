@@ -1,5 +1,6 @@
 const DEFAULT_HOURS = [9, 13, 18, 21];
 const { Temporal } = require('@js-temporal/polyfill');
+const { assertTimeZoneData } = require('./timezone-data');
 
 function number(value) {
   const parsed = Number(value);
@@ -27,6 +28,7 @@ function buildPerformanceScheduleProfile(rows = [], { timezone = 'UTC', minimumS
   for (const row of Array.isArray(rows) ? rows : []) {
     const date = rowDate(row, timezone);
     if (!date) continue;
+    assertTimeZoneData(timezone, date.toISOString());
     const pinId = String(row.pinId || row.id || '');
     if (pinId && seenPins.has(pinId)) continue;
     if (pinId) seenPins.add(pinId);
@@ -53,6 +55,7 @@ function buildPerformanceScheduleProfile(rows = [], { timezone = 'UTC', minimumS
 
 function nextPerformanceSlots(count, { start = new Date(), intervalHours = 2, preferredHours = DEFAULT_HOURS, pinsPerDay = 8, maximumDate = null, timezone = 'UTC' } = {}) {
   Temporal.Now.zonedDateTimeISO(timezone);
+  assertTimeZoneData(timezone, new Date(start).toISOString());
   if (!Number.isFinite(Number(intervalHours)) || Number(intervalHours) < 1 || !Number.isInteger(Number(pinsPerDay)) || pinsPerDay < 1) throw new Error('Choose a positive daily limit and an interval of at least one hour.');
   const safeCount = Math.max(0, Math.min(1000, Number(count) || 0));
   const hours = [...new Set((preferredHours || DEFAULT_HOURS).map(Number).filter((hour) => Number.isInteger(hour) && hour >= 0 && hour <= 23))].sort((a, b) => a - b);

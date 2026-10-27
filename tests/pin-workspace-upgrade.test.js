@@ -384,10 +384,13 @@ test("daylight saving rejects ambiguous and missing local times, handles explici
     utcTime("2026-11-01T01:30-04:00", "America/New_York"),
     "2026-11-01T05:30:00Z",
   );
-  assert.equal(
-    utcTime("2026-10-12T10:00", "Africa/Casablanca"),
-    "2026-10-12T09:00:00Z",
-  );
+  if (require('../electron/timezone-data').hasCurrentMoroccoRules()) {
+    assert.equal(utcTime('2026-10-12T10:00', 'Africa/Casablanca'), '2026-10-12T10:00:00Z');
+  } else {
+    assert.throws(() => utcTime('2026-10-12T10:00', 'Africa/Casablanca'), /outdated Morocco timezone rules/);
+  }
+  assert.equal(utcTime('2026-10-12T10:00Z', 'Africa/Casablanca'), '2026-10-12T10:00:00Z');
+  assert.equal(utcTime('2025-10-12T10:00', 'Africa/Casablanca'), '2025-10-12T09:00:00Z');
 });
 test("overdue queue honors minimum interval rather than burst publishing", async () => {
   const f = fixture();
@@ -722,4 +725,32 @@ test("REST requires scoped bearer token and rejects browser origins", async () =
   } finally {
     api.stop();
   }
+});
+test("restored API accounts sync boards once per session instead of on every tick", async () => {
+  const store = memory();
+  let clock = time, syncs = 0;
+  const account = { id: "pinterest:a", username: "owner", connected: true, accessTier: "standard",
+    boards: [{ id: "1", name: "Food", sections: [] }],
+    schedule: { timezone: "UTC", dailyLimit: 10, intervalMinutes: 60, windows: [{ start: "00:00", end: "23:59" }] } };
+  const first = createPinWorkspace({ store, now: () => clock, provider: {} });
+  const data = first.get();
+  data.accounts = [account];
+  data.assets = [{ id: "img", kind: "image", sha256: "hash", provenance: "original" }];
+  first.save(data);
+  const pin = first.writeDraft({ accountId: account.id, title: "Soup", description: "A real soup recipe.", destination: "https://example.com/soup", altText: "Soup", assetId: "img", boardId: "1" });
+  first.review({ ids: [pin.id], action: "approve" });
+  first.schedule({ ids: [pin.id], accountId: account.id, startAt: "2026-10-12T09:00:00Z" });
+  // A restart drops session-only boards; the account now returns no boards.
+  const restarted = createPinWorkspace({ store, now: () => clock, provider: {
+    syncBoards: async () => { syncs++; return { boards: [], sampled: false, syncedAt: new Date(clock).toISOString() }; },
+    publish: async () => assert.fail("must not publish without a synchronized board"),
+  } });
+  assert.equal(restarted.get().accounts[0].boards, undefined);
+  restarted.setEnabled(true);
+  clock = time + 3600000;
+  await restarted.tick();
+  await restarted.tick();
+  await restarted.tick();
+  assert.equal(syncs, 1);
+  assert.match(restarted.get().jobs[0].error, /synchronized board/);
 });

@@ -14,7 +14,7 @@ async function main() {
     for (const script of ['test-pinterest-schedule-ui.cjs', 'test-content-operations-ui.cjs', 'test-quality-studio-ui.cjs', 'test-recipe-reader-ui.cjs', 'test-analytics-meta-ui.cjs', 'test-pasted-queue-ui.cjs']) {
       console.log(`UI checks: ${script}`);
       const code = await new Promise((resolve, reject) => {
-        const child = spawn(process.execPath, [path.join(__dirname, script)], { stdio: 'inherit', windowsHide: true, env: { ...process.env, CONTENT_STUDIO_UI_TEST_PORT: String(server.httpServer.address().port) } });
+        const child = spawn(process.execPath, [path.join(__dirname, script)], { stdio: 'inherit', windowsHide: true, env: { ...process.env, ...(process.platform === 'win32' && !process.env.PLAYWRIGHT_CHANNEL ? { PLAYWRIGHT_CHANNEL: 'msedge' } : {}), CONTENT_STUDIO_UI_TEST_PORT: String(server.httpServer.address().port) } });
         const timeout = setTimeout(() => { child.kill(); reject(new Error(`${script} exceeded five minutes.`)); }, 300000);
         child.once('error', error => { clearTimeout(timeout); reject(error); });
         child.once('exit', code => { clearTimeout(timeout); resolve(code); });

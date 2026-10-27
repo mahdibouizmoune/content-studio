@@ -3,7 +3,6 @@
 const { parse } = require('csv-parse/sync');
 const { stringify } = require('csv-stringify/sync');
 const { TextDecoder } = require('node:util');
-const { toAscii } = require('./ascii.js');
 const { isSafeRemoteMediaUrl } = require('./media-security');
 
 const PINTEREST_CSV_HEADERS = Object.freeze(['Title', 'Media URL', 'Pinterest board', 'Thumbnail', 'Description', 'Link', 'Publish date', 'Keywords']);
@@ -35,7 +34,9 @@ function truncateAtWordBoundary(value, maximum) {
 }
 
 function normalizePublicUrl(value) {
-  return sanitizePinterestCsvValue(value).replace(/&(?:amp;|#0*38;|#x0*26;)/gi, '&');
+  const text = sanitizePinterestCsvValue(value).replace(/&(?:amp;|#0*38;|#x0*26;)/gi, '&');
+  try { return /^https?:\/\//i.test(text) && !/\s|[\\<>]/u.test(text) ? new URL(text).href : text; }
+  catch { return text; }
 }
 
 function isPublicUrl(value) {
@@ -62,7 +63,7 @@ function isTemporaryPinterestMediaUrl(value = '') {
 function normalizePinterestKeywords(value) {
   const seen = new Set();
   return (Array.isArray(value) ? value : sanitizePinterestCsvValue(value).split(','))
-    .map((item) => toAscii(sanitizePinterestCsvValue(item)))
+    .map((item) => sanitizePinterestCsvValue(item))
     .filter((item) => {
       const key = item.toLowerCase();
       if (!key || seen.has(key) || /\b(?:than|with|for|and|the|at|of|to|in|on|by)$/i.test(item)) return false;
@@ -99,9 +100,9 @@ function normalizePinterestRow(row = [], options = {}) {
   const cells = Array.isArray(row) ? row : PINTEREST_CSV_HEADERS.map((header) => row?.[header]);
   const mediaUrl = normalizePublicUrl(cells[1]);
   return [
-    truncateAtWordBoundary(toAscii(sanitizePinterestCsvValue(cells[0])), 100), mediaUrl, toAscii(sanitizePinterestCsvValue(cells[2])),
+    truncateAtWordBoundary(sanitizePinterestCsvValue(cells[0]), 100), mediaUrl, sanitizePinterestCsvValue(cells[2]),
     mediaExtension(mediaUrl) === '.mp4' ? normalizePublicUrl(cells[3]) : '',
-    truncateAtWordBoundary(toAscii(sanitizePinterestCsvValue(cells[4])), 500), normalizePublicUrl(cells[5]),
+    truncateAtWordBoundary(sanitizePinterestCsvValue(cells[4]), 500), normalizePublicUrl(cells[5]),
     options.deferDate ? cells[6] : normalizePinterestPublishDate(cells[6], options),
     normalizePinterestKeywords(cells[7])
   ];
@@ -112,7 +113,7 @@ function validatePinterestRows(rows = [], boardNames = [], options = {}) {
   const warnings = [];
   const now = Number(options.now ?? Date.now());
   const inputRows = Array.isArray(rows) ? rows : [];
-  const boards = new Set(boardNames.map((name) => toAscii(sanitizePinterestCsvValue(name))));
+  const boards = new Set(boardNames.map((name) => sanitizePinterestCsvValue(name)));
   const seenMedia = new Map();
   const issue = (index, row, field, rule, message, level = 'error') => ({
     row: index + 1, rowIndex: index + 1, title: row[0], field, rule, message, level
@@ -146,8 +147,6 @@ function validatePinterestRows(rows = [], boardNames = [], options = {}) {
     if (row[1] && seenMedia.has(row[1])) add('Media URL', 'duplicate_media', `Media URL duplicates row ${seenMedia.get(row[1])}.`);
     else if (row[1]) seenMedia.set(row[1], index + 1);
     row.forEach((cell, columnIndex) => {
-      const nonAscii = String(cell).match(/[^\x00-\x7f]/u)?.[0];
-      if (nonAscii) add(PINTEREST_CSV_HEADERS[columnIndex], 'non_ascii', `Non-ASCII character ${JSON.stringify(nonAscii)} U+${nonAscii.codePointAt(0).toString(16).toUpperCase()} must be encoded upstream.`);
       if (CONTROL.test(cell)) add(PINTEREST_CSV_HEADERS[columnIndex], 'control_character', 'Unexpected control character survived normalization.');
     });
     return row;
@@ -174,10 +173,6 @@ function assertPinterestCsvBytes(bytes, expectedRows, options = {}) {
   const records = parse(text, { bom: false, relax_quotes: false, relax_column_count: false });
   if (records.length - 1 !== expectedRows) throw new Error(`Pinterest CSV row count mismatch: expected ${expectedRows}, read ${records.length - 1}.`);
   const data = records.slice(1);
-  data.forEach((row, index) => row.forEach((cell, column) => {
-    const character = cell.match(/[^\x00-\x7f]/u)?.[0];
-    if (character) throw new Error(`Row ${index + 1} ${PINTEREST_CSV_HEADERS[column]}: non-ASCII ${JSON.stringify(character)} U+${character.codePointAt(0).toString(16).toUpperCase()}`);
-  }));
   const validation = validatePinterestRows(data, [], options);
   if (!validation.valid) throw new Error(`Pinterest CSV validation failed: ${validation.errors.map((error) => `Row ${error.rowIndex} ${error.field}: ${error.message}`).join('\n')}`);
   if (JSON.stringify(data) !== JSON.stringify(validation.rows)) throw new Error('Pinterest CSV contains unnormalized field values.');

@@ -1,3 +1,5 @@
+import editorialRules from '../../electron/assets/editorial-rules.json' with { type: 'json' };
+
 function stripHtml(value = "") {
   return String(value || "")
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
@@ -77,23 +79,30 @@ export function buildArticleQualityReport(article = {}, options = {}) {
   const linkedRecords = (Array.isArray(article.internalLinks) ? article.internalLinks : [])
     .map((item) => item?.url)
     .filter(Boolean);
-  const internalLinks = [...new Set([...links, ...linkedRecords].filter((url) => {
-    if (String(url).startsWith("/")) return true;
+  const isInternal = (url) => {
+    if (String(url).startsWith('#')) return false;
+    if (!siteOrigin) return String(url).startsWith('/') && !String(url).startsWith('//');
     try {
-      return Boolean(siteOrigin) && new URL(url).origin === siteOrigin;
+      return new URL(url, siteOrigin).origin === siteOrigin;
     } catch {
       return false;
     }
-  }))];
-  const duplicateLinks = internalLinks.filter((url, index) => internalLinks.indexOf(url) !== index);
+  };
+  const contentInternalLinks = links.filter(isInternal).map(url => {
+    try { const parsed = new URL(url, siteOrigin || 'https://local.invalid'); parsed.hash = ''; return parsed.href; }
+    catch { return url; }
+  });
+  const internalLinks = [...new Set([...links, ...linkedRecords].filter(isInternal))];
+  const duplicateLinks = contentInternalLinks.filter((url, index) => contentInternalLinks.indexOf(url) !== index);
   const affiliateLinks = Array.isArray(article.affiliateLinks) ? article.affiliateLinks : [];
   const disclosureReady = !affiliateLinks.length || article.affiliateDisclosureApplied === true || /affiliate|commission/i.test(content);
   const recipe = recipeFacts(article, content);
   const wantsRecipe = article.recipeCardEnabled !== false && (
-    recipe.hasCard
+    article.recipeCardEnabled === true || recipe.hasCard
     || article.articleBrief?.recipeRequirements?.completeRecipeCard === true
   );
   const unresolvedPlaceholders = /\[(?:insert|add|recipe name|ingredient|time|number|description|step)[^\]]*\]|\{\{[^}]+\}\}|\$\{[^}]+\}/i.test(content);
+  const promptLeak = editorialRules.promptLeakPatterns.some(pattern => new RegExp(pattern, 'i').test(text));
   const firstHandClaim = /\b(?:i|we)\s+(?:tested|reviewed|tried|found in our tests|personally use)\b/i.test(text);
   const inventedRatingPattern = /\b\d(?:\.\d)?\s*(?:out of 5|stars?)\b/i.test(text) && !article.userProvidedRating;
   const roboticPhrases = (lower.match(/\b(?:in today's fast-paced world|delve into|culinary journey|food lovers rejoice|game-changer)\b/g) || []).length;
@@ -142,6 +151,7 @@ export function buildArticleQualityReport(article = {}, options = {}) {
       { ok: !firstHandClaim, weight: 2, issue: issue("unsupported-first-hand-claim", "The draft claims personal testing or experience that was not supplied.", "Remove the claim or attach user-provided evidence.", "critical") },
       { ok: !inventedRatingPattern, weight: 2, issue: issue("unsupported-rating", "The draft appears to include an unsupported rating.", "Remove ratings and review counts unless they are verified user data.", "critical") },
       { ok: !unresolvedPlaceholders, weight: 2, issue: issue("unresolved-placeholder", "The draft still contains placeholder text.", "Replace every placeholder with verified content.", "critical") },
+      { ok: !promptLeak, weight: 2, issue: issue("prompt-leak", "Generation instructions appear in reader-facing copy.", "Remove the instruction text and review the opening and excerpt.", "critical") },
       { ok: !/\b(?:guaranteed|miracle|cure|detoxes|melts fat)\b/i.test(text), issue: issue("unsupported-claim", "The draft contains an exaggerated or potentially unsupported claim.", "Use cautious, factual language and flag claims that need sources.", "critical") }
     ]),
     scoreCategory("recipe", "Recipe validity", [

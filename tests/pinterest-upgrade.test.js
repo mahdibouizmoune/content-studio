@@ -9,18 +9,19 @@ const { hasPinterestDimensions } = require('../electron/pinterest-delivery');
 const { parse } = require('csv-parse/sync');
 const row = (media = 'https://example.com/pin.jpg') => ['Cafe recipe', media, 'Recipes', '', 'It\u2019s saut\u00e9ed, en cro\u00fbte \u2014 yummy \ud83c\udf4b', 'https://example.com/recipe', '', 'cafe, Cafe, better than, meal prep'];
 
-test('CSV boundary transliterates every text field without corrupting URLs', async () => {
+test('CSV boundary preserves UTF-8 text and encodes URL paths without corrupting destinations', async () => {
   const bytes = serializePinterestCsv([row()]);
-  assert.ok([...bytes].every((byte) => byte < 128));
+  assert.ok(bytes.includes(Buffer.from('\u00e9')));
   assert.ok(!bytes.includes(Buffer.from([0xef, 0xbb, 0xbf])));
   assert.doesNotMatch(bytes.toString(), /(?<!\r)\n/);
   assert.equal(parse(bytes)[1].length, 8);
-  assert.equal(parse(bytes)[1][4], "It's sauteed, en croute - yummy");
+  assert.equal(parse(bytes)[1][4], row()[4]);
   assert.equal(normalizePinterestKeywords(row()[7]), 'cafe, meal prep');
   assert.equal(toAscii('caf\u00e9 latte'), 'cafe latte');
   const { slugify } = await import('../src/lib/articlePostProcess.mjs');
   assert.equal(slugify('caf\u00e9 latte'), 'cafe-latte');
-  assert.equal(validatePinterestRows([row('https://example.com/caf\u00e9.jpg')]).valid, false);
+  const encoded = validatePinterestRows([row('https://example.com/caf\u00e9.jpg')]);
+  assert.equal(encoded.valid, true); assert.equal(encoded.rows[0][1], 'https://example.com/caf%C3%A9.jpg');
 });
 
 test('Replicate requires explicit opt-in and cannot carry delayed schedules', () => {
