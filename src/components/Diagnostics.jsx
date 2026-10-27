@@ -45,10 +45,15 @@ export default function Diagnostics() {
 
   async function checkUpdate() {
     setBusy("update");
-    const result = await electronAPI.checkForAppUpdate?.();
-    setUpdate(result?.state || update);
-    setStatus(result?.success ? "Update check started." : result?.error || "Could not check for updates.");
-    setBusy("");
+    try {
+      const result = await electronAPI.checkForAppUpdate?.();
+      setUpdate(result?.state || update);
+      setStatus(result?.success ? "Update check started." : result?.error || "Could not check for updates.");
+    } catch (error) {
+      setStatus(error.message || "Could not check for updates.");
+    } finally {
+      setBusy("");
+    }
   }
 
   async function copyReport() {

@@ -48,14 +48,23 @@ function parseRecipeCard(html = '') {
   };
 }
 
+const UNICODE_FRACTIONS = { '¼': 0.25, '½': 0.5, '¾': 0.75, '⅓': 1 / 3, '⅔': 2 / 3 };
+// "1 1/2 hours", "1/2 hour" and "1½ hours" become decimals before unit matching.
+function decimalFractions(value = '') {
+  return String(value)
+    .replace(/(\d+)?\s*([¼½¾⅓⅔])/g, (_, whole, fraction) => String(Number(whole || 0) + UNICODE_FRACTIONS[fraction]))
+    .replace(/(?:(\d+)\s+)?(\d+)\s*\/\s*(\d+)/g, (match, whole, numerator, denominator) => Number(denominator) ? String(Number(whole || 0) + Number(numerator) / Number(denominator)) : match);
+}
+
 function durationMinutes(value = '') {
+  value = decimalFractions(value);
   const values = [...String(value).matchAll(/(\d+(?:\.\d+)?)(?:\s*[-\u2013]\s*(\d+(?:\.\d+)?))?\s*(weeks?|days?|hours?|hrs?|minutes?|mins?|seconds?|secs?)\b/gi)];
   if (!values.length || /^\s*-/.test(String(value))) return null;
   return values.reduce((sum, match) => sum + Number(match[2] || match[1]) * (/^w/i.test(match[3]) ? 10080 : /^d/i.test(match[3]) ? 1440 : /^h/i.test(match[3]) ? 60 : /^s/i.test(match[3]) ? 1 / 60 : 1), 0);
 }
 
 function positiveYield(value = '') {
-  const match = String(value).match(/^(?:(?:about|approximately|approx\.?|makes)\s+)?(\d+(?:\.\d+)?)(?:\s*\/\s*(\d+))?/i);
+  const match = String(value).match(/^(?:(?:about|approximately|approx\.?|makes|serves|yields?|servings:?)\s+)?(\d+(?:\.\d+)?)(?:\s*\/\s*(\d+))?/i);
   return Boolean(match && Number(match[1]) > 0 && (!match[2] || Number(match[2]) > 0));
 }
 

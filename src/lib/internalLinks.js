@@ -125,6 +125,24 @@ function linkSentence(suggestion, index) {
   return templates[index % templates.length].replace("{link}", link);
 }
 
+// Character ranges of recipe cards, so links are never inserted into card notes or descriptions.
+function recipeCardRanges(html = "") {
+  const ranges = [];
+  for (const open of html.matchAll(/<(section|div)\b[^>]*\b(?:id=["']recipe-card[^"']*["']|class=["'][^"']*\brecipe-card\b[^"']*["'])[^>]*>/gi)) {
+    const tag = open[1].toLowerCase();
+    const pattern = new RegExp(`<\\/?${tag}\\b[^>]*>`, "gi");
+    pattern.lastIndex = open.index + open[0].length;
+    let depth = 1;
+    let end = html.length;
+    for (let match = pattern.exec(html); match; match = pattern.exec(html)) {
+      depth += match[0][1] === "/" ? -1 : 1;
+      if (!depth) { end = match.index + match[0].length; break; }
+    }
+    ranges.push([open.index, end]);
+  }
+  return ranges;
+}
+
 export function applyInternalLinksToHtml(html = "", suggestions = []) {
   let next = String(html || "");
   const candidates = suggestions.filter((suggestion) => suggestion?.url && suggestion?.anchor && !hasLink(next, suggestion.url));
@@ -134,8 +152,10 @@ export function applyInternalLinksToHtml(html = "", suggestions = []) {
   const usedParagraphs = new Set();
 
   candidates.forEach((suggestion, index) => {
+    const cards = recipeCardRanges(next);
     const currentParagraphs = [...next.matchAll(/<p\b[^>]*>[\s\S]*?<\/p>/gi)]
-      .filter((match) => !/<a\s/i.test(match[0]) && !/jump-to-recipe|recipe-card/i.test(match[0]));
+      .filter((match) => !/<a\s/i.test(match[0]) && !/jump-to-recipe|recipe-card/i.test(match[0])
+        && !cards.some(([start, end]) => match.index >= start && match.index < end));
     const suggestionTokens = tokens([suggestion.title, suggestion.anchor, (suggestion.categories || []).join(" ")].join(" "));
     const selected = currentParagraphs
       .map((match, paragraphIndex) => ({

@@ -103,7 +103,7 @@ export default function VideoStudio({ settings }) {
       });
       if (result?.success) {
         setVideos(result.videos || (result.video ? [result.video, ...videos] : videos));
-        setStatus("Video generated and saved locally.");
+        setStatus(result.warning || "Video generated and saved locally.");
       } else {
         setStatus(result?.error || "Video generation failed.");
       }

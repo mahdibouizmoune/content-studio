@@ -253,10 +253,14 @@ function AttributionView({ articles, workspace, saveRecord }) {
   }, new Map());
 
   async function importCsv() {
-    const result = await electronAPI.importRevenueCsv();
-    if (!result?.success) return;
-    for (const row of result.rows || []) await saveRecord("revenueRecords", row, false);
-    setStatus(`Imported ${result.rows?.length || 0} sourced revenue row${result.rows?.length === 1 ? "" : "s"} from ${result.fileName}.`);
+    try {
+      const result = await electronAPI.importRevenueCsv();
+      if (!result?.success) return;
+      for (const row of result.rows || []) await saveRecord("revenueRecords", row, false);
+      setStatus(`Imported ${result.rows?.length || 0} sourced revenue row${result.rows?.length === 1 ? "" : "s"} from ${result.fileName}. Re-importing the same report updates these rows.`);
+    } catch (error) {
+      setStatus(error.message || "Could not import the revenue CSV.");
+    }
   }
 
   return (

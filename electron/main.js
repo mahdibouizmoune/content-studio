@@ -4076,8 +4076,12 @@ secureIpcHandle('refresh-ghl-publishing-status', async () => {
     }));
     refreshed.push(...results);
   }
-  store.set('performance.ghlReceipts', refreshed);
-  return { success: true, receipts: refreshed };
+  // Merge into the latest receipts: older receipts (beyond 200) and receipts saved by a
+  // concurrent upload keep their idempotency keys, which prevent duplicate posts.
+  const byId = new Map(refreshed.map((receipt) => [String(receipt.id), receipt]));
+  const merged = store.get('performance.ghlReceipts', []).map((receipt) => byId.get(String(receipt.id)) || receipt);
+  store.set('performance.ghlReceipts', merged);
+  return { success: true, receipts: merged };
 });
 
 async function runPostPublishQa({ articleId = '', url = '' } = {}) {
@@ -8863,8 +8867,16 @@ secureIpcHandle('generate-video', async (e, {
     });
         const remoteVideoUrl = extractReplicateOutputUrl(output);
         if (!remoteVideoUrl) throw new Error('Video generated, but Replicate did not return a downloadable URL.');
-        const localPath = await downloadVideo(remoteVideoUrl, prompt);
+        // The prediction is already paid for: keep the provider URL even when the local copy fails.
+        let localPath = '';
+        let downloadError = '';
+        try { localPath = await downloadVideo(remoteVideoUrl, prompt); }
+        catch (error) {
+          downloadError = `Saved the provider link, but the local copy failed: ${error.message || 'download error'}. Provider links expire; download it soon.`;
+          logProviderError('Video download failed:', error);
+        }
         const record = videoRecordWithDisplay({
+          downloadError,
           id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
           prompt: input.prompt,
           image: input.image || input.first_frame_image || '',
@@ -8884,7 +8896,7 @@ secureIpcHandle('generate-video', async (e, {
         });
         const existing = store.get('generatedVideos', []);
         store.set('generatedVideos', [record, ...existing].slice(0, 200));
-        return { success: true, video: record, videos: store.get('generatedVideos', []).map(videoRecordWithDisplay) };
+        return { success: true, video: record, warning: downloadError, videos: store.get('generatedVideos', []).map(videoRecordWithDisplay) };
   } catch (err) {
     if (err.message === 'Cancelled by user') return { success: false, error: 'Cancelled', cancelled: true };
     logProviderError('Video generation failed:', err);
@@ -9535,6 +9547,10 @@ secureIpcHandle('push-to-wordpress', async (e, { article, site }) => {
     ...item, ...recipe.patch, ...(recipe.success ? { errorMessage: '' } : { workflowStatus: 'needs-review', errorMessage: recipe.patch.recipeCardQualityWarning }), updatedAt: new Date().toISOString()
   } : item));
   if (!recipe.success) throw new Error(`RECIPE_REVIEW_REQUIRED: ${recipe.patch.recipeCardQualityWarning}`);
+  // An AI-repaired card is new reader copy; check it for leaked instructions before it goes live.
+  if (recipe.repaired && hasEditorialInstructionLeak(publishingArticle.content)) {
+    throw new Error('EDITORIAL_REVIEW_REQUIRED: The repaired recipe card contains generation instructions. Review it before publishing. No post was submitted.');
+  }
   const mediaWarnings = [];
   const newlyUploadedMediaIds = [];
   const settings = store.get('settings', {});
