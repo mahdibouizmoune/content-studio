@@ -84,3 +84,21 @@ test('re-importing the same revenue report reuses row IDs instead of duplicating
   assert.deepEqual(first, again);
   assert.equal(new Set(first).size, 3, 'identical rows in one file stay separate');
 });
+
+test('Meta 4:5 images fit the whole Pin over a blurred copy so headline and button are never cut', async () => {
+  const sharp = require('sharp');
+  const { renderMetaPortrait } = require('../electron/meta-portrait');
+  const band = (top, height, background) => ({ input: { create: { width: 1080, height, channels: 3, background } }, top, left: 0 });
+  // A 1080 x 1920 Pin: red headline band at the very top, blue button band at the very bottom.
+  const pin = await sharp({ create: { width: 1080, height: 1920, channels: 3, background: { r: 0, g: 200, b: 0 } } })
+    .composite([band(0, 120, { r: 220, g: 0, b: 0 }), band(1800, 120, { r: 0, g: 0, b: 220 })]).png().toBuffer();
+  const output = await renderMetaPortrait(sharp, pin, { width: 1080, height: 1350 });
+  const { data, info } = await sharp(output).raw().toBuffer({ resolveWithObject: true });
+  assert.equal(info.width, 1080); assert.equal(info.height, 1350);
+  const pixel = (x, y) => { const i = (y * info.width + x) * info.channels; return { r: data[i], g: data[i + 1], b: data[i + 2] }; };
+  assert.ok(pixel(540, 20).r > 150 && pixel(540, 20).g < 80, 'headline band survives at the top');
+  assert.ok(pixel(540, 1330).b > 150 && pixel(540, 1330).g < 80, 'button band survives at the bottom');
+  assert.ok(pixel(540, 675).g > 150, 'subject stays centred');
+  // The full Pin is scaled to ~759 px wide; the side bands are the softened, dimmed copy.
+  assert.ok(pixel(60, 675).g < 190, 'side bands are the dimmed background copy');
+});

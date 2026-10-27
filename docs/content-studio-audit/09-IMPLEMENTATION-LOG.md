@@ -23,6 +23,7 @@ Pinterest board re-sync loop; reconnect sync state; disconnected-during-sync gua
 | Paid video kept with provider URL when local download fails | electron/main.js, src/components/VideoStudio.jsx | Not unit-testable (needs provider) |
 | Revenue CSV re-import updates rows (content-derived IDs) | electron/growth-workspace.js | audit-360: revenue test |
 | Revenue CSV import errors shown; update-check errors no longer leave buttons stuck | src/components/GrowthWorkspace.jsx, Diagnostics.jsx | Screen sweep |
+| Meta 4:5: whole Pin fitted over a blurred, dimmed copy instead of a centre crop; fingerprint `contain-blur:v3` rebuilds old assets | electron/meta-portrait.js, electron/main.js, electron/meta-auto-pack.js, src/components/MetaStudio.jsx | audit-360: pixel test (headline band at top, button band at bottom, dimmed side bands) |
 | Project skills + sweep script | .claude/skills/* | Sweep run from skill folder: 0 problems |
 
 Each new unit test was confirmed to **fail on the original code** (source files stashed) and pass after the fix.

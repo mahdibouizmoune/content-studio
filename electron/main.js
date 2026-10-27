@@ -173,6 +173,7 @@ function logProviderError(context, error, level = 'error') {
 const { buildWordPressPostPayload } = require('./wordpress-payload');
 const { normalizeBatchImportRows } = require('./article-import');
 const { sanitizeWordPressArticleHtml } = require('./wordpress-content');
+const { renderMetaPortrait } = require('./meta-portrait');
 const {
   automaticMetaProject,
   automaticMetaContent,
@@ -4507,11 +4508,8 @@ async function createRepurposeImageVariants({
       for (const format of wantedFormats) {
         const fileName = `${format.id}-${Date.now()}.jpg`;
         const filePath = path.join(folder, fileName);
-        await sharp(buffer)
-          .rotate()
-          .resize(format.width, format.height, { fit: 'cover', position: 'centre' })
-          .jpeg({ quality: 92, mozjpeg: true })
-          .toFile(filePath);
+        // Fit the whole Pin over a blurred copy so headlines and buttons are never cropped.
+        await fsp.writeFile(filePath, await renderMetaPortrait(sharp, buffer, format));
         const renderedMetadata = await sharp(filePath, { animated: false }).metadata();
         if (Number(renderedMetadata.width || 0) !== format.width || Number(renderedMetadata.height || 0) !== format.height) {
           throw new Error(`${format.label} rendered at ${renderedMetadata.width || '?'} x ${renderedMetadata.height || '?'} instead of ${format.width} x ${format.height}.`);

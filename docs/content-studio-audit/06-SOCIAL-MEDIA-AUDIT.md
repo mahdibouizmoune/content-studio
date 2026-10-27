@@ -15,7 +15,7 @@ Platforms present: Facebook and Instagram (scheduled through GoHighLevel), plus 
 
 | Severity | Finding | Evidence | Options |
 |---|---|---|---|
-| High | 4:5 crop is `fit:'cover', position:'centre'`. From a 1080x1920 Pin it removes 285 px top and bottom: top headlines (y≈78) are cut and the bottom "GET THE RECIPE" button disappears | main.js ~4508; pinterest-overlay.js:168, 276 | A) letterbox on a blurred copy of the Pin (keeps all lettering, visible bands); B) geometry-aware crop using saved overlay boxes; C) keep as is |
+| Fixed | 4:5 crop was `fit:'cover', position:'centre'`, removing 285 px top and bottom of a 1080x1920 Pin (headline and "GET THE RECIPE" button cut) | was main.js ~4508 | **Done (your choice A):** whole Pin fitted over a blurred, dimmed copy (`electron/meta-portrait.js`); asset fingerprint bumped to `contain-blur:v3` so old cropped assets are rebuilt |
 | Med | Pin Creator's GHL export/upload calls default to `includeSourceLink = true`, and the repurpose prompt/fallback ask for a "link CTA" | main.js 7473, 7513, 2484, 7337 | Confirm whether Pin Creator GHL rows target Pinterest (links needed) or Facebook (links unwanted) |
 | Med | Dedupe key hashes caption + image URL + schedule, so a re-upload after re-scheduling or re-hosting creates a second post | main.js 3040-3047, 2553 | Add a logical key (article + platform + location) with a warning |
 | Med | Facebook and Instagram captions are nearly identical in the bulk path, with the same three hashtags for every post; the platform-distinct quality check is not applied there | meta-auto-pack.js:60-92; main.js 7139 | Run `metaQuality` in the bulk path; platform-specific templates |
