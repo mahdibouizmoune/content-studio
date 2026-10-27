@@ -3,7 +3,7 @@ const { enforceRecipeCaptions } = require('./meta-captions');
 
 function metaSourceFingerprint(source = {}) {
   source = source || {};
-  return createHash('sha256').update(JSON.stringify([source.kind || '', String(source.pinId || ''), source.localPath || '', source.publicUrl || '', source.sourceRevision || '', '1080x1350:pin-only:cover:centre:v2'])).digest('hex');
+  return createHash('sha256').update(JSON.stringify([source.kind || '', String(source.pinId || ''), source.localPath || '', source.publicUrl || '', source.sourceRevision || '', '1080x1350:pin-only:contain-blur:v3'])).digest('hex');
 }
 
 function text(value = '') {

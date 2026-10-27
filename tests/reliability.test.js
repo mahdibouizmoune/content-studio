@@ -1746,10 +1746,11 @@ test('Meta reuses one Pinterest-first 4:5 image without a new image model call',
   const resizeBlock = resizeStart >= 0 && resizeEnd > resizeStart
     ? mainSource.slice(resizeStart, resizeEnd)
     : '';
-  assert.match(resizeBlock, /\.resize\(format\.width, format\.height/);
+  assert.match(resizeBlock, /renderMetaPortrait\(sharp, buffer, format\)/);
   assert.match(resizeBlock, /sourceAsset.kind !== 'pin'/);
   assert.match(resizeBlock, /requiredWidth: format\.width, requiredHeight: format\.height/);
-  assert.match(resizeBlock, /fit: 'cover', position: 'centre'/);
+  // The 4:5 rendering itself is covered pixel-by-pixel in tests/audit-360.test.js.
+  assert.doesNotMatch(resizeBlock, /fit: 'cover', position: 'centre'/);
   assert.doesNotMatch(resizeBlock, /articleImageSource/);
   assert.doesNotMatch(resizeBlock, /generatePinterestBaseImage|replicateRequest/);
 });
@@ -1884,7 +1885,7 @@ test('Meta uses one cropped Pinterest-first 4:5 image for both platform rows', (
   assert.match(metaSource, /sharedMetaPortrait: true/);
   assert.match(mainSource, /id: 'meta-social-portrait'/);
   assert.match(mainSource, /label: 'Meta Portrait 4:5'/);
-  assert.match(mainSource, /position: 'centre'/);
+  assert.match(mainSource, /renderMetaPortrait/);
   assert.match(mainSource, /asset\.id === metaPortraitFormat\.id/);
 });
 

@@ -859,7 +859,7 @@ export default function MetaStudio({ articles, settings, activeScreen }) {
                 <div className="flex flex-wrap items-end justify-between gap-3">
                   <div>
                     <h3 className="font-black text-slate-900">Pinterest Image for Meta</h3>
-                    <p className="mt-1 text-sm font-semibold text-slate-500">The finished Pinterest Pin is selected first, then center-cropped once to 1080 x 1350 (4:5). Facebook and Instagram share that same image.</p>
+                    <p className="mt-1 text-sm font-semibold text-slate-500">The finished Pinterest Pin is selected first, then fitted whole into 1080 x 1350 (4:5) over a softened copy of itself, so the headline and button are never cut. Facebook and Instagram share that same image.</p>
                   </div>
                   <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-black text-emerald-700">No image credits</span>
                 </div>

@@ -4,7 +4,7 @@ Impact/Effort: H/M/L. Confidence reflects code evidence (C = confirmed in code, 
 
 | Rank | Item | Impact | Effort | Conf. | Approval |
 |---|---|---|---|---|---|
-| 1 | Meta 4:5 crop cuts Pin headlines and CTA — choose letterbox or geometry-aware crop | H | M | C | Yes (visual change) |
+| 1 | ~~Meta 4:5 crop cuts Pin headlines and CTA~~ — done: fit over blurred copy | H | M | C | Approved and done |
 | 2 | Recipe-only rules and paid card repair applied to non-food listicles | H | M | C | Yes (needs paid test) |
 | 3 | Mark AI-invented recipes as untested; require review before Recipe schema | H | M | C+R | Yes (workflow) |
 | 4 | Roundups: `ItemList` + per-recipe `Recipe` schema; remove duplicate microdata | H | M | C+R | No |
