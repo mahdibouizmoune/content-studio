@@ -41,7 +41,9 @@ function experimentReport(experiment, metrics, currentPins) {
   });
   return { ...experiment, variants: mapped, status: mapped.every(v => v.evidence === 'measured' && v.impressions >= 1000) ? 'observational-comparison' : 'insufficient-evidence', limitation: 'Different dates, audiences and distribution may explain differences. No causal winner is declared.' };
 }
-function createContentOperations({ store, ledger, saveFile, readMedia }) {
+function createContentOperations({ store, ledger, saveFile, readMedia, readArchive }) {
+  const evidence = require('./recipe-evidence').createRecipeEvidence({ store, saveFile });
+  const archive = require('./wordpress-archive').createWordPressArchive({ store, readArchive });
   const countCache = new Map();
   const get = () => ({ baselines: {}, recipeRecords: {}, styleVersions: [], benchmarkCases: [], experiments: [], packs: [], costLinks: {}, ...store.get('contentOperations', {}) });
   const save = value => store.set('contentOperations', value);
@@ -87,6 +89,8 @@ function createContentOperations({ store, ledger, saveFile, readMedia }) {
     });
   }
   async function execute(action, p = {}) {
+    if (action.startsWith('evidence:')) return evidence.run(action.slice(9), p);
+    if (action.startsWith('archive:')) return archive.run(action.slice(8), p);
     const d = get();
     switch (action) {
       case 'snapshot': {

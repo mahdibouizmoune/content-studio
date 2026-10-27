@@ -150,6 +150,7 @@ export default function PinPublishingWorkspace({ settings, setActiveScreen, init
       notify: true,
     }),
     [research, setResearch] = useState(null);
+  const activeResearch = research?.accountId === accountId ? research : data?.research.find(r => r.accountId === accountId);
   const [storeForm, setStoreForm] = useState({
       provider: "shopify",
       name: "",
@@ -341,6 +342,7 @@ export default function PinPublishingWorkspace({ settings, setActiveScreen, init
             value={accountId}
             onChange={(e) => {
               setAccountId(e.target.value);
+              setResearch(null);
               const a = data.accounts.find((a) => a.id === e.target.value);
               if (a?.schedule) setConfig(a.schedule);
             }}
@@ -348,7 +350,7 @@ export default function PinPublishingWorkspace({ settings, setActiveScreen, init
             <option value="">Choose account</option>
             {data.accounts.map((a) => (
               <option key={a.id} value={a.id}>
-                {a.username}
+                {a.username || a.id}
                 {a.csvOnly ? " (CSV only)" : ""}
               </option>
             ))}
@@ -470,7 +472,7 @@ export default function PinPublishingWorkspace({ settings, setActiveScreen, init
                     <option value="">Choose account</option>
                     {data.accounts.map((a) => (
                       <option key={a.id} value={a.id}>
-                        {a.username}
+                        {a.username || a.id}
                       </option>
                     ))}
                   </select>
@@ -1520,7 +1522,7 @@ export default function PinPublishingWorkspace({ settings, setActiveScreen, init
               key={a.id}
               className="flex flex-wrap gap-3 items-center border-b py-3"
             >
-              <strong>{a.username}</strong>
+              <strong>{a.username || a.id}</strong>
               <span>
                 {a.connected
                   ? "Connected"
@@ -1638,26 +1640,25 @@ export default function PinPublishingWorkspace({ settings, setActiveScreen, init
               Audit Pinterest Profile
             </Command>
           </div>
-          {(research || data.research[0]) && (
+          {activeResearch && (
             <div className="text-sm space-y-2">
               <p>
-                {(research || data.research[0]).source} /{" "}
-                {(research || data.research[0]).region} /{" "}
-                {(research || data.research[0]).retrievedAt}
+                {activeResearch.source} /{" "}
+                {activeResearch.region} /{" "}
+                {activeResearch.retrievedAt}
               </p>
               <p className="text-amber-700">
-                {(research || data.research[0]).error ||
-                  (research || data.research[0]).limitations}
+                {activeResearch.error || activeResearch.limitations}
               </p>
-              {(research || data.research[0]).volumeError && (
+              {activeResearch.volumeError && (
                 <p className="text-amber-700">
-                  {(research || data.research[0]).volumeError}
+                  {activeResearch.volumeError}
                 </p>
               )}
-              {(research || data.research[0]).relatedKeywords?.length > 0 && (
+              {activeResearch.relatedKeywords?.length > 0 && (
                 <p>
                   Related Pinterest searches:{" "}
-                  {(research || data.research[0]).relatedKeywords
+                  {activeResearch.relatedKeywords
                     .map((k) => k.keyword)
                     .join(", ")}
                 </p>
@@ -1668,26 +1669,30 @@ export default function PinPublishingWorkspace({ settings, setActiveScreen, init
                     <tr className="text-left">
                       <th>Keyword</th>
                       <th>Volume Band</th>
+                      <th>WoW</th>
                       <th>MoM</th>
                       <th>YoY</th>
+                      <th>Forecast</th>
                       <th />
                     </tr>
                   </thead>
                   <tbody>
-                    {(research || data.research[0]).rows.map((r) => (
+                    {activeResearch.rows.map((r) => (
                       <tr key={r.keyword} className="border-b">
                         <td className="py-2">{r.keyword}</td>
                         <td>{r.volumeBand ?? "Unavailable"}</td>
+                        <td>{Number.isFinite(r.weekGrowth) ? `${r.weekGrowth}%` : 'Unavailable'}</td>
                         <td>
-                          {r.monthGrowth === null
+                          {!Number.isFinite(r.monthGrowth)
                             ? "Unavailable"
                             : `${r.monthGrowth}%`}
                         </td>
                         <td>
-                          {r.yearGrowth === null
+                          {!Number.isFinite(r.yearGrowth)
                             ? "Unavailable"
                             : `${r.yearGrowth}%`}
                         </td>
+                        <td>{r.predictedTimeSeries ? <details><summary>Provider forecast</summary><pre className="max-w-64 overflow-auto text-xs">{JSON.stringify(r.predictedTimeSeries, null, 2).slice(0, 5000)}</pre></details> : 'Unavailable'}</td>
                         <td>
                           <Command
                             icon={Plus}

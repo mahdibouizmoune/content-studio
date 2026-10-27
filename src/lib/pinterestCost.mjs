@@ -1,5 +1,5 @@
 export const PINTEREST_IMAGE_COSTS = Object.freeze({
-  ideogram: { label: "Ideogram Turbo", cost: 0.03, verified: true },
+  ideogram: { label: "Ideogram Turbo", cost: 0.03, verified: true, quotedAt: '2026-10-19', source: 'https://replicate.com/ideogram-ai/ideogram-v3-turbo/api' },
   "ideogram-balanced": { label: "Ideogram Balanced", cost: 0.06, verified: true },
   "ideogram-quality": { label: "Ideogram Quality", cost: 0.09, verified: true },
   pruna: { label: "Z-Image Turbo", cost: 0.005, squareCost: 0.01, verified: true },
@@ -37,7 +37,9 @@ export function estimatePinterestPackCost({
   return {
     pinCount: count,
     modelLabel: pricing.label,
-    pricingVerified: pricing.verified,
+    pricingVerified: Boolean(pricing.verified && pricing.quotedAt && pricing.source),
+    priceQuotedAt: pricing.quotedAt || null,
+    priceSource: pricing.source || null,
     imageUnitCost,
     textUnitCost,
     imageCost,

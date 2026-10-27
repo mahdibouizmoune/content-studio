@@ -51,7 +51,7 @@ const { assertSafeRemoteRedirect, isPathInsideRoots, isSafeRemoteMediaUrl } = re
 const { mediaCleanupCandidates, normalizeMediaRetentionDays } = require('./media-retention');
 const { removeArticleImpact } = require('./article-impact-cleanup');
 const { cleanupWordPressPins, eligibleWordPressPins } = require('./wordpress-pin-retention');
-const { READER_RECIPE_GUIDANCE, assessEditorialGaps } = require('./article-editorial');
+const { READER_RECIPE_GUIDANCE, assessEditorialGaps, hasEditorialInstructionLeak } = require('./article-editorial');
 const { createReplicatePoller } = require('./replicate-polling');
 const { createRecipeReadinessService } = require('./article-recipe-readiness');
 const { runSerial, mapBounded } = require('./bounded-work');
@@ -3203,6 +3203,8 @@ async function inspectSearchConsoleUrl(url, property) {
 }
 
 async function fetchPublicHtml(url) {
+  const { assertArticleSource, assertArticleRedirect } = require('./source-policy');
+  assertArticleSource(url);
   if (!isSafeRemoteMediaUrl(url)) throw new Error('The audit URL must be a public HTTP or HTTPS page.');
   const response = await axios.get(url, {
     responseType: 'text',
@@ -3212,10 +3214,11 @@ async function fetchPublicHtml(url) {
     headers: { 'User-Agent': 'ContentStudioRecipeMonitor/1.0', Accept: 'text/html,application/xhtml+xml' },
     httpAgent: safePublicHttpAgent,
     httpsAgent: safePublicHttpsAgent,
-    beforeRedirect: assertSafeRemoteRedirect,
+    beforeRedirect: options => { assertSafeRemoteRedirect(options); assertArticleRedirect(options); },
     validateStatus: () => true
   });
   const finalUrl = String(response.request?.res?.responseUrl || response.config?.url || url);
+  assertArticleSource(finalUrl);
   return {
     html: String(response.data || '').slice(0, 5 * 1024 * 1024),
     status: Number(response.status || 0),
@@ -6474,7 +6477,7 @@ secureIpcHandle('build-pinterest-clusters', async (event, {
 } = {}) => {
   const requestedUrl = String(url || '').trim().slice(0, 2048);
   if (!isSafeRemoteMediaUrl(requestedUrl)) {
-    return { success: false, error: 'Enter a public Pinterest Pin or article URL.' };
+    return { success: false, error: 'Enter the original recipe website URL.' };
   }
   const controller = new AbortController();
   if (jobKey) activeJobs.set(jobKey, controller);
@@ -9518,6 +9521,9 @@ secureIpcHandle('push-to-wordpress', async (e, { article, site }) => {
   wordpressPublishInFlight.add(publicationIdentity);
   try {
   const savedBeforeRepair = store.get('articles', []).find((item) => String(item.id) === String(article.id));
+  if ([publishingArticle.content, publishingArticle.excerpt, publishingArticle.rankMathDescription, publishingArticle.metaDescription].some(value => hasEditorialInstructionLeak(value))) {
+    throw new Error('EDITORIAL_REVIEW_REQUIRED: Generation instructions were found in the article or excerpt. Remove them before publishing. No post or paid recipe repair was submitted.');
+  }
   const recipe = await prepareArticleRecipe(publishingArticle, { jobKey: `article:${article.id}:publish-recipe` });
   const latestArticles = store.get('articles', []);
   const currentArticle = latestArticles.find((item) => String(item.id) === String(article.id));
@@ -9915,6 +9921,24 @@ if (store) {
     mediaDirectory: () => { initializeImagesDir(); return imagesDir; }, displayUrl: localPathToFileUrl,
     cachePath: path.join(app.getPath('userData'), 'local-ocr'), fetchPage: fetchPublicHtml,
     releaseInfo: () => require('./release-provenance').releaseProvenance(app),
+    readArchive: async ({ siteId, page, modifiedAfter }) => {
+      const saved = (store.get('settings', {}).wordpressSites || []).find(s => (s.id || s.url) === siteId);
+      if (!saved) throw new Error('Choose a saved WordPress site.');
+      const site = resolveWordPressCredentials({ id: saved.id, wordpressUrl: saved.url });
+      if (!site.wordpressUsername || !site.wordpressApiKey) throw new Error('Configure the WordPress connection first.');
+      const response = await axios.get(`${site.wordpressUrl}/wp-json/wp/v2/posts`, wordpressRequestConfig(site.wordpressUrl, {
+        headers: { Authorization: `Basic ${Buffer.from(`${site.wordpressUsername}:${site.wordpressApiKey}`).toString('base64')}` },
+        params: { per_page: 25, page, status: 'publish', orderby: 'modified', order: 'desc', ...(modifiedAfter ? { modified_after: modifiedAfter } : {}), _embed: 'wp:featuredmedia', _fields: 'id,status,link,title,content,modified_gmt,featured_media,_links,_embedded' },
+        timeout: 30000, maxContentLength: 8 * 1024 * 1024
+      }));
+      return { posts: response.data, totalPages: Number(response.headers['x-wp-totalpages'] || 1) };
+    },
+    readModelMetadata: async model => {
+      const token = resolveReplicateApiToken({});
+      if (!token) throw new Error('Configure Replicate first.');
+      const response = await axios.get(`https://api.replicate.com/v1/models/${model}`, { headers: { Authorization: `Bearer ${token}` }, maxRedirects: 0, timeout: 30000, maxContentLength: 2 * 1024 * 1024 });
+      return response.data;
+    },
     readMedia: async pin => {
       if (!pin.localPath) throw new Error('Save the finished Pin locally before checking or templating it.');
       const file = assertAllowedMediaPath(pin.localPath);
@@ -9971,7 +9995,7 @@ function legacyPinterestQueueReservations() {
 if (store) require('./pin-workspace-ipc').registerPinWorkspace({
   legacyReservations: legacyPinterestQueueReservations,
   store, handle: secureIpcHandle, app, dialog, encrypt: encryptSecret, decrypt: decryptSecret,
-  openExternal: url => shell.openExternal(url), fetchPage: fetchPublicHtml,
+  openExternal: async url => { const opened = await openExternalSafe(url); if (!opened.success) throw new Error(opened.error); }, fetchPage: fetchPublicHtml,
   sharp: (...args) => getSharp()(...args),
   mediaDirectory: () => { initializeImagesDir(); return imagesDir; },
   displayUrl: file => localPathToFileUrl(file),

@@ -1,5 +1,5 @@
 'use strict';
-const { analyticsConfig } = require('./google-analytics');
+const { analyticsConfig, isPinterestSource } = require('./google-analytics');
 const EVENTS = ['cs_recipe_view', 'cs_recipe_print', 'cs_recipe_save', 'cs_shopping_list'];
 async function fetchRecipeEvents({ settings, token, request, now = new Date() }) {
   const config = analyticsConfig(settings);
@@ -8,7 +8,7 @@ async function fetchRecipeEvents({ settings, token, request, now = new Date() })
   for (let offset = 0; offset < 20000; offset += 5000) {
     const { data } = await request(`https://analyticsdata.googleapis.com/v1beta/properties/${config.propertyId}:runReport`, {
       dateRanges: [{ startDate: '28daysAgo', endDate: 'yesterday' }],
-      dimensions: [{ name: 'pagePathPlusQueryString' }, { name: 'sessionManualAdContent' }, { name: 'eventName' }],
+      dimensions: [{ name: 'pagePathPlusQueryString' }, { name: 'sessionManualAdContent' }, { name: 'eventName' }, { name: 'sessionSourceMedium' }],
       metrics: [{ name: 'eventCount' }],
       dimensionFilter: { andGroup: { expressions: [
         { filter: { fieldName: 'hostName', stringFilter: { matchType: 'EXACT', value: new URL(config.siteUrl).hostname } } },
@@ -27,7 +27,8 @@ async function fetchRecipeEvents({ settings, token, request, now = new Date() })
       if (url.origin !== config.siteUrl) continue;
       const count = Number(row.metricValues?.[metrics.indexOf('eventCount')]?.value);
       if (!Number.isFinite(count) || count < 0) throw new Error('Invalid Analytics event count. No partial report saved.');
-      rows.push({ path: url.pathname, creative: dim('sessionManualAdContent'), event, count });
+      const sourceMedium = dim('sessionSourceMedium');
+      rows.push({ path: url.pathname, pageUrl: url.href, creative: dim('sessionManualAdContent'), event, count, sourceMedium, channel: sourceMedium ? isPinterestSource(sourceMedium) ? 'pinterest' : 'other' : 'unknown' });
     }
     if ((data.rows || []).length < 5000 || offset + (data.rows || []).length >= Number(data.rowCount)) return { ...config, rows, limited, fetchedAt: now.toISOString(), window: 'Previous 28 days; excludes today', unit: 'event occurrences, not unique visitors or CTR' };
   }

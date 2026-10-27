@@ -3,8 +3,10 @@ import { ArrowRight, Check, Download, FileText, FlaskConical, GitBranch, Plus, R
 import { electronAPI } from '@/lib/electron';
 import SectionHeader from '@/components/SectionHeader';
 import VirtualList from '@/components/VirtualList';
+import RecipeEvidenceWorkbench from '@/components/RecipeEvidenceWorkbench';
+import PublishedArchive from '@/components/PublishedArchive';
 import { Button, Field, inputClass } from '@/components/ui';
-const tabs = ['Pipeline', 'Recipes', 'Prompt Lab', 'Experiments', 'Costs', 'Recipe Packs'];
+const tabs = ['Pipeline', 'Review Desk', 'Published Archive', 'Recipes', 'Prompt Lab', 'Experiments', 'Costs', 'Recipe Packs'];
 const money = n => n == null ? 'Unknown' : `$${Number(n).toFixed(4)}`;
 export default function ContentOperations({ activeScreen, setActiveScreen, refreshArticles }) {
   const [data, setData] = useState(null), [tab, setTab] = useState('Pipeline'), [busy, setBusy] = useState(false), [message, setMessage] = useState('');
@@ -29,6 +31,8 @@ export default function ContentOperations({ activeScreen, setActiveScreen, refre
     <div role="tablist" aria-label="Content operations" className="flex flex-wrap gap-1 border-b border-slate-200 pb-2">{tabs.map(t => <button type="button" key={t} role="tab" aria-selected={tab === t} className={`rounded px-3 py-2 text-sm font-semibold ${tab === t ? 'bg-emerald-700 text-white' : 'text-slate-600'}`} onClick={() => setTab(t)}>{t}</button>)}</div>
     {message && <p role="status" className="break-words rounded-md border border-slate-200 p-3 text-sm">{message}</p>}
     {!data ? <p>No desktop content workspace loaded.</p> : <>
+      {tab === 'Review Desk' && <RecipeEvidenceWorkbench pipeline={data.pipeline} pins={data.pins} navigate={setActiveScreen} />}
+      {tab === 'Published Archive' && <PublishedArchive onImported={async () => { await load(); await refreshArticles?.(); }} />}
       {tab === 'Pipeline' && <div className="space-y-4">
         <input aria-label="Find content" placeholder="Find an article..." className={inputClass} value={query} onChange={e => setQuery(e.target.value)} />
         <div className="flex flex-wrap gap-2"><Button variant="secondary" onClick={() => setActiveScreen('pin-creator')}><ArrowRight size={16} />Pinterest</Button><Button variant="secondary" onClick={() => setActiveScreen('meta-studio')}><ArrowRight size={16} />Meta</Button><Button variant="secondary" onClick={() => setActiveScreen('quality-studio')}><Check size={16} />Quality Studio</Button></div>

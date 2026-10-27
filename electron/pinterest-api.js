@@ -238,10 +238,7 @@ function createPinterestApi({
             throw new Error(
               "Reconnect must authorize the same Pinterest account.",
             );
-          storeTokens(id, {
-            ...tokens,
-            scope: tokens.scope || scopes.join(","),
-          });
+          storeTokens(id, tokens);
           res
             .writeHead(200, { "Content-Type": "text/plain" })
             .end("Pinterest connected. Return to Content Studio.");
@@ -454,9 +451,11 @@ function createPinterestApi({
     const rows = (result.trends || []).map((r) => ({
       keyword: r.keyword,
       monthGrowth: Number.isFinite(r.pct_growth_mom) ? r.pct_growth_mom : null,
+      weekGrowth: Number.isFinite(r.pct_growth_wow) ? r.pct_growth_wow : null,
       yearGrowth: Number.isFinite(r.pct_growth_yoy) ? r.pct_growth_yoy : null,
       volumeBand: null,
       timeSeries: r.time_series || null,
+      predictedTimeSeries: r.predicted_time_series || null,
     }));
     let volumeError = "",
       relatedKeywords = [];

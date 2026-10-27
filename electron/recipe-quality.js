@@ -78,8 +78,9 @@ function shoppingList(articles, multiplier = 1) {
     // Ranges and unmeasured ingredients retain their own lines; no guessed density conversion.
     const mergeKey = quantity === null || quantity2 !== null ? `${article.id}:${recipeIndex}:${p.index}:${key}` : key;
     const old = groups.get(mergeKey);
-    groups.set(mergeKey, old ? { ...old, quantity: old.quantity + quantity, recipes: [...new Set([...old.recipes, article.generatedTitle || article.title, recipe.name].filter(Boolean))] }
-      : { description: p.description, unit: p.unitOfMeasure || '', quantity, quantity2, original: p.original, recipes: [article.generatedTitle || article.title, ...(recipe.name && recipe.name !== article.title ? [recipe.name] : [])].filter(Boolean) });
+    const source = { articleId: article.id || '', recipeIndex };
+    groups.set(mergeKey, old ? { ...old, quantity: old.quantity + quantity, sources: [...old.sources, source], recipes: [...new Set([...old.recipes, article.generatedTitle || article.title, recipe.name].filter(Boolean))] }
+      : { description: p.description, unit: p.unitOfMeasure || '', quantity, quantity2, original: p.original, sources: [source], recipes: [article.generatedTitle || article.title, ...(recipe.name && recipe.name !== article.title ? [recipe.name] : [])].filter(Boolean) });
   }
   return [...groups.values()];
 }

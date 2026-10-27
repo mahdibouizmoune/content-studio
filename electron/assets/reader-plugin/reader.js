@@ -16,9 +16,7 @@
     catch { save.textContent = 'Storage Unavailable'; }
   });
   try { if (localStorage.getItem(savedKey)) save.textContent = 'Saved on This Device'; } catch {}
-  const ingredientHeading = [...recipe.querySelectorAll('h3')].find(h => /^ingredients/i.test(h.textContent.trim()));
-  const list = ingredientHeading?.nextElementSibling;
-  const ingredients = list?.tagName === 'UL' ? [...list.querySelectorAll('li')] : [];
+  const ingredients = [...recipe.querySelectorAll('h3')].filter(h => /^ingredients\s*:?$/i.test(h.textContent.trim())).flatMap(h => h.nextElementSibling?.tagName === 'UL' ? [...h.nextElementSibling.querySelectorAll('li')] : []);
   for (const [i, li] of ingredients.entries()) {
     const label = document.createElement('label'), checkbox = document.createElement('input');
     checkbox.type = 'checkbox'; checkbox.id = `cs-ingredient-${i}`;
@@ -35,6 +33,39 @@
     }
     panel.hidden = false; panel.querySelector('textarea').focus(); panel.querySelector('textarea').select(); emit('cs_shopping_list');
   });
+  const steps = [...recipe.querySelectorAll('h3')].filter(h => /^(instructions|directions|method)\s*:?$/i.test(h.textContent.trim())).flatMap(h => ['OL', 'UL'].includes(h.nextElementSibling?.tagName) ? [...h.nextElementSibling.children].filter(n => n.tagName === 'LI') : []);
+  if (steps.length) {
+    const progress = document.createElement('output'); progress.className = 'cs-step-progress'; progress.setAttribute('aria-live', 'polite'); toolbar.append(progress);
+    const checks = [];
+    const update = () => { progress.textContent = `${checks.filter(c => c.checked).length} of ${steps.length} steps checked`; };
+    for (const [i, step] of steps.entries()) {
+      const label = document.createElement('label'), box = document.createElement('input'); box.type = 'checkbox'; box.setAttribute('aria-label', `Step ${i + 1} complete`);
+      const words = document.createElement('span'); while (step.firstChild) words.append(step.firstChild); label.append(box, words); step.append(label); checks.push(box); box.addEventListener('change', update);
+    }
+    update();
+  }
+  const timer = document.createElement('div'); timer.className = 'cs-recipe-timer';
+  const timerLabel = document.createElement('label'); timerLabel.textContent = 'Timer (minutes)';
+  const minutes = document.createElement('input'); minutes.type = 'number'; minutes.min = '1'; minutes.max = '1440'; minutes.value = '5'; minutes.setAttribute('aria-label', 'Timer minutes'); timerLabel.append(minutes);
+  const start = document.createElement('button'); start.type = 'button'; start.textContent = 'Start Timer';
+  const cancel = document.createElement('button'); cancel.type = 'button'; cancel.textContent = 'Cancel Timer'; cancel.disabled = true;
+  const remaining = document.createElement('output'); remaining.setAttribute('aria-label', 'Timer remaining');
+  const alert = document.createElement('span'); alert.setAttribute('role', 'status');
+  timer.append(timerLabel, start, cancel, remaining, alert); toolbar.after(timer);
+  let deadline = 0, interval;
+  const tick = () => {
+    if (!deadline) return;
+    const seconds = Math.max(0, Math.ceil((deadline - Date.now()) / 1000)); remaining.textContent = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+    if (!seconds) { clearInterval(interval); deadline = 0; start.disabled = false; cancel.disabled = true; minutes.disabled = false; alert.textContent = 'Timer ended. Check the recipe result; time alone does not establish doneness.'; }
+  };
+  start.addEventListener('click', () => {
+    const value = Number(minutes.value); if (!Number.isFinite(value) || value < 1 || value > 1440) { alert.textContent = 'Choose 1 to 1440 minutes.'; return; }
+    clearInterval(interval); deadline = Date.now() + value * 60000; alert.textContent = ''; start.disabled = true; cancel.disabled = false; minutes.disabled = true; tick(); interval = setInterval(tick, 1000);
+  });
+  cancel.addEventListener('click', () => { clearInterval(interval); deadline = 0; remaining.textContent = ''; alert.textContent = 'Timer cancelled.'; start.disabled = false; cancel.disabled = true; minutes.disabled = false; });
+  document.addEventListener('visibilitychange', tick);
+  window.addEventListener('pagehide', () => clearInterval(interval));
+  window.addEventListener('pageshow', () => { if (deadline) { tick(); if (deadline) interval = setInterval(tick, 1000); } });
   let wake;
   const cook = button('Cook Mode', async () => {
     const enabled = !recipe.classList.contains('cs-cook-mode'); recipe.classList.toggle('cs-cook-mode', enabled); cook.setAttribute('aria-pressed', String(enabled));

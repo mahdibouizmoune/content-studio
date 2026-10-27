@@ -15,6 +15,7 @@ export default function QualityStudio() {
   const [budgetEnabled, setBudgetEnabled] = useState(false), [dailyUsd, setDailyUsd] = useState('5'), [quotes, setQuotes] = useState({}), [newModel, setNewModel] = useState(''), [newQuote, setNewQuote] = useState('');
   const [receiptId, setReceiptId] = useState(''), [receiptUsd, setReceiptUsd] = useState(''), [evidence, setEvidence] = useState('');
   const [workerSecret, setWorkerSecret] = useState(''), [workerIds, setWorkerIds] = useState([]), [workerMedia, setWorkerMedia] = useState({}), [workerTimes, setWorkerTimes] = useState({});
+  const [templateRatio, setTemplateRatio] = useState('9:16'), [feedCrop, setFeedCrop] = useState(false), [modelName, setModelName] = useState('ideogram-ai/ideogram-v3-turbo'), [modelReport, setModelReport] = useState(null);
   const load = useCallback(async () => {
     const response = await electronAPI.qualityWorkspace('snapshot');
     if (!response.success) throw new Error(response.error);
@@ -81,7 +82,7 @@ export default function QualityStudio() {
         }}><ImagePlus className="h-4 w-4" />Import Clean Photograph</Button>
         <Field label="Saved Pin"><select aria-label="Saved Pin" className={inputClass} value={pinId} onChange={e => choosePin(e.target.value)}><option value="">Choose final artwork</option>{data.pins.map(p => <option key={p.id} value={p.id}>{p.title || p.id}</option>)}</select></Field>
         {pin && <div className="grid items-start gap-6 md:grid-cols-[minmax(180px,300px)_1fr]">
-          <img src={pin.displayUrl} alt={pin.title || 'Final Pin'} className="h-auto max-h-[75vh] w-full object-contain" />
+          <div className="space-y-2"><img src={pin.displayUrl} alt={pin.title || 'Final Pin'} className={feedCrop ? 'aspect-[2/3] w-full object-cover' : 'h-auto max-h-[75vh] w-full object-contain'} /><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={feedCrop} onChange={e => setFeedCrop(e.target.checked)} />2:3 feed crop preview</label></div>
           <div className="min-w-0 space-y-4">
             <p className="text-sm font-semibold">Text: {textCurrent ? textCheck.status : 'Unchecked'} · Visual review: {visualCurrent ? review.status : 'Unchecked'}</p>
             <Field label="Exact visible text"><textarea rows={3} maxLength={160} className={inputClass} value={expected} onChange={e => setExpected(e.target.value)} /></Field>
@@ -90,14 +91,16 @@ export default function QualityStudio() {
               <Button variant="danger" disabled={busy} onClick={() => run('visual-review', { id: pin.id, approved: false })}>Needs Review</Button></div>
             {textCheck && <div className="border-l-2 border-amber-400 pl-3 text-sm"><p>Recognized: {textCheck.observed || '(No text detected)'}</p><p>Confidence: {Math.round(textCheck.confidence || 0)}%</p><p>Missing: {textCheck.missing.join(', ') || 'None'} · Extra: {textCheck.extra.join(', ') || 'None'}</p></div>}
             <div className="space-y-3 border-t border-slate-200 pt-4"><h2 className="text-lg font-bold">Optional Exact-Text Copy</h2>
+              <Field label="Copy format"><select aria-label="Copy format" className={inputClass} value={templateRatio} onChange={e => setTemplateRatio(e.target.value)}><option value="9:16">9:16 · 1080 × 1920</option><option value="2:3">2:3 · 1000 × 1500</option></select></Field>
               <Field label="Headline position"><select aria-label="Headline position" className={inputClass} value={placement} onChange={e => setPlacement(e.target.value)}><option value="middle">Middle</option><option value="top">Top</option><option value="bottom">Bottom</option></select></Field>
               <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={cleanPhoto} onChange={e => setCleanPhoto(e.target.checked)} />This photograph has no existing lettering</label>
-              <Button variant="secondary" disabled={busy || !cleanPhoto || !pin.localPath || !expected.trim() || expected.length > 100} onClick={async () => { const result = await run('exact-template', { id: pin.id, text: expected, placement, cleanPhotoConfirmed: cleanPhoto }); if (result?.pin) { setPinId(result.pin.id); setCleanPhoto(false); } }}><Type className="h-4 w-4" />Create Exact-Text Copy</Button>
+              <Button variant="secondary" disabled={busy || !cleanPhoto || !pin.localPath || !expected.trim() || expected.length > 100} onClick={async () => { const result = await run('exact-template', { id: pin.id, text: expected, placement, ratio: templateRatio, cleanPhotoConfirmed: cleanPhoto }); if (result?.pin) { setPinId(result.pin.id); setCleanPhoto(false); } }}><Type className="h-4 w-4" />Create Exact-Text Copy</Button>
             </div>
           </div>
         </div>}
       </div>}
       {tab === 'Spending' && <div className="space-y-5">
+        <div className="space-y-3 border-b border-slate-200 pb-4"><Field label="Replicate model metadata"><input aria-label="Replicate model metadata" className={inputClass} value={modelName} onChange={e => { setModelName(e.target.value); setModelReport(null); }} /></Field><Button variant="secondary" disabled={busy || !modelName.trim()} onClick={async () => setModelReport(await run('model-readiness', { model: modelName }))}><Check size={16} />Check Model Metadata</Button>{modelReport && <p className="break-words text-sm">{modelReport.status} · {modelReport.checkedAt} · {modelReport.paidPredictionsSubmitted} paid predictions · Required: {modelReport.requiredInputs.join(', ') || 'Not reported'}<span className="block text-slate-500">{modelReport.limitation}</span></p>}</div>
         <dl className="grid gap-4 border-b border-slate-200 pb-4 sm:grid-cols-3">{[['UTC Today: Reserved / Reported', usd(data.spending.today.estimatedCommitted)], ['Receipt-reported', usd(data.spending.today.reportedActual)], ['Unreconciled Requests', data.spending.today.unknownCount]].map(([k, v]) => <div key={k}><dt className="text-sm text-slate-500">{k}</dt><dd className="text-xl font-bold">{v}</dd></div>)}</dl>
         <div className="grid gap-5 md:grid-cols-2"><div className="space-y-3">
           <label className="flex items-center gap-2 font-semibold"><input type="checkbox" checked={budgetEnabled} onChange={e => setBudgetEnabled(e.target.checked)} />Enable daily reservation limit</label>
@@ -121,7 +124,7 @@ export default function QualityStudio() {
         {data.analyticsError && <p className="text-sm text-amber-700">{data.analyticsError}</p>}
         <div className="flex flex-wrap gap-2"><Button variant="secondary" disabled={busy} onClick={() => run('reader-plugin')}><Download className="h-4 w-4" />Download Reader Plugin</Button><Button disabled={busy} onClick={() => run('events-refresh')}><RefreshCw className="h-4 w-4" />Refresh GA4 Recipe Events</Button></div>
         {data.events ? <><p className="text-sm text-slate-500">{data.events.window} · {data.events.fetchedAt} · {data.events.unit}{data.events.limited ? ' · Limited by Google sampling or privacy thresholds' : ''}</p>
-          <VirtualList items={data.events.rows.map((r, id) => ({ ...r, id }))} estimateSize={90} label="Recipe engagement events">{r => <div className="grid gap-2 border-b border-slate-200 py-3 text-sm sm:grid-cols-[1fr_1fr_auto]"><span className="break-all">{r.path}</span><span className="break-all">{r.creative || 'Unattributed'} · {r.event}</span><strong>{r.count}</strong></div>}</VirtualList>
+          <VirtualList items={data.events.rows.map((r, id) => ({ ...r, id }))} estimateSize={90} label="Recipe engagement events">{r => <div className="grid gap-2 border-b border-slate-200 py-3 text-sm sm:grid-cols-[1fr_1fr_auto]"><span className="break-all">{r.path}</span><span className="break-all">{r.creative || 'Unattributed'} · {r.event} · {r.channel || 'unknown source'}</span><strong>{r.count}</strong></div>}</VirtualList>
           {!data.events.rows.length && <p>No measured recipe events in this date range.</p>}
         </> : <p className="text-sm text-slate-500">No measured recipe events synced.</p>}
       </div>}

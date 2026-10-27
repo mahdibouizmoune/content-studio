@@ -53,9 +53,24 @@ function createPinWorkspace({
 }) {
   let busy = false,
     alertsBusy = false;
-  const get = () => ({ ...initial(), ...store.get(ROOT, {}) });
+  let session = { accounts: new Map(), research: [], audits: [] };
+  const sanitize = data => ({ ...data,
+    accounts: data.accounts.map(a => {
+      if (a.csvOnly || !String(a.id).startsWith('pinterest:')) return a;
+      const local = { ...a };
+      for (const key of ['profile', 'boards', 'username', 'syncedAt', 'sampled']) delete local[key];
+      return local;
+    }), research: [], audits: [] });
+  const stored = { ...initial(), ...store.get(ROOT, {}) };
+  // API responses are session-only. User-authored drafts, CSV profiles and delivery receipts remain durable.
+  if (stored.accounts.some(a => !a.csvOnly && String(a.id).startsWith('pinterest:') && (a.profile || a.boards || a.username)) || stored.research.length || stored.audits.length) store.set(ROOT, sanitize(stored));
+  const get = () => {
+    const data = { ...initial(), ...store.get(ROOT, {}) };
+    return { ...data, accounts: data.accounts.map(a => ({ ...a, ...session.accounts.get(a.id) })), research: session.research, audits: session.audits };
+  };
   const save = (data) => {
-    store.set(ROOT, data);
+    session = { accounts: new Map(data.accounts.filter(a => !a.csvOnly && String(a.id).startsWith('pinterest:')).map(a => [a.id, { ...a }])), research: data.research || [], audits: data.audits || [] };
+    store.set(ROOT, sanitize(data));
     return data;
   };
   const stamp = () => new Date(now()).toISOString();
@@ -452,6 +467,16 @@ function createPinWorkspace({
           continue;
         }
         try {
+          // Boards are session-only. Sync once per session; an account that still has no boards
+          // must fail validation visibly instead of re-requesting the API on every tick.
+          if (!a.csvOnly && String(a.id).startsWith('pinterest:') && !a.boards?.length && !a.syncedAt && provider.syncBoards) {
+            const synced = await provider.syncBoards(a), latest = get();
+            const current = account(latest, a.id);
+            if (!current.connected) continue;
+            Object.assign(current, synced); save(latest);
+            // Re-enter on the next tick so approval/version checks use the latest workspace.
+            continue;
+          }
           const asset = validate(data, pin);
           if (
             !pin.approval ||
@@ -600,6 +625,7 @@ function createPinWorkspace({
         "Search volume and related/suggested keywords are unavailable unless the authorized endpoint returns them. Trends are not your own Pin analytics.",
     };
     const data = get();
+    if (data.accounts.find(current => current.id === a.id)?.connected !== a.connected) return { ...record, available: false, rows: [], relatedKeywords: [], error: 'Account connection changed during research. Run it again after reconnecting.' };
     data.research = [record, ...data.research].slice(0, 100);
     save(data);
     return record;

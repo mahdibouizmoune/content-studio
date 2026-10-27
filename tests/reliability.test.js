@@ -1181,13 +1181,13 @@ test('Pinterest CSV round trip preserves eight UTF-8 fields without a BOM', () =
   const records = require('csv-parse/sync').parse(bytes, { bom: false });
   assert.equal(records.length, 4);
   assert.ok(records.every((row) => row.length === 8));
-  assert.equal(records[1][0], require('../electron/ascii.js').toAscii(rows[0][0]));
-  assert.equal(records[1][2], 'Diners & Delices/Ete');
+  assert.equal(records[1][0], rows[0][0]);
+  assert.equal(records[1][2], rows[0][2].trim());
   assert.equal(records[1][3], '');
   assert.equal(records[1][4], 'Easy, fast, family-friendly dinner With "quotes" & herbs now');
   assert.equal(records[1][5], 'https://example.com/recipe?a=1&b=2#recipe');
   assert.equal(records[1][6], '');
-  assert.equal(records[1][7], '#ete, pina colada');
+  assert.equal(records[1][7], '#\u00e9t\u00e9, pi\u00f1a colada');
   assert.deepEqual(records.slice(1), validatePinterestRows(rows).rows);
   assert.ok(records.slice(1).flat().every((cell) => !/[\r\n\0]/.test(cell)));
 });
@@ -1210,8 +1210,8 @@ test('Pinterest title and description limits preserve whole Unicode graphemes', 
     assert.ok(row[4].length <= 500);
     assert.equal(row[0].isWellFormed(), true);
     assert.equal(row[4].isWellFormed(), true);
-    assert.ok(require('../electron/ascii.js').toAscii(text).startsWith(row[0]));
-    assert.doesNotMatch(row[0] + row[4], /[^\x00-\x7f]/);
+    assert.ok(text.startsWith(row[0]));
+    assert.ok(text.startsWith(row[4]));
   }
 });
 
@@ -1293,7 +1293,7 @@ test('Pinterest keeps complete batches, splits only above 200 rows, and uses cle
 test('Pinterest duplicate media is rejected and valid keyword content is preserved', () => {
   const row = ['Recipe', 'https://i.ibb.co/a.jpg', 'Recipes', '', '', '', '', '#dinner, café, meal prep'];
   assert.ok(validatePinterestRows([row, row]).errors.some((error) => error.rule === 'duplicate_media'));
-  assert.equal(normalizePinterestKeywords(row[7]), '#dinner, cafe, meal prep');
+  assert.equal(normalizePinterestKeywords(row[7]), '#dinner, caf\u00e9, meal prep');
 });
 
 test('Both Pinterest export buttons use the shared writer and legacy BOM downloads are removed', () => {

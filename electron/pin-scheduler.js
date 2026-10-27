@@ -1,5 +1,6 @@
 "use strict";
 const { Temporal } = require("@js-temporal/polyfill");
+const { assertTimeZoneData } = require('./timezone-data');
 
 function canonicalArticle(value) {
   const u = new URL(value);
@@ -15,6 +16,7 @@ function utcTime(value, zone = "UTC") {
   if (!value) throw new Error("Choose a posting time.");
   if (/Z$|[+-]\d\d:\d\d$/.test(value))
     return Temporal.Instant.from(value).toString();
+  assertTimeZoneData(zone, value);
   return Temporal.PlainDateTime.from(value)
     .toZonedDateTime(zone, { disambiguation: "reject" })
     .toInstant()
@@ -29,6 +31,7 @@ function configFor(value = {}) {
     ...value,
   };
   Temporal.Now.zonedDateTimeISO(c.timezone);
+  assertTimeZoneData(c.timezone);
   if (
     !Number.isInteger(Number(c.dailyLimit)) ||
     c.dailyLimit < 1 ||

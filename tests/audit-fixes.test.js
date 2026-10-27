@@ -37,6 +37,7 @@ function publisher({ get, post, generateCard } = {}) {
   const context = vm.createContext({
     toAscii: require('../electron/ascii.js').toAscii,
     validateRecipeCard: require('../electron/recipe-generation').validateRecipeCard,
+    hasEditorialInstructionLeak: require('../electron/article-editorial').hasEditorialInstructionLeak,
     prepareArticleRecipe: require('../electron/article-recipe-readiness').createRecipeReadinessService({ generateCard: generateCard || (async () => { throw new Error('Replicate API token is missing'); }) }),
     removeArticleImpact: require('../electron/article-impact-cleanup').removeArticleImpact,
     Buffer, URL, Date, Number, String, Object, Array, Promise, Error, createHash, store, ...wordpress,
@@ -76,6 +77,15 @@ test('WordPress never reports an old receipt as success after HTTP 403', async (
   app.store.set('performance.wordpressPublishReceipts', [{ identity, siteUrl: 'https://site-a.example', postId: 42, status: 'publish' }]);
   await assert.rejects(app.run(article), /403/);
   assert.equal(app.requests.length, 1);
+});
+
+test('WordPress blocks leaked instructions before paid recipe repair or publishing', async () => {
+  let repairs = 0;
+  const app = publisher({ generateCard: async () => { repairs++; return article.content; } });
+  const leaked = { ...article, content: '<p>Deliver a complete, realistic recipe with ingredient roles.</p>' + article.content };
+  await assert.rejects(app.run(leaked), /EDITORIAL_REVIEW_REQUIRED/);
+  await assert.rejects(app.run({ ...article, excerpt: 'READER-FIRST RECIPE EDITORIAL STANDARD:' }), /EDITORIAL_REVIEW_REQUIRED/);
+  assert.equal(repairs, 0); assert.equal(app.requests.length, 0);
 });
 
 test('WordPress repairs an incomplete saved recipe before any publication and keeps the repair locally', async () => {

@@ -7,7 +7,7 @@ const path = require('node:path');
   const { ensureRecipeCard } = await import('../src/lib/articlePostProcess.mjs');
   const content = '<p>A creamy berry yogurt bowl with a fresh, chilled finish.</p><h2>Ingredient choices</h2><p>Use ripe, dry berries. Swap chopped peaches for a softer bite.</p><h2>Prevent a watery bowl</h2><p>Pat berries dry before folding them into yogurt.</p><h2>Make ahead and serving</h2><p>Keep toppings separate until serving for better texture.</p><section id="recipe-card"><h2>Recipe Card</h2><h3 itemprop="name">Berry Yogurt Bowl</h3><ul><li><strong>Prep Time:</strong> 10 minutes</li><li><strong>Cook Time:</strong> 0 minutes</li><li><strong>Total Time:</strong> 10 minutes</li><li><strong>Servings:</strong> 2</li></ul><h3>Ingredients</h3><ul itemprop="recipeIngredient"><li>1 cup plain yogurt</li><li>1 cup berries</li><li>1 tsp honey</li></ul><h3>Instructions</h3><ol itemprop="recipeInstructions"><li>Stir honey into yogurt until smooth.</li><li>Fold in dry berries until evenly combined.</li><li>Serve chilled.</li></ol></section>';
   const enhanced = ensureRecipeCard(ensureRecipeCard(content));
-  const browser = await chromium.launch({ headless: true, ...(process.env.PLAYWRIGHT_CHANNEL ? { channel: process.env.PLAYWRIGHT_CHANNEL } : {}) });
+  const browser = await chromium.launch({ headless: true, ...(process.env.PLAYWRIGHT_CHANNEL ? { channel: process.env.PLAYWRIGHT_CHANNEL } : process.platform === 'win32' ? { channel: 'msedge' } : {}) });
   fs.mkdirSync(path.resolve(__dirname, '../artifacts'), { recursive: true });
   try {
     const page = await browser.newPage();
