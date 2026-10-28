@@ -40,6 +40,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getWorkspaceBackupStatus: () => ipcRenderer.invoke('get-workspace-backup-status'),
   restoreLatestWorkspaceBackup: () => ipcRenderer.invoke('restore-latest-workspace-backup'),
   openWorkspaceBackups: () => ipcRenderer.invoke('open-workspace-backups'),
+  chooseBackupMirrorFolder: () => ipcRenderer.invoke('choose-backup-mirror-folder'),
+  clearBackupMirrorFolder: () => ipcRenderer.invoke('clear-backup-mirror-folder'),
   getDiagnostics: () => ipcRenderer.invoke('get-diagnostics'),
   getMediaStorageStats: (params) => ipcRenderer.invoke('get-media-storage-stats', params),
   cleanupUnusedMedia: (params) => ipcRenderer.invoke('cleanup-unused-media', params),

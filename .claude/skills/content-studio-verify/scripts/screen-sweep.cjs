@@ -18,8 +18,17 @@ const { _electron } = require(path.join(project, 'node_modules/playwright'));
   page.on('console', m => { if (m.type() === 'error') problems.push(`console: ${m.text().slice(0, 400)}`); });
   await page.waitForLoadState('domcontentloaded');
   await page.waitForTimeout(3000);
-  const labels = await page.$$eval('nav[aria-label="Main navigation"] button[aria-label]', bs => bs.map(b => b.getAttribute('aria-label')));
+  // Group headers (aria-expanded) hide and show their screens; they are checked once below, not opened as screens.
+  const labels = await page.$$eval('nav[aria-label="Main navigation"] button[aria-label]:not([aria-expanded])', bs => bs.map(b => b.getAttribute('aria-label')));
   console.log('SCREENS', labels.join(' | '));
+  const toggle = page.locator('nav[aria-label="Main navigation"] button[aria-expanded]').filter({ hasText: 'Measure' });
+  if (await toggle.count()) {
+    await toggle.click();
+    if (await page.locator('nav[aria-label="Main navigation"] button[aria-label="Performance"]').count()) problems.push('hiding the Measure group left its screens visible');
+    await toggle.click();
+    if (!(await page.locator('nav[aria-label="Main navigation"] button[aria-label="Performance"]').count())) problems.push('showing the Measure group did not bring its screens back');
+    console.log(`Group toggle: newProblems=${problems.length}`);
+  }
   for (const label of labels) {
     const before = problems.length;
     await page.click(`nav[aria-label="Main navigation"] button[aria-label="${label}"]`);

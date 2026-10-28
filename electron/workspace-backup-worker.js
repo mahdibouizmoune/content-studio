@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { parentPort, workerData } = require('worker_threads');
 const { DatabaseSync } = require('node:sqlite');
+const { pruneBackups, mirrorBackup } = require('./backup-retention');
 
 function readJson(filePath, fallback = {}) {
   try {
@@ -25,7 +26,7 @@ function workspaceValues(userDataPath) {
   }
 }
 
-function createBackup({ userDataPath, reason = 'automatic', maxBackups = 12 }) {
+function createBackup({ userDataPath, reason = 'automatic', mirrorDir = '' }) {
   const dir = path.join(userDataPath, 'workspace-backups');
   fs.mkdirSync(dir, { recursive: true });
   const settings = readJson(path.join(userDataPath, 'config.json'));
@@ -38,18 +39,14 @@ function createBackup({ userDataPath, reason = 'automatic', maxBackups = 12 }) {
   fs.writeFileSync(tempPath, JSON.stringify(snapshot, null, 2), 'utf8');
   fs.renameSync(tempPath, backupPath);
 
-  const backups = fs.readdirSync(dir)
-    .filter((name) => /^workspace-\d{4}-\d{2}-\d{2}T.*\.json$/i.test(name))
-    .map((name) => ({ filePath: path.join(dir, name), mtimeMs: fs.statSync(path.join(dir, name)).mtimeMs }))
-    .sort((a, b) => b.mtimeMs - a.mtimeMs);
-  for (const backup of backups.slice(Math.max(1, Number(maxBackups) || 12))) {
-    try { fs.unlinkSync(backup.filePath); } catch {}
-  }
-  return backupPath;
+  pruneBackups(dir);
+  const mirror = mirrorBackup(backupPath, mirrorDir);
+  return { backupPath, mirrorError: mirror.error || '' };
 }
 
 try {
-  parentPort.postMessage({ success: true, filePath: createBackup(workerData || {}) });
+  const result = createBackup(workerData || {});
+  parentPort.postMessage({ success: true, filePath: result.backupPath, mirrorError: result.mirrorError });
 } catch (error) {
   parentPort.postMessage({ success: false, error: error.message });
 }
