@@ -303,3 +303,41 @@ test('imports, exports and media uploads read and write files without freezing t
     assert.doesNotMatch(section(startText, endText), /fs\.(readFileSync|writeFileSync|statSync)\(/, startText);
   }
 });
+
+const longPinTitle = 'Valentines Brownies Heart Cutouts Swirls with Classic Fudge Texture for Meal Prep Desserts';
+
+test('social posts made from Pins name the dish briefly instead of repeating the whole Pin title', async () => {
+  const { socialDishName } = await import('../src/lib/pinSocialCopy.mjs');
+  assert.equal(socialDishName(longPinTitle), 'Valentines Brownies Heart Cutouts Swirls');
+  assert.equal(socialDishName('**Lemon Rice**: Bright, Fast and Fluffy'), 'Lemon Rice');
+  assert.equal(socialDishName('Chicken with Rice'), 'Chicken with Rice', 'a short title stays whole');
+  assert.equal(socialDishName(''), 'Recipe idea');
+  assert.ok(socialDishName('Supercalifragilistic '.repeat(8)).length <= 70);
+});
+
+test('Pin descriptions are shortened at a sentence or word, never mid-word', async () => {
+  const { trimAtSentence } = await import('../src/lib/pinSocialCopy.mjs');
+  const description = 'These Valentines brownies feature heart cutouts and rich chocolate swirls, perfect for an easy make-ahead dessert. Made with cocoa, butter, and optional espresso powder, they bake in under 30 minutes for a reliable soft texture every time you make them.';
+  assert.equal(trimAtSentence(description, 220), 'These Valentines brownies feature heart cutouts and rich chocolate swirls, perfect for an easy make-ahead dessert.');
+  const oneLong = 'word '.repeat(80).trim();
+  const cut = trimAtSentence(oneLong, 60);
+  assert.ok(cut.length <= 60 && cut.endsWith('...') && !/wor\.\.\.$/.test(cut));
+  assert.equal(trimAtSentence('Short and sweet.', 220), 'Short and sweet.');
+});
+
+test('Pin hashtags are readable: at most three words and 24 letters, no duplicates', async () => {
+  const { socialHashtags } = await import('../src/lib/pinSocialCopy.mjs');
+  const tags = socialHashtags(['valentines brownies heart cutouts swirls', 'dessert recipe', 'Dessert Recipe', 'baking tips', 'make ahead dessert', 'meal prep baked desserts', 'easy dessert', 'sweet treat', 'chocolate', 'brownies', 'recipe inspiration']);
+  assert.deepEqual(tags, ['#DessertRecipe', '#BakingTips', '#MakeAheadDessert', '#EasyDessert', '#SweetTreat', '#Chocolate', '#Brownies', '#RecipeInspiration']);
+  assert.ok(tags.every((tag) => tag.length <= 25));
+});
+
+test('the Pinterest repurpose card uses the short copy, shows the local image first and wraps long links', () => {
+  const view = read('src/components/PinCreatorView.jsx');
+  assert.match(view, /socialDishName\(/);
+  assert.match(view, /trimAtSentence\(description, 220\)/);
+  assert.match(view, /socialHashtags\(/);
+  assert.doesNotMatch(view, /is the kind of recipe worth saving before a busy week/);
+  assert.match(view, /const image = pack\.imageAssets\?\.\[0\]\?\.fileUrl \|\| pack\.imageAssets\?\.\[0\]\?\.publicUrl/);
+  assert.match(view, /min-w-0 space-y-3 break-words/);
+});
