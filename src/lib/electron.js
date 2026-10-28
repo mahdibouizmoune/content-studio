@@ -203,16 +203,6 @@ function makeMockApi() {
         }
       };
     },
-    async discoverImpactAffiliates() {
-      return {
-        success: true,
-        affiliates: [],
-        affiliateLinks: readStore().settings?.affiliateLinks || [],
-        queries: [],
-        reviewedProducts: 0,
-        qualifiedProducts: 0
-      };
-    },
     async testAmazonConnection({ partnerTag }) {
       return partnerTag
         ? { success: true, mode: "tracking-id", message: "Amazon tracking ID is ready in desktop mode." }
@@ -784,9 +774,6 @@ function makeMockApi() {
     async pushToWordPress() {
       return { success: true, postUrl: "#" };
     },
-    async createPinterestPin() {
-      return { success: false };
-    },
     async savePinCreatorPins() {
       return { success: true, count: 0 };
     },
@@ -900,9 +887,6 @@ function makeMockApi() {
     },
     async openRepurposeStudio() {
       return { success: true };
-    },
-    async getPinCreatorUrl() {
-      return "";
     },
     async appendPinQueue() {
       return { success: true, count: 0 };
