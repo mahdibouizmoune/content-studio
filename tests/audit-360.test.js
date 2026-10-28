@@ -292,3 +292,15 @@ test('topic overlap catches a short title inside a longer one without flagging d
   assert.equal(detectCannibalization('Easy Beef Stew', [{ title: 'Easy Chicken Soup' }]).length, 0);
   assert.equal(detectCannibalization('chicken chicken chicken', [{ title: 'chicken apple ginger rice soup' }]).length, 0);
 });
+
+test('Job Center opens cluster, research, quality and Recipe Money Maker jobs on their own screens', () => {
+  const { createJobCenter } = require('../electron/job-center');
+  const data = new Map();
+  const jobs = createJobCenter({ store: { get: (k, f) => data.get(k) ?? f, set: (k, v) => data.set(k, v) } });
+  const workspace = (id) => jobs.start(id).workspace;
+  assert.equal(workspace('pinterest-clusters-1'), 'cluster-planner');
+  assert.equal(workspace('keyword-research-1'), 'trends');
+  assert.equal(workspace('rmm-generate-1'), 'recipe-money-maker');
+  assert.equal(workspace('article:1:generate'), 'articles');
+  assert.equal(workspace('pin-asset-1'), 'pin-creator');
+});

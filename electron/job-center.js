@@ -18,6 +18,10 @@ function safePayload(value, depth = 0) {
 
 function jobKind(jobKey = '') {
   const key = String(jobKey).toLowerCase();
+  if (key.includes('cluster')) return { type: 'pinterest', workspace: 'cluster-planner', label: 'Pinterest cluster planning' };
+  if (key.includes('rmm') || key.includes('recipe-money')) return { type: 'recipe', workspace: 'recipe-money-maker', label: 'Recipe Money Maker' };
+  if (key.includes('keyword') || key.includes('trend')) return { type: 'research', workspace: 'trends', label: 'Keyword and trend research' };
+  if (key.includes('quality')) return { type: 'qa', workspace: 'quality-studio', label: 'Quality Studio' };
   if (key.includes('article')) return { type: 'article', workspace: 'articles', label: 'Article generation' };
   if (key.includes('pin')) return { type: 'pinterest', workspace: 'pin-creator', label: 'Pinterest generation' };
   if (key.includes('meta') || key.includes('ghl')) return { type: 'meta', workspace: 'meta-studio', label: 'Meta delivery' };

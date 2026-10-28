@@ -107,6 +107,20 @@ export default function RecipeMoneyMaker({ activeScreen }) {
     setStatus(result.success ? "DeepSeek connected successfully." : result.error || "Connection failed.");
   }
 
+  async function removeApiKey() {
+    setBusy(true);
+    try {
+      const result = await electronAPI.clearRecipeMoneyMakerApiKey?.();
+      if (!result?.success) throw new Error(result?.error || "Could not remove the saved key.");
+      setSettings((current) => ({ ...current, ...result.settings, hasApiKey: false }));
+      setStatus("The saved DeepSeek key was removed from this computer.");
+    } catch (error) {
+      setStatus(error.message || "Could not remove the saved key.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function chooseLogo() {
     const result = await electronAPI.chooseRecipeMoneyMakerLogo();
     if (result?.success) setDraft((current) => ({ ...current, logoDataUrl: result.logoDataUrl, logoPath: result.logoPath }));
@@ -214,7 +228,10 @@ export default function RecipeMoneyMaker({ activeScreen }) {
             <div className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
               <div className="flex items-center gap-3"><KeyRound className="h-5 w-5 text-violet-600" /><h3 className="font-black text-slate-900">DeepSeek connection</h3></div>
               <Field label="API key" hint={settings.hasApiKey ? "A key is saved securely. Leave blank to keep it." : "Create a key at platform.deepseek.com."}><input type="password" className={inputClass} value={draft.apiKey || ""} onChange={(event) => setDraft({ ...draft, apiKey: event.target.value })} placeholder={settings.hasApiKey ? "Saved securely" : "sk-..."} /></Field>
-              <Button variant="secondary" className="mt-3" onClick={testConnection} disabled={busy}>Test connection</Button>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Button variant="secondary" onClick={testConnection} disabled={busy}>Test connection</Button>
+                {settings.hasApiKey ? <Button variant="ghost" onClick={removeApiKey} disabled={busy}>Remove saved key</Button> : null}
+              </div>
             </div>
             <div className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
               <div className="flex items-center gap-3"><Palette className="h-5 w-5 text-violet-600" /><h3 className="font-black text-slate-900">Brand and card style</h3></div>

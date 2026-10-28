@@ -1428,7 +1428,7 @@ export default function Settings({ settings, saveSettings, refreshArticles, setA
           })()}
         </SettingPanel>
 
-        <SettingPanel id="advanced-features" open={open} setOpen={setOpen} icon={Sparkles} tone="icon-gradient-blue" title="Advanced Features" subtitle="Opt-in planning, attribution, and operational tools">
+        <SettingPanel id="advanced-features" open={open} setOpen={setOpen} icon={Sparkles} tone="icon-gradient-blue" title="Advanced Features" subtitle="Optional planning, attribution, and operational tools (on by default; switch off any you do not use)">
           <div className="mb-4 rounded-md bg-violet-50 px-3 py-2 text-sm font-semibold text-violet-700 ring-1 ring-violet-100">
             These local workspaces are available by default. They never publish without a clear publishing action.
           </div>

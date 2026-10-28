@@ -251,7 +251,11 @@ function createWorkspaceBackupSync(reason = 'automatic') {
   const safeReason = String(reason || 'automatic').replace(/[^a-z0-9-]+/gi, '-').toLowerCase();
   const backupPath = path.join(dir, `workspace-${stamp}-${safeReason}.json`);
   const tempPath = `${backupPath}.tmp`;
-  if (store) fs.writeFileSync(tempPath, JSON.stringify(store.store, null, 2), 'utf8');
+  if (store) {
+    let recipeMoneyMaker = null;
+    try { recipeMoneyMaker = require('./recipe-money-maker').exportRecipeMoneyMakerData(); } catch { /* optional module */ }
+    fs.writeFileSync(tempPath, JSON.stringify({ ...store.store, ...(recipeMoneyMaker ? { __recipeMoneyMaker: recipeMoneyMaker } : {}) }, null, 2), 'utf8');
+  }
   else fs.copyFileSync(configPath, tempPath);
   fs.renameSync(tempPath, backupPath);
 
@@ -5532,7 +5536,7 @@ secureIpcHandle('install-app-update', () => appUpdater?.install() || { success: 
 secureIpcHandle('clear-finished-jobs', () => ({ success: true, jobs: jobCenter?.clearFinished() || [] }));
 
 secureIpcHandle('open-job-workspace', (event, { workspace = 'diagnostics' } = {}) => {
-  const allowed = new Set(['articles', 'pin-creator', 'meta-studio', 'video-studio', 'performance', 'diagnostics']);
+  const allowed = new Set(['articles', 'pin-creator', 'pin-publishing', 'meta-studio', 'video-studio', 'performance', 'diagnostics', 'cluster-planner', 'recipe-money-maker', 'trends', 'quality-studio']);
   focusArticleWriterScreen(allowed.has(workspace) ? workspace : 'diagnostics');
   return { success: true };
 });
@@ -5570,7 +5574,9 @@ secureIpcHandle('restore-latest-workspace-backup', () => {
       return { success: false, error: 'The latest backup is not a valid workspace.' };
     }
     const safetyBackup = createWorkspaceBackupSync('before-restore');
-    store.store = restored;
+    const { __recipeMoneyMaker: recipeMoneyMaker, ...workspace } = restored;
+    store.store = workspace;
+    if (recipeMoneyMaker) require('./recipe-money-maker').restoreRecipeMoneyMakerData(recipeMoneyMaker);
     log.warn(`Workspace restored from ${latest.filePath}. Previous state saved to ${safetyBackup || 'no backup available'}.`);
     return {
       success: true,
@@ -6298,6 +6304,18 @@ async function prepareArticleRecipe(article, { settings = {}, jobKey, repair = t
 }
 
 secureIpcHandle('prepare-article-recipe', (_event, params) => prepareArticleRecipe(params.article, params));
+
+// After the user checked WordPress and confirmed the post was not created, a stuck "unknown"
+// create receipt is removed so publishing can be retried. Only unknown receipts can be cleared.
+secureIpcHandle('clear-unknown-wordpress-receipt', (_event, { article = {}, siteUrl = '' } = {}) => {
+  const url = normalizeWordPressUrl(siteUrl);
+  const receipt = url ? getWordPressPublishReceipt(url, article) : null;
+  if (!receipt) return { success: false, error: 'No publication record was found for this article and site.' };
+  if (receipt.status !== 'unknown') return { success: false, error: 'Only a publication with an unknown outcome can be cleared.' };
+  clearWordPressPublishReceipt(receipt.identity);
+  log.warn(`User cleared an unknown WordPress create receipt for article ${article.id || ''} on ${url}.`);
+  return { success: true };
+});
 
 // Records that the user reviewed the saved recipe text. Any later recipe edit changes the hash
 // and withholds recipe rich-result data again until it is re-reviewed.
@@ -7578,11 +7596,14 @@ secureIpcHandle('upload-repurpose-ghl-rows', async (e, { headers = [], rows = []
     for (let index = 0; index < normalizedRows.length; index++) {
       const row = normalizedRows[index];
       const targetPlatform = String(row[platformIndex] || '').trim().toLowerCase();
+      // When only one platform has dedicated IDs, the other platform's fallback must exclude them,
+      // or a Facebook caption could also be posted to the Instagram account.
+      const otherPlatformIds = targetPlatform === 'facebook' ? instagramAccountIds : targetPlatform === 'instagram' ? facebookAccountIds : [];
       const targetAccountIds = targetPlatform === 'instagram' && instagramAccountIds.length
         ? instagramAccountIds
         : targetPlatform === 'facebook' && facebookAccountIds.length
           ? facebookAccountIds
-          : accountIds;
+          : accountIds.filter((id) => !otherPlatformIds.includes(id));
       if (!targetAccountIds.length) {
         failures.push({ row: index + 1, status: 0, error: `No GoHighLevel account ID is configured for ${targetPlatform || 'this row'}.` });
         continue;

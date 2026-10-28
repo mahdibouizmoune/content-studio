@@ -43,7 +43,7 @@ export default function ClusterPlanner({ articles, settings, refreshArticles, se
       setPinterestPlan(latest);
       setSourceUrl(latest.source?.requestedUrl || latest.source?.destinationUrl || "");
       setSelectedClusterIds(new Set((latest.clusters || []).map((cluster) => cluster.id)));
-    }).catch(() => {});
+    }).catch((error) => { if (active) setStatus(`Could not load saved cluster plans: ${error.message}`); });
     return () => { active = false; };
   }, []);
 

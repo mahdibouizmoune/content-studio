@@ -249,10 +249,11 @@ export default function MetaStudio({ articles, settings, activeScreen }) {
     if (activeScreen !== "meta-studio") return;
     electronAPI.getMetaProjects?.().then((result) => {
       if (result?.success) setProjects(result.projects || []);
-    }).catch(() => {});
+      else if (result?.error) setStatus(`Could not load saved Meta projects: ${result.error}`);
+    }).catch((error) => setStatus(`Could not load saved Meta projects: ${error.message}`));
     electronAPI.getPinCreatorPins?.().then((result) => {
       if (result?.success) setSourcePins(result.pins || []);
-    }).catch(() => {});
+    }).catch((error) => setStatus(`Could not load finished Pins: ${error.message}`));
     electronAPI.getMetaBulkGhlDraft?.().then((result) => {
       const draft = result?.draft;
       if (!draft) return;
@@ -263,7 +264,7 @@ export default function MetaStudio({ articles, settings, activeScreen }) {
         setStartTime(formatDateTimeLocal(draft.rows?.[0]?.[0]));
         setShowGhlEditor(true);
       }
-    }).catch(() => {});
+    }).catch((error) => setStatus(`Could not load the saved GoHighLevel batch: ${error.message}`));
   }, [activeScreen]);
 
   useEffect(() => {

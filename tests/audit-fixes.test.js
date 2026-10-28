@@ -267,12 +267,13 @@ test('distribution signature gate rejects unsigned, invalid, and missing signatu
   assert.doesNotThrow(() => assertSignatures([{ status: 'Valid', signer: 'Publisher' }]));
 });
 
-function ghlUploader(post) {
+function ghlUploader(post, overrides = {}) {
   let now = Date.parse('2026-09-14T08:00:00Z');
   class Clock extends Date { constructor(...args) { super(...(args.length ? args : [now])); } static now() { return now; } }
-  const store = memoryStore({ settings: { ghlApiToken: 'mock', ghlLocationId: 'location', ghlSocialAccountIds: 'fb', ghlUserId: 'user' } });
+  const store = memoryStore({ settings: { ghlApiToken: 'mock', ghlLocationId: 'location', ghlSocialAccountIds: 'fb', ghlUserId: 'user', ...overrides.settings } });
   let handler;
   let calls = 0;
+  const bodies = [];
   const context = vm.createContext({
     Date: Clock, createHash, store,
     findLogicalGhlDuplicate: require('../electron/ghl-dedupe').findLogicalGhlDuplicate,
@@ -282,7 +283,7 @@ function ghlUploader(post) {
     normalizeGhlStatus: (status) => status,
     secureIpcHandle: (_channel, callback) => { handler = callback; },
     logProviderError: () => {},
-    fetchGhlJson: async () => { calls++; return post(store); },
+    fetchGhlJson: async (_url, options = {}) => { calls++; bodies.push(options.body ? JSON.parse(options.body) : null); return post(store); },
     verifyGhlPost: async () => ({ verified: false, reason: 'Service unavailable' })
   });
   vm.runInContext(slice('function formatGhlDate(', 'function clipText('), context);
@@ -290,8 +291,8 @@ function ghlUploader(post) {
   vm.runInContext(slice('function ghlCreatedPostId(', 'async function verifyGhlPost('), context);
   vm.runInContext(slice('function responsePost(', 'function googleSettings('), context);
   vm.runInContext(slice('let ghlUploadInFlight = false;', "secureIpcHandle('generate-featured-image-prompt',"), context);
-  const rows = [['2026-09-14 10:00:00', 'Soup', 'https://example.com/recipe', 'https://example.com/p.jpg']];
-  return { run: () => handler({}, { headers: [], rows }), store, calls: () => calls, advance: () => { now += 8 * 60 * 60 * 1000; } };
+  const rows = overrides.rows || [['2026-09-14 10:00:00', 'Soup', 'https://example.com/recipe', 'https://example.com/p.jpg']];
+  return { run: () => handler({}, { headers: overrides.headers || [], rows }), store, calls: () => calls, bodies, advance: () => { now += 8 * 60 * 60 * 1000; } };
 }
 
 test('actual GHL uploader records intent and blocks uncertain retries after date expiry', async () => {
@@ -380,3 +381,14 @@ test(preparationFailure ? 'bulk WordPress preparation failure does not skip the 
   assert.match(statuses.at(-1), /Published 1\. Needs review 1\. Warnings 0\. Failed 1/);
 });
 }
+
+test('a Facebook row never falls back to an account that is dedicated to Instagram', async () => {
+  const app = ghlUploader(() => ({ response: { ok: true, status: 201 }, body: { id: 'remote-id' } }), {
+    settings: { ghlSocialAccountIds: 'fb,ig', ghlInstagramAccountIds: 'ig' },
+    headers: ['postAtSpecificTime', 'content', 'link', 'imageUrls', 'Category'],
+    rows: [['2026-09-14 10:00:00', 'A bright lemon rice dinner for busy weeknights.', '', 'https://example.com/p.jpg', 'Facebook']]
+  });
+  await app.run();
+  assert.equal(app.calls(), 1);
+  assert.deepEqual(app.bodies[0].accountIds, ['fb']);
+});
