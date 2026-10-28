@@ -29,7 +29,8 @@ function createBackup({ userDataPath, reason = 'automatic', maxBackups = 12 }) {
   const dir = path.join(userDataPath, 'workspace-backups');
   fs.mkdirSync(dir, { recursive: true });
   const settings = readJson(path.join(userDataPath, 'config.json'));
-  const snapshot = { ...settings, ...workspaceValues(userDataPath) };
+  const recipeMoneyMaker = readJson(path.join(userDataPath, 'recipe-money-maker.json'), null);
+  const snapshot = { ...settings, ...workspaceValues(userDataPath), ...(recipeMoneyMaker ? { __recipeMoneyMaker: recipeMoneyMaker } : {}) };
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const safeReason = String(reason || 'automatic').replace(/[^a-z0-9-]+/gi, '-').toLowerCase();
   const backupPath = path.join(dir, `workspace-${stamp}-${safeReason}.json`);

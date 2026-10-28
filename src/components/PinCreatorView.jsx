@@ -645,7 +645,8 @@ export default function PinCreatorView({ settings, setActiveScreen }) {
   useEffect(() => {
     return () => {
       if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current);
-      electronAPI.savePinCreatorPins?.(pinsRef.current).catch(() => {});
+      // The screen is closing, so the failure is logged for diagnostics rather than shown.
+      electronAPI.savePinCreatorPins?.(pinsRef.current).catch((error) => electronAPI.reportRendererError?.(`Pin Creator could not save edits while closing: ${error?.message || error}`));
     };
   }, []);
 
@@ -659,7 +660,7 @@ export default function PinCreatorView({ settings, setActiveScreen }) {
     if (options.debounce) {
       saveDebounceRef.current = setTimeout(() => {
         saveDebounceRef.current = null;
-        electronAPI.savePinCreatorPins?.(pinsRef.current).catch(() => {});
+        electronAPI.savePinCreatorPins?.(pinsRef.current).catch((error) => setStatus(`Your latest Pin edits were not saved: ${error?.message || "save failed"}. Make the change again or reopen Pin Creator.`));
       }, 650);
       return { success: true };
     }

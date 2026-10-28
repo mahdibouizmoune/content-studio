@@ -45,6 +45,7 @@ function makeMockApi() {
     async saveRecipeMoneyMakerSettings(settings) { const store = readStore(); const previous = store.recipeMoneyMaker || { recipes: [] }; const next = { settings: { ...previous.settings, ...settings, hasApiKey: Boolean(settings.apiKey || previous.settings?.hasApiKey) }, recipes: previous.recipes || [] }; writeStore({ ...store, recipeMoneyMaker: next }); return { success: true, settings: next.settings }; },
     async chooseRecipeMoneyMakerLogo() { return { success: false, canceled: true }; },
     async testRecipeMoneyMakerConnection() { return { success: false, error: "Connection testing is available in the desktop app." }; },
+    async clearRecipeMoneyMakerApiKey() { const store = readStore(); const previous = store.recipeMoneyMaker || { recipes: [] }; const next = { ...previous, settings: { ...previous.settings, hasApiKey: false } }; writeStore({ ...store, recipeMoneyMaker: next }); return { success: true, settings: next.settings }; },
     async generateRecipeMoneyMakerRecipe() { return { success: false, error: "Recipe generation is available in the desktop app." }; },
     async deleteRecipeMoneyMakerRecipes({ ids = [] } = {}) { const store = readStore(); const previous = store.recipeMoneyMaker || { settings: {}, recipes: [] }; const chosen = new Set(ids); const recipes = (previous.recipes || []).filter((recipe) => !chosen.has(recipe.id)); writeStore({ ...store, recipeMoneyMaker: { ...previous, recipes } }); return { success: true, recipes }; },
     async exportRecipeMoneyMakerPdf() { return { success: false, canceled: true }; },
@@ -264,6 +265,9 @@ function makeMockApi() {
       const selection = filterArticleIntake(articles, store.articles || []);
       writeStore({ ...store, articles: [...(store.articles || []), ...selection.accepted] });
       return { success: true, addedCount: selection.accepted.length, skipped: selection.skipped };
+    },
+    async clearUnknownWordPressReceipt() {
+      return { success: false, error: "WordPress publishing requires the desktop app." };
     },
     async markRecipeReviewed() {
       return { success: false, error: "Recipe review requires the desktop app." };

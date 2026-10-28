@@ -671,7 +671,28 @@ export default function ArticleEditor({ article, settings, saveSettings, onClose
       autoCategory: match
     };
     setStatus(match.category?.id ? `Publishing to ${publishSite.name || publishSite.url} in ${match.category.name}...` : `Publishing to ${publishSite.name || publishSite.url}...`);
-    const result = await electronAPI.pushToWordPress({ article: articleForPublish, site: publishSite });
+    let result;
+    try {
+      result = await electronAPI.pushToWordPress({ article: articleForPublish, site: publishSite });
+    } catch (error) {
+      result = { success: false, error: error.message };
+    }
+    if (!result?.success && /unknown outcome/i.test(result?.error || "")) {
+      // Only the user can confirm the earlier attempt did not create a post; never clear it automatically.
+      const checked = await confirmAction({
+        title: "Check WordPress before retrying",
+        message: `An earlier publish attempt to ${publishSite.name || publishSite.url} did not report back. Open WordPress > Posts (including drafts and trash) and look for "${articleForPublish.generatedTitle || articleForPublish.title}". Continue only if it is not there; otherwise a duplicate post will be created.`,
+        confirmLabel: "It is not on the site",
+        tone: "danger"
+      });
+      if (!checked) {
+        setStatus(result.error);
+        return readyDraft;
+      }
+      const cleared = await electronAPI.clearUnknownWordPressReceipt?.({ article: articleForPublish, siteUrl: publishSite.url });
+      setStatus(cleared?.success ? "The earlier attempt was cleared. Publish again to retry." : cleared?.error || "Could not clear the earlier attempt.");
+      return readyDraft;
+    }
     if (!result?.success) throw new Error(result?.error || "WordPress did not confirm this publication.");
     const isPublic = result.status === "publish";
     const isScheduled = result.status === "future";

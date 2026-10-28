@@ -156,6 +156,13 @@ module.exports = function registerRecipeMoneyMaker({ handle: trustedHandle, ledg
     return { success: true, settings: publicState().settings };
   });
 
+  handle("rmm-clear-api-key", () => {
+    const next = { ...settings() };
+    delete next.apiKeyEncrypted;
+    recipeStore.set("settings", next);
+    return { success: true, settings: publicState().settings };
+  });
+
   handle("rmm-choose-logo", async () => {
     const result = await dialog.showOpenDialog(BrowserWindow.getFocusedWindow() || undefined, { title: "Choose a recipe card logo", properties: ["openFile"], filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "svg"] }] });
     if (result.canceled || !result.filePaths[0]) return { success: false, canceled: true };
@@ -169,9 +176,13 @@ module.exports = function registerRecipeMoneyMaker({ handle: trustedHandle, ledg
 
   handle("rmm-test-connection", async ({ apiKey = "" } = {}) => {
     const key = String(apiKey || "").trim() || decrypt(settings().apiKeyEncrypted);
-    if (!key) return { success: false, error: "Enter a DeepSeek API key first." };
-    const response = await fetch("https://api.deepseek.com/models", { headers: { Authorization: "Bearer " + key } });
-    return response.ok ? { success: true } : { success: false, error: response.status === 401 ? "DeepSeek rejected this API key." : "DeepSeek returned HTTP " + response.status + "." };
+    if (!key) return { success: false, error: settings().apiKeyEncrypted ? "The saved DeepSeek key could not be read on this computer. Enter it again." : "Enter a DeepSeek API key first." };
+    try {
+      const response = await fetch("https://api.deepseek.com/models", { headers: { Authorization: "Bearer " + key }, signal: AbortSignal.timeout(20000) });
+      return response.ok ? { success: true } : { success: false, error: response.status === 401 ? "DeepSeek rejected this API key." : "DeepSeek returned HTTP " + response.status + "." };
+    } catch (error) {
+      return { success: false, error: "Could not reach DeepSeek: " + (error.message || "network error") + "." };
+    }
   });
 
   handle("rmm-generate", async ({ title = "", language = "English" } = {}) => {
@@ -210,4 +221,14 @@ module.exports = function registerRecipeMoneyMaker({ handle: trustedHandle, ledg
   });
 
   handle("rmm-export-pdf", ({ ids = [] } = {}) => exportPdf(ids));
+};
+
+// Workspace backups include this separate store so its recipes and settings survive a restore.
+// The DeepSeek key stays OS-encrypted, as in every other backed-up credential.
+module.exports.exportRecipeMoneyMakerData = () => ({ settings: recipeStore.get("settings", {}) || {}, recipes: recipeStore.get("recipes", []) || [] });
+module.exports.restoreRecipeMoneyMakerData = (data = {}) => {
+  if (!data || typeof data !== "object") return false;
+  if (data.settings && typeof data.settings === "object") recipeStore.set("settings", data.settings);
+  if (Array.isArray(data.recipes)) recipeStore.set("recipes", data.recipes);
+  return true;
 };

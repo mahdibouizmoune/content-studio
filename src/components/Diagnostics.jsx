@@ -56,6 +56,34 @@ export default function Diagnostics() {
     }
   }
 
+  // Updates only download and install when the user clicks; nothing installs in the background.
+  async function downloadUpdate() {
+    setBusy("update");
+    try {
+      const result = await electronAPI.downloadAppUpdate?.();
+      setUpdate(result?.state || update);
+      setStatus(result?.success ? "Downloading the update." : result?.error || "Could not download the update.");
+    } catch (error) {
+      setStatus(error.message || "Could not download the update.");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function installUpdate() {
+    if (!await confirmAction({
+      title: "Restart and install the update",
+      message: `Content Studio will close, install version ${update?.availableVersion || "the new version"} and reopen. Finish or save any work in progress first.`,
+      confirmLabel: "Restart and Install"
+    })) return;
+    try {
+      const result = await electronAPI.installAppUpdate?.();
+      if (!result?.success) setStatus(result?.error || "Could not install the update.");
+    } catch (error) {
+      setStatus(error.message || "Could not install the update.");
+    }
+  }
+
   async function copyReport() {
     const report = sanitizeErrorDetails(JSON.stringify(diagnostics || {}, null, 2));
     try {
@@ -147,6 +175,8 @@ export default function Diagnostics() {
         <Button variant="secondary" onClick={() => electronAPI.openLogsFolder()}><FolderOpen className="h-4 w-4" />Open Logs Folder</Button>
         <Button variant="secondary" onClick={clearCache} disabled={!!busy}><Trash2 className="h-4 w-4" />Clear Temporary Cache</Button>
         <Button variant="secondary" onClick={checkUpdate} disabled={!!busy || update?.configured === false}><Download className="h-4 w-4" />Check for Update</Button>
+        {update?.status === "available" ? <Button variant="secondary" onClick={downloadUpdate} disabled={!!busy}><Download className="h-4 w-4" />Download {update.availableVersion || "Update"}</Button> : null}
+        {update?.status === "ready" ? <Button onClick={installUpdate} disabled={!!busy}><RotateCcw className="h-4 w-4" />Restart and Install</Button> : null}
         <Button variant="danger" onClick={restoreBackup} disabled={busy === "restore" || !diagnostics.latestBackup?.available}>
           <RotateCcw className="h-4 w-4" />Restore Latest Backup
         </Button>
