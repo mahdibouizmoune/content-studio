@@ -35,7 +35,7 @@ TONE & STYLE:
 - Keep most paragraphs to one clear idea. Use descriptive transition sentences so a reader can quickly choose what to read next without feeling pushed through a template.
 - Explain doneness signs, texture, flavor, timing, substitutions, and common mistakes.
 - Keep ingredient amounts, servings, prep time, cook time, total time, and instructions internally consistent. Every listed ingredient must be used in the method. Do not introduce undeclared ingredients in the steps.
-- Use precise quantities, ingredient preparation states, pan or appliance settings, and temperatures where the recipe needs them. Add metric weights for baking ingredients and other precision-sensitive amounts when practical.
+- Use precise quantities, ingredient preparation states, pan or appliance settings, and temperatures where the recipe needs them. Give metric weights only when they come from the source recipe; never convert cups to grams by guessing.
 - List ingredients in the order they are first used. Every instruction must name the relevant ingredient rather than relying on unclear phrases such as "add it."
 - Give both realistic time ranges and observable visual, texture, aroma, or internal-temperature cues. Avoid vague directions such as "cook until done."
 - When a recipe has components such as sauce, filling, topping, or dough, group the ingredients and instructions into matching components.
@@ -104,12 +104,10 @@ QUALITY RULES:
 TONE: Practical recipe editor, clear cooking cues, active voice, short paragraphs, and reader-first detail.`;
 
 export const LISTICLE_HOMEDECOR_PROMPT = `Write a conversational, friendly home decor article showcasing: "{title}".
-Target length: approximately 1500 words.
-
 CRITICAL: Present EXACTLY {itemCount} completely different room designs.
 
 STRUCTURE:
-1. <h1> title more appealing than original (max 15 words, MUST contain original core phrase). Example: '7 Bedroom Ideas' becomes '7 Stunning Bedroom Ideas That Transform Your Sleep Space'
+1. No <h1>: the page title is the H1. Start directly with the intro.
 2. Three separate <p> intro paragraphs.
 3. EXACTLY {itemCount} numbered <h2> design sections, each naming a specific complete design concept.
 4. EACH section: mood-setting intro + specific details (colors, furniture, textiles, decor) + optional <h3> subsections (Color Palette / Key Pieces / Styling Tips) + optional <ul> lists + closing vibe note.
@@ -118,12 +116,10 @@ STRUCTURE:
 TONE: Conversational, like a house tour with a friend with impeccable taste, active voice, short paragraphs, occasional humor, <strong> on key design terms. NO markdown. NO em dashes.`;
 
 export const LISTICLE_FASHION_PROMPT = `Write a conversational, friendly fashion outfit listicle about: "{title}".
-Target length: approximately 1500 words.
-
 CRITICAL: Create EXACTLY {itemCount} numbered outfit sections.
 
 STRUCTURE:
-1. <h1> title more appealing than original. Example: '8 Fall Outfits for Women' becomes '8 Fall Outfits for Women That Make You Love Sweater Weather'
+1. No <h1>: the page title is the H1. Start directly with the intro.
 2. Three separate <p> intro paragraphs.
 3. EXACTLY {itemCount} numbered <h2> outfit sections with creative names.
 4. EACH outfit: intro paragraph + <h3>Outfit Pieces:</h3> with <ul> + <h3>Styling Tips:</h3> + closing occasion/variation tip.

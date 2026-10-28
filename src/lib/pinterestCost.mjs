@@ -29,9 +29,11 @@ export function estimatePinterestPackCost({
   const imageUnitCost = imageSourceMode === "reuse-article"
     ? 0
     : pinterestImageUnitCost(imageModel, aspectRatio);
-  const textUnitCost = 0.002;
+  // Each Pin makes two GPT-4.1 Mini calls (image prompt, then title/description), ~$0.003 each.
+  const textCallsPerPin = 2;
+  const textUnitCost = 0.003 * textCallsPerPin;
   const imageCost = imageUnitCost * count;
-  const textCost = textUnitCost * count;
+  const textCost = Number((textUnitCost * count).toFixed(6));
   const total = imageCost + textCost;
 
   return {
@@ -42,6 +44,7 @@ export function estimatePinterestPackCost({
     priceSource: pricing.source || null,
     imageUnitCost,
     textUnitCost,
+    textCallsPerPin,
     imageCost,
     textCost,
     localOverlayCost: 0,

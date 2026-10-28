@@ -1120,8 +1120,8 @@ test('Pinterest cost estimates include generation and make article image reuse f
     aspectRatio: '2:3'
   });
   assert.equal(generated.imageCost, 0.3);
-  assert.equal(generated.textCost, 0.02);
-  assert.equal(generated.total, 0.32);
+  assert.equal(generated.textCost, 0.06);
+  assert.equal(generated.total, 0.36);
 
   const reused = estimatePinterestPackCost({
     pinCount: 10,
@@ -1129,7 +1129,7 @@ test('Pinterest cost estimates include generation and make article image reuse f
     imageModel: 'ideogram'
   });
   assert.equal(reused.imageCost, 0);
-  assert.equal(reused.total, 0.02);
+  assert.equal(reused.total, 0.06);
   assert.equal(pinterestImageUnitCost('pruna', '2:3'), 0.005);
   assert.equal(pinterestImageUnitCost('pruna', '1:1'), 0.01);
 });

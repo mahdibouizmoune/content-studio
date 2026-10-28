@@ -304,3 +304,37 @@ test('Job Center opens cluster, research, quality and Recipe Money Maker jobs on
   assert.equal(workspace('article:1:generate'), 'articles');
   assert.equal(workspace('pin-asset-1'), 'pin-creator');
 });
+
+test('AI JSON parsing accepts arrays wrapped in prose and reports cut-off JSON clearly', () => {
+  const source = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'electron', 'main.js'), 'utf8');
+  const vm = require('node:vm');
+  const start = source.indexOf('function safeJsonParse(');
+  const context = vm.createContext({});
+  vm.runInContext(source.slice(start, source.indexOf('\nfunction arrayValue(', start)), context);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.safeJsonParse('Here you go:\n[{"id":"a","title":"Soup"}]\nDone.'))), [{ id: 'a', title: 'Soup' }]);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.safeJsonParse('```json\n{"a":1}\n```'))), { a: 1 });
+  assert.throws(() => context.safeJsonParse('{"clusters": [{"name": "Soup"'), /did not return JSON|incomplete/);
+  assert.throws(() => context.safeJsonParse('{"clusters": [1, 2'), /incomplete|did not return/);
+});
+
+test('cost estimates count collection parts and both Pin text calls', async () => {
+  const { calculateEstimatedCost } = require('../electron/cost-estimation');
+  const single = calculateEstimatedCost({ articleCount: 1, settings: { aiModel: 'gpt5nano', affiliateEnabled: false } });
+  const collection = calculateEstimatedCost({ articleCount: 1, settings: { aiModel: 'gpt5nano', affiliateEnabled: false, articleType: 'listicle', listicleCategory: 'food', listicleItemCount: 15 } });
+  assert.equal(collection.breakdown.textCallsPerArticle - single.breakdown.textCallsPerArticle, 4, '15 recipes: three parts plus intro and ending');
+  const { estimatePinterestPackCost } = await import('../src/lib/pinterestCost.mjs');
+  const pins = estimatePinterestPackCost({ pinCount: 10, imageSourceMode: 'reuse-article', imageModel: 'ideogram' });
+  assert.equal(pins.textCallsPerPin, 2);
+  assert.equal(pins.textCost, 0.06);
+});
+
+test('page and article text sent to the AI is marked as data, and decor prompts no longer ask for an H1', async () => {
+  const source = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'electron', 'main.js'), 'utf8');
+  assert.doesNotMatch(source, /`Verified (?:ingredients|recipe name|recipe facts):/);
+  assert.match(source, /<<<SOURCE\n\$\{JSON\.stringify\(source\)\}\nSOURCE>>>/);
+  assert.match(source, /<<<ARTICLE\n\$\{articleText\}\nARTICLE>>>/);
+  const prompts = await import('../src/prompts.js');
+  for (const prompt of [prompts.LISTICLE_HOMEDECOR_PROMPT, prompts.LISTICLE_FASHION_PROMPT]) {
+    assert.doesNotMatch(prompt, /1\. <h1>|approximately 1500 words/);
+  }
+});
