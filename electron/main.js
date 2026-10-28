@@ -55,7 +55,6 @@ const { READER_RECIPE_GUIDANCE, assessEditorialGaps, hasEditorialInstructionLeak
 const { createReplicatePoller } = require('./replicate-polling');
 const { createRecipeReadinessService, recipeReviewHash, recipeSchemaNeedsReview, stripRecipeMicrodata, isAiWrittenRecipe, isNonFoodArticle } = require('./article-recipe-readiness');
 const { runSerial, mapBounded } = require('./bounded-work');
-const { escapeXmlText } = require('./xml-safety');
 const { mergePinStyles, migratePinStyles } = require('./pin-style-settings');
 const { buildPinSourceSnapshot, sanitizePinSourceSnapshot } = require('./pin-source');
 const {
@@ -1784,15 +1783,6 @@ function createWindow() {
   guardAppNavigation(mainWindow.webContents);
 }
 
-function focusArticleWriterSettings(section = 'pinCreator') {
-  if (!mainWindow || mainWindow.isDestroyed()) createWindow();
-  mainWindow.show();
-  mainWindow.focus();
-  const send = () => mainWindow.webContents.send('navigate-settings', { section });
-  if (mainWindow.webContents.isLoading()) mainWindow.webContents.once('did-finish-load', send);
-  else send();
-}
-
 function focusArticleWriterScreen(screen = 'pin-creator') {
   if (!mainWindow || mainWindow.isDestroyed()) createWindow();
   mainWindow.show();
@@ -3484,10 +3474,6 @@ function mergePinStylesWithDefaults(customStyles = {}) {
   return mergePinStyles(defaultPinCustomStyles, customStyles, retiredPinStyleIds);
 }
 
-function isPinCreatorSender(event) {
-  return event?.senderFrame?.url?.includes('/pin-creator/') || event?.sender?.getURL?.().includes('/pin-creator/');
-}
-
 function getPinCreatorSettings(rawSettings = store.get('settings', {})) {
   const stored = { ...pinCreatorDefaults, ...(rawSettings.pinCreator || {}) };
   const pinCreator = {
@@ -3525,7 +3511,7 @@ function initializePinReplicate() {
   return Boolean(apiToken);
 }
 
-secureIpcHandle('get-settings', async (event) => {
+secureIpcHandle('get-settings', async () => {
   let s = store.get('settings', {});
   const hadStoredSettings = Object.keys(s || {}).length > 0;
   const settingsMigration = migrateSettings(s);
@@ -3602,8 +3588,6 @@ secureIpcHandle('get-settings', async (event) => {
   merged.autoQueueOnPublish = pinCreator.autoQueueOnPublish;
   merged.autoBoardMatching = pinCreator.autoBoardMatching;
   merged.boardNames = pinCreator.boardNames;
-  // Both apps use `aiModel`; return the Pin Creator preference only to that window.
-  if (isPinCreatorSender(event)) merged.aiModel = pinCreator.aiModel;
   delete merged.replicateApiToken_encrypted;
   delete merged.ghlApiToken_encrypted;
   delete merged.impactAuthToken_encrypted;
@@ -3621,7 +3605,6 @@ secureIpcHandle('save-settings', (event, settings) => {
   toStore.googleAnalyticsMeasurementId = gaConfig.measurementId;
   toStore.googleAnalyticsPropertyId = gaConfig.propertyId;
   toStore.googleAnalyticsSiteUrl = gaConfig.siteUrl;
-  const senderIsPinCreator = isPinCreatorSender(event);
   delete toStore.youtubeArticlePrompt;
   if (toStore.internalLinkMaxPosts !== undefined) {
     toStore.internalLinkMaxPosts = Math.max(25, Math.min(500, Number(toStore.internalLinkMaxPosts || 500)));
@@ -3721,10 +3704,6 @@ secureIpcHandle('save-settings', (event, settings) => {
   if (isSecretPlaceholder(publicPinCreator.imgbbApiKey) || !publicPinCreator.imgbbApiKey) delete publicPinCreator.imgbbApiKey;
   const pinCreator = { ...(previous.pinCreator || {}), ...publicPinCreator };
   if (typeof toStore.imgbbApiKey === 'string' && toStore.imgbbApiKey && !isSecretPlaceholder(toStore.imgbbApiKey)) pinCreator.imgbbApiKey = toStore.imgbbApiKey;
-  if (senderIsPinCreator && typeof toStore.aiModel === 'string') {
-    pinCreator.aiModel = toStore.aiModel;
-    delete toStore.aiModel;
-  }
   ['postInterval', 'pinsPerDay', 'customStyles', 'titleDescPrompt', 'autoQueueOnPublish', 'autoBoardMatching', 'boardNames'].forEach((key) => {
     if (toStore[key] !== undefined) pinCreator[key] = toStore[key];
     delete toStore[key];
@@ -4572,15 +4551,6 @@ secureIpcHandle('open-repurpose-studio', () => {
   return { success: true };
 });
 
-secureIpcHandle('get-pin-creator-url', () => '');
-
-secureIpcHandle('open-settings', () => {
-  focusArticleWriterSettings('pinCreator');
-  return { success: true };
-});
-
-secureIpcHandle('close-settings', () => ({ success: true }));
-
 secureIpcHandle('test-connection', async (e, token) => {
   try {
     const resolvedToken = !token || isSecretPlaceholder(token) ? getDecryptedReplicateToken() : String(token);
@@ -4595,39 +4565,6 @@ secureIpcHandle('test-connection', async (e, token) => {
     const data = await res.json();
     return { success: true, username: data?.username || 'connected' };
   } catch (err) {
-    return { success: false, error: err.message };
-  }
-});
-
-function normalizeZipBuffer(input) {
-  if (Buffer.isBuffer(input)) return input;
-  if (input instanceof ArrayBuffer) return Buffer.from(input);
-  if (ArrayBuffer.isView(input)) return Buffer.from(input.buffer, input.byteOffset, input.byteLength);
-  if (Array.isArray(input)) return Buffer.from(input);
-  if (input && input.type === 'Buffer' && Array.isArray(input.data)) return Buffer.from(input.data);
-  throw new Error('Unsupported ZIP payload');
-}
-
-secureIpcHandle('save-zip-file', async (event, buffer) => {
-  try {
-    const timestamp = new Date().toISOString().split('T')[0];
-    const ownerWindow = (mainWindow && !mainWindow.isDestroyed())
-      ? mainWindow
-      : BrowserWindow.getFocusedWindow();
-    if (ownerWindow && !ownerWindow.isDestroyed()) {
-      ownerWindow.show();
-      ownerWindow.focus();
-    }
-    const { filePath, canceled } = await dialog.showSaveDialog(ownerWindow || undefined, {
-      title: 'Save Pinterest Pins ZIP',
-      defaultPath: `pinterest-pins-${timestamp}.zip`,
-      filters: [{ name: 'ZIP Files', extensions: ['zip'] }]
-    });
-    if (canceled || !filePath) return { success: false, canceled: true };
-    await fsp.writeFile(filePath, normalizeZipBuffer(buffer));
-    return { success: true, filePath };
-  } catch (err) {
-    logProviderError('Save ZIP failed:', err);
     return { success: false, error: err.message };
   }
 });
@@ -5385,10 +5322,6 @@ async function discoverImpactAffiliateProducts(params = {}, signal) {
     };
   }
 }
-
-secureIpcHandle('discover-impact-affiliates', async (event, params = {}) =>
-  withCancel(params.jobKey, async (signal) => discoverImpactAffiliateProducts(params, signal))
-);
 
 secureIpcHandle('discover-affiliates', async (event, params = {}) => withCancel(params.jobKey, async (signal) => {
   const savedSettings = store.get('settings', {});
@@ -9815,86 +9748,6 @@ secureIpcHandle('push-to-wordpress', async (e, { article, site }) => {
 // ============================================================================
 // IPC: PINTEREST PIN (2x2 collage, 800x1440, colored title overlay)
 // ============================================================================
-secureIpcHandle('create-pinterest-pin', async (e, { title, images, articleId: _articleId }) => {
-  if (!images || images.length < 4) throw new Error('Need at least 4 images to create a Pinterest pin');
-
-  const imagePaths = [];
-  for (let i = 0; i < 4; i++) {
-    if (images[i].localPath && fs.existsSync(images[i].localPath)) imagePaths.push(assertAllowedMediaPath(images[i].localPath));
-    else throw new Error(`Image ${i + 1} local file not found`);
-  }
-
-  const pinsDir = path.join(imagesDir, 'pinterest-pins');
-  if (!fs.existsSync(pinsDir)) fs.mkdirSync(pinsDir, { recursive: true });
-  if (!sharp) sharp = getSharp();
-
-  const W = 800, H = 1440, IW = 400, IH = 720;
-  const processed = [];
-  for (let i = 0; i < 4; i++) {
-    processed.push(await sharp(imagePaths[i]).resize(IW, IH, { fit: 'cover', position: 'center' }).png().toBuffer());
-  }
-
-  const collage = await sharp({ create: { width: W, height: H, channels: 4, background: { r: 255, g: 255, b: 255, alpha: 1 } } })
-    .composite([
-      { input: processed[0], top: 0,  left: 0 },
-      { input: processed[1], top: 0,  left: IW },
-      { input: processed[2], top: IH, left: 0 },
-      { input: processed[3], top: IH, left: IW }
-    ]).png().toBuffer();
-
-  const colors = [
-    { r: 124, g:  58, b: 237 }, { r:  79, g:  70, b: 229 }, { r:  14, g: 165, b: 233 },
-    { r:  16, g: 185, b: 129 }, { r:  99, g: 102, b: 241 }, { r: 139, g:  92, b: 246 },
-    { r: 168, g:  85, b: 247 }, { r: 244, g:  63, b:  94 }
-  ];
-  const c = colors[Math.floor(Math.random() * colors.length)];
-  const overlayH = 400;
-  const overlayY = (H - overlayH) / 2;
-
-  const withOverlay = await sharp(collage).composite([{
-    input: Buffer.from(`<svg width="${W}" height="${overlayH}"><rect x="0" y="0" width="${W}" height="${overlayH}" fill="rgba(${c.r},${c.g},${c.b},0.85)"/></svg>`),
-    top: overlayY, left: 0
-  }]).toBuffer();
-
-  let displayTitle = title;
-  const hasKw = /\b(ideas?|outfits?)\b/i.test(title);
-  if (hasKw) {
-    const m = title.match(/^(\d+\s+[\w\s]+?\b(?:outfit\s+)?(?:ideas?|outfits?))\b/i);
-    displayTitle = m ? m[1].trim() : title.split(' ').slice(0, 6).join(' ');
-    const words = displayTitle.split(' ');
-    if (words.length > 6) displayTitle = words.slice(0, 6).join(' ');
-  } else {
-    const m = title.match(/^(\d+\s+\w+\s+\w+(?:\s+\w+)?)/i);
-    displayTitle = m ? m[1].trim() : title.split(' ').slice(0, 4).join(' ');
-  }
-
-  const words = displayTitle.split(' ');
-  const maxPerLine = 2, maxLines = 3;
-  const lines = [];
-  for (let i = 0; i < Math.min(words.length, maxPerLine * maxLines); i += maxPerLine) {
-    lines.push(words.slice(i, i + maxPerLine).join(' '));
-    if (lines.length >= maxLines) break;
-  }
-
-  const fontSize = 90, lineHeight = fontSize * 1.15;
-  const total = lines.length * lineHeight;
-  const overlayCenter = overlayY + (overlayH / 2);
-  const startY = overlayCenter - (total / 2) + (lineHeight / 2);
-  const safeW = W - 80;
-
-  const textSvg = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
-    <defs><clipPath id="oc"><rect x="0" y="${overlayY}" width="${W}" height="${overlayH}"/></clipPath></defs>
-    <g clip-path="url(#oc)">
-      ${lines.map((l, i) => `<text x="${W/2}" y="${startY + i*lineHeight}" font-family="'Arial Black',Impact,'Helvetica Neue',Arial,sans-serif" font-size="${fontSize}" font-weight="900" fill="white" text-anchor="middle" dominant-baseline="middle" textLength="${Math.min(safeW, l.length*fontSize*0.6)}" lengthAdjust="spacingAndGlyphs">${escapeXmlText(l)}</text>`).join('')}
-    </g></svg>`;
-
-  const slug = displayTitle.toLowerCase().replace(/[^a-z0-9\s-]/g, '').replace(/\s+/g, '-').replace(/-+/g, '-').replace(/^-+|-+$/g, '').substring(0, 50);
-  const pinPath = path.join(pinsDir, `${slug}-${Date.now()}.webp`);
-
-  await sharp(withOverlay).composite([{ input: Buffer.from(textSvg), top: 0, left: 0 }]).webp({ quality: 90 }).toFile(pinPath);
-  return { success: true, pinPath };
-});
-
 // ============================================================================
 // IPC: MISC
 // ============================================================================

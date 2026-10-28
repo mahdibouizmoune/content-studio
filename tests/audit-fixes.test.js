@@ -63,7 +63,7 @@ function publisher({ get, post, generateCard } = {}) {
     deleteWordPressMedia: async () => {},
     appendPinQueue: async () => {}, schedulePostPublishQa: () => {}
   });
-  vm.runInContext(slice('function contentStudioStableId(', "secureIpcHandle('create-pinterest-pin',"), context);
+  vm.runInContext(slice('function contentStudioStableId(', '// IPC: MISC'), context);
   return { context, run: (article, url = 'https://site-a.example') => handler({}, { article, site: { url, username: 'mock', apiKey: 'mock' } }), requests, store };
 }
 const article = { id: 'article-1', title: 'Updated recipe', content: '<p>NEW body</p><section id="recipe-card"><p>Prep Time: 5 minutes; Cook Time: 10 minutes; Total Time: 15 minutes; Servings: 2</p><h3>Ingredients</h3><ul><li>1 cup rice</li><li>2 cups water</li><li>1 tsp salt</li><li>1 tbsp oil</li></ul><h3>Instructions</h3><ol><li>Bring water to a boil.</li><li>Simmer rice for 10 minutes until tender.</li><li>Rest until fluffy and serve.</li></ol></section>', wordpressPostId: 42, wordpressPostUrl: 'https://site-a.example/recipe' };

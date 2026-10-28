@@ -376,7 +376,6 @@ export default function App() {
   const [notice, setNotice] = useState("");
   const [theme, setTheme] = useState(() => localStorage.getItem("theme") || "light");
   const [settingsSection, setSettingsSection] = useState("general");
-  const [repurposeRefreshKey, setRepurposeRefreshKey] = useState(0);
   const [articlesWorkflowStage, setArticlesWorkflowStage] = useState("mode");
 
   useEffect(() => {
@@ -434,7 +433,6 @@ export default function App() {
         if (data.screen === "mode-selector") setArticlesWorkflowStage("mode");
         const nextScreen = ["queue", "add-to-queue", "mode-selector"].includes(data.screen) ? "articles" : data.screen;
         setActiveScreen(nextScreen);
-        if (data.screen === "repurpose") setRepurposeRefreshKey(Date.now());
       }
     });
   }, []);
@@ -470,8 +468,7 @@ export default function App() {
       setArticlesWorkflowStage(stage);
       setActiveScreen("articles");
     },
-    settingsSection,
-    repurposeRefreshKey
+    settingsSection
   };
 
   const screens = {

@@ -1296,12 +1296,11 @@ test('Pinterest duplicate media is rejected and valid keyword content is preserv
   assert.equal(normalizePinterestKeywords(row[7]), '#dinner, caf\u00e9, meal prep');
 });
 
-test('Both Pinterest export buttons use the shared writer and legacy BOM downloads are removed', () => {
-  const legacy = fs.readFileSync(path.join(__dirname, '..', 'electron', 'pin-creator', 'renderer.js'), 'utf8');
+test('Pinterest export uses the shared writer and the legacy Pin Creator window is gone', () => {
   const react = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'PinCreatorView.jsx'), 'utf8');
-  assert.match(legacy, /window\.electronAPI\.exportPinterestCsv/);
-  assert.doesNotMatch(legacy, /\\uFEFF|new Blob\(\[.*csvContent/);
+  assert.equal(fs.existsSync(path.join(__dirname, '..', 'electron', 'pin-creator')), false);
   assert.match(react, /exportPinterestCsv\(\{ testOnly: true \}\)/);
+  assert.doesNotMatch(react, /\\uFEFF|new Blob\(\[.*csvContent/);
 });
 
 test('Pinterest explicit schedule fitting keeps a requested batch inside 30 days', async () => {
@@ -1586,7 +1585,6 @@ test('repaired Pinterest hosting keeps the finished-pin marker needed by CSV exp
 test('Pinterest CSV keeps row identity and rejects stale image verification', () => {
   const pinViewSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'PinCreatorView.jsx'), 'utf8');
   const mainSource = fs.readFileSync(path.join(__dirname, '..', 'electron', 'main.js'), 'utf8');
-  const legacyRendererSource = fs.readFileSync(path.join(__dirname, '..', 'electron', 'pin-creator', 'renderer.js'), 'utf8');
   assert.match(pinViewSource, /const \{ headers, rows, scheduledPins \} = useMemo/);
   assert.match(pinViewSource, /scheduledPins\.map\(\(pin, rowIndex\) =>/);
   assert.match(pinViewSource, /publicValidatedUrl: ""/);
@@ -1596,9 +1594,6 @@ test('Pinterest CSV keeps row identity and rejects stale image verification', ()
   assert.match(mainSource, /pin\.imageQa\?\.publicValidatedUrl !== mediaUrl/);
   assert.match(mainSource, /pin\.imageQa\?\.publicIdentityVerified !== true/);
   assert.match(mainSource, /hasPinterestDimensions\(\{ width: Number\(pin\.imageQa\?\.publicWidth/);
-  const legacyPublicMediaBlock = legacyRendererSource.match(/function getPinPublicMediaUrl\(pin\) \{[\s\S]*?\n\}/)?.[0] || '';
-  assert.match(legacyPublicMediaBlock, /publicIdentityVerified !== true/);
-  assert.doesNotMatch(legacyPublicMediaBlock, /remoteImageUrl/);
 });
 
 test('Pinterest WordPress media fallback only selects the article domain', () => {
@@ -1891,8 +1886,6 @@ test('Meta uses one cropped Pinterest-first 4:5 image for both platform rows', (
 
 test('Pinterest image generation uses focused Ingredient Closeup AI while other profiles keep exact local type', () => {
   const mainSource = fs.readFileSync(path.join(__dirname, '..', 'electron', 'main.js'), 'utf8');
-  const legacyRendererSource = fs.readFileSync(path.join(__dirname, '..', 'electron', 'pin-creator', 'renderer.js'), 'utf8');
-
   assert.match(mainSource, /generatePinImage\(prompt, aspectRatio = '9:16'/);
   assert.match(mainSource, /pinAspectRatio = '9:16'/);
   const pinterestModelBlock = mainSource.match(/function pinterestModelRequest[\s\S]*?async function generatePinterestBaseImage/)?.[0] || '';
@@ -1926,8 +1919,6 @@ test('Pinterest image generation uses focused Ingredient Closeup AI while other 
   assert.match(mainSource, /style_type: 'Realistic'/);
   assert.match(mainSource, /runManagedReplicatePrediction/);
   assert.doesNotMatch(mainSource, /falling back to Pruna\/Z-Image/);
-  assert.match(legacyRendererSource, /2:3 - Standard Pinterest \(Recommended\)/);
-  assert.doesNotMatch(legacyRendererSource, /9:16 - Standard Pinterest \(Recommended\)/);
 });
 
 test('Pinterest predictions persist IDs and cancel remote work before retry', () => {
