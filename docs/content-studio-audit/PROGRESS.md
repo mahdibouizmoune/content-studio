@@ -24,10 +24,10 @@ Last updated: 2026-10-27. Branch: `claude/content-studio-360-audit`.
 
 ## Last verified counts
 
-lint pass · 434 tests pass · build pass · test:ui 6/6 (one transient screenshot-capture error on the first run, passed on re-run) · sweep 0 problems · prod audit 0.
+lint pass · 440 tests pass · build pass · test:ui 6/6 (one transient screenshot-capture error on the first run, passed on re-run) · sweep 0 problems · prod audit 0.
 
 Project skills confirmed discoverable: all three appeared in the session skill list after creation.
 
 ## Next actionable step
 
-Roadmap items 1, 2, 3, 5, 7, 8 and most of 4 are done. Next: 11 (Pin overlay fit and glyph fallback), 12–13 (Meta caption quality), 6 (featured-image failure to draft, needs approval), then a paid prompt evaluation if you approve a budget.
+Roadmap items 1–3, 5–8, 11, 13 and most of 4 and 12 are done (version 1.6.3). Next: 14 (show Pin save and load failures), 15 (canonical and Open Graph), 16 (Recipe Money Maker backup), then a paid prompt evaluation if you approve a budget.

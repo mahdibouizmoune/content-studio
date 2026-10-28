@@ -9580,6 +9580,7 @@ secureIpcHandle('push-to-wordpress', async (e, { article, site }) => {
   }
 
   let featuredMediaId = null;
+  let featuredImageDeferred = false;
   let featuredMediaUrl = '';
   const hasFeaturedAsset = Boolean(
     article.featuredImageLocalPath
@@ -9608,7 +9609,8 @@ secureIpcHandle('push-to-wordpress', async (e, { article, site }) => {
     } catch (err) {
       log.error(`Featured image upload failed: ${err.message}`);
       if (isTransientNetworkError(err)) {
-        mediaWarnings.push(`Featured image upload was deferred after a temporary WordPress outage: ${err.message}`);
+        featuredImageDeferred = true;
+        mediaWarnings.push(`Featured image upload failed after a temporary WordPress outage, so the post was saved as a draft instead of publishing without it. Publish again once the site responds: ${err.message}`);
       } else {
         throw new Error(`WordPress publishing stopped before creating the post. Featured image upload failed: ${err.message}`);
       }
@@ -9661,6 +9663,7 @@ secureIpcHandle('push-to-wordpress', async (e, { article, site }) => {
     site,
     content: updatedContent,
     featuredMediaId,
+    featuredImageDeferred,
     defaultStatus: settings.publishStatus
   });
 

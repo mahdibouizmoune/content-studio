@@ -9,14 +9,14 @@ Impact/Effort: H/M/L. Confidence reflects code evidence (C = confirmed in code, 
 | 3 | ~~Mark AI-invented recipes as untested; require review before Recipe schema~~ — done: schema withheld until "I Reviewed This Recipe" | H | M | C+R | Approved and done |
 | 4 | Roundups: ~~per-recipe `Recipe` schema; remove duplicate microdata~~ done. Remaining: `ItemList` carousel needs per-recipe anchors and the published URL | H | M | C+R | No |
 | 5 | ~~Publish-time schema drops author/datePublished and user edits~~ — done: merged | M | L | C | Done |
-| 6 | Featured-image failure should publish as draft | M | L | C | Yes (behaviour) |
+| 6 | ~~Featured-image failure should publish as draft~~ — done; updates also keep the current featured image | M | L | C | Approved and done |
 | 7 | ~~GHL logical dedupe~~ — done: same caption + platform + location within 14 days is blocked | M | M | C | Done |
 | 8 | ~~Do not auto-resubmit timed-out Pin text predictions~~ — done | M | L | C | Done |
 | 9 | Long article lengths exceed max_tokens → chunk or remove options | M | M | C | Yes (paid test) |
 | 10 | Collection path should use approved outline, brand voice, SEO brief | M | M | C | Yes (paid test) |
-| 11 | Overlay horizontal overflow + missing-glyph fallback, with QA bounds check | M | M | C | No |
-| 12 | Platform-distinct FB/IG captions and quality gate in bulk Meta path | M | M | C+R | No |
-| 13 | Broader engagement-bait and bare-domain link filters; accent-safe hashtags | M | L | C+R | No |
+| 11 | ~~Overlay horizontal overflow + missing-glyph fallback, with QA bounds check~~ — done (text wider than the glass panel in compact styles is unchanged default behaviour) | M | M | C | Done |
+| 12 | ~~Platform-distinct FB/IG captions~~ — done for automatic packs; a blocking quality gate in the bulk path is still open | M | M | C+R | Partly done |
+| 13 | ~~Broader engagement-bait and bare-domain link filters; accent-safe hashtags~~ — done | M | L | C+R | Done |
 | 14 | Pin save failures and initial-load failures shown to the user | M | L | C | No |
 | 15 | Canonical from current post link; send Open Graph to Rank Math | M | L | C | No |
 | 16 | Back up Recipe Money Maker store; allow clearing the DeepSeek key | M | L | C | No |

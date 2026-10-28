@@ -31,6 +31,10 @@ Pinterest board re-sync loop; reconnect sync state; disconnected-during-sync gua
 | AI-written recipes (generated or AI-repaired) publish without Recipe JSON-LD until "I Reviewed This Recipe"; a recipe edit invalidates the review | article-recipe-readiness.js, main.js (mark-recipe-reviewed IPC, publish), preload.js, ArticleEditor.jsx, src/lib/electron.js | audit-360: review hash test; real-app click test (panel shown, review stored, 0 page errors) |
 | GHL upload blocks a second live post with the same caption body for the same platform and location within 14 days | electron/ghl-dedupe.js, main.js | audit-360: dedupe test |
 | Home decor and fashion articles: no forced recipe card, recipe guidance, recipe editorial pass, paid card repair or recipe schema | article-recipe-readiness.js, main.js generate-article, Queue.jsx | audit-360: non-food test |
+| Pin overlay: overflowing headlines re-wrap (up to 4 lines) and shrink to stay inside the Pin; characters a font lacks use Montserrat; emoji dropped; QA safe zone now checks horizontal bounds and glyphs | electron/pinterest-overlay.js | audit-360: overlay fit and glyph tests; visual preview |
+| Meta: engagement-bait check covers keyword-comment, DM, "drop a ❤️", "share with someone who", double tap on every FB and IG field; bare domains stripped; accent-safe hashtags; distinct Instagram caption (quick facts + save cue) and a natural Facebook question | src/lib/metaQuality.mjs, electron/meta-captions.js, electron/meta-auto-pack.js | audit-360: three Meta tests |
+| Featured image upload failure saves the post as a draft; updates without a new image keep the current featured image | electron/wordpress-payload.js, electron/main.js | audit-360: featured-image test |
+| Version 1.6.3 | package.json, package-lock.json | — |
 | Project skills + sweep script | .claude/skills/* | Sweep run from skill folder: 0 problems |
 
 Each new unit test was confirmed to **fail on the original code** (source files stashed) and pass after the fix.
@@ -53,6 +57,7 @@ Each new unit test was confirmed to **fail on the original code** (source files 
 - A CSV/batch row with status "Draft" (any case) or an unknown value now creates a draft instead of a public post.
 - AI-written recipes publish without recipe rich-result data until reviewed in the editor; republish after review to add it.
 - GoHighLevel refuses a second post with the same caption on the same platform within 14 days.
+- A post whose featured image upload hits a temporary WordPress outage is saved as a draft.
 
 ## Unresolved
 

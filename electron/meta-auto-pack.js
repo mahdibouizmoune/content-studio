@@ -39,8 +39,13 @@ function articleDescription(article = {}, pin = {}) {
     || 'Find the complete recipe, ingredients, and step-by-step instructions on the blog.';
 }
 
+// "Crème brûlée" becomes CremeBrulee, not Crmebrle: strip accents before dropping other symbols.
+function asciiLetters(value = '') {
+  return String(value || '').normalize('NFD').replace(/[̀-ͯ]/g, '');
+}
+
 function hashtagToken(value = '') {
-  const words = text(value)
+  const words = asciiLetters(text(value))
     .replace(/[^a-zA-Z0-9\s]/g, ' ')
     .split(/\s+/)
     .filter((word) => word.length > 2)
@@ -51,7 +56,7 @@ function hashtagToken(value = '') {
 function metaHashtags(article = {}, pin = {}) {
   const pinTags = text(pin.csvKeywords || '')
     .split(',')
-    .map((value) => value.trim().replace(/^#/, '').replace(/[^a-zA-Z0-9]/g, ''))
+    .map((value) => asciiLetters(value.trim()).replace(/^#/, '').replace(/[^a-zA-Z0-9]/g, ''))
     .filter(Boolean)
     .map((value) => `#${value}`);
   const articleTags = [
@@ -62,6 +67,23 @@ function metaHashtags(article = {}, pin = {}) {
     '#HomeCooking'
   ].filter(Boolean);
   return [...new Set([...pinTags, ...articleTags])].slice(0, 8);
+}
+
+function instagramHook(title = '') {
+  const hook = `${title}: worth saving for this week`;
+  return hook.length <= 125 ? hook : title.slice(0, 125);
+}
+
+function recipeFacts(article = {}) {
+  try {
+    const card = require('./recipe-card-parser').parseRecipeCard(article.content || '');
+    const fact = (value) => String(value || '').replace(/[;,.\s]+$/, '');
+    const time = fact(card.facts['Total Time']);
+    const servings = fact(card.facts.Servings || card.facts.Yield).replace(/^serves\s+/i, '');
+    return [time && `Ready in ${time}`, servings && `Serves ${servings}`, card.ingredients.length && `${card.ingredients.length} ingredients`].filter(Boolean).join(' · ');
+  } catch {
+    return '';
+  }
 }
 
 function automaticMetaContent(article = {}, pin = {}) {
@@ -79,7 +101,7 @@ function automaticMetaContent(article = {}, pin = {}) {
       evidenceConfidence: 'medium'
     },
     facebook: {
-      primaryPost: `${title}\n\n${description}`,
+      primaryPost: `${title}\n\n${description}\n\nWhat would you serve it with?`,
       shortPost: `${title}\n\n${description}`,
       groupPost: `${title}\n\n${description}\n\nWould you add this recipe to your meal plan?`,
       reelCaption: `${title}. Get the complete recipe on the blog.`,
@@ -89,7 +111,8 @@ function automaticMetaContent(article = {}, pin = {}) {
       imageAltText: title
     },
     instagram: {
-      feedCaption: `${title}\n\nA little inspiration for your next meal: ${description}`,
+      // Instagram gets its own shape (quick facts, save cue) instead of repeating the Facebook story.
+      feedCaption: [instagramHook(title), recipeFacts(article), 'Save it for your next grocery list.'].filter(Boolean).join('\n\n'),
       reelCaption: `${title}\n\nSave this recipe idea for later.`,
       reelHook: title,
       reelScenes: [],

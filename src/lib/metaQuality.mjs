@@ -4,7 +4,14 @@ const ENGAGEMENT_BAIT = [
   /like\s+and\s+share/i,
   /share\s+this\s+(post|now)/i,
   /type\s+(yes|amen)/i,
-  /follow\s+for\s+follow/i
+  /follow\s+for\s+follow/i,
+  // Keyword-comment schemes ("Comment RECIPE below"); the keyword is uppercase, so no /i flag here.
+  /\b[Cc]omment\s+["'‘“]?[A-Z]{2,}\b/,
+  /\b(?:dm|message)\s+(?:us|me)\s+["'‘“]?[A-Z]{2,}/i,
+  /\bdrop\s+an?\s+(?:\S*\p{Extended_Pictographic}|heart|emoji|like)/iu,
+  /share\s+(?:this\s+)?with\s+(?:someone|a friend|friends)\s+who/i,
+  /double[\s-]tap/i,
+  /smash\s+(?:that|the)\s+like/i
 ];
 
 function cleanText(value) {
@@ -57,7 +64,8 @@ export function scoreMetaContent(content = {}, { sourceUrl = "", imageAssets = [
     { id: "fb-question", platform: "facebook", label: "Facebook post invites a natural discussion", passed: fbPost.includes("?"), weight: 4 },
     { id: "fb-cta", platform: "facebook", label: "Facebook has a clear next step", passed: cleanText(facebook.cta).length >= 8, weight: 5 },
     { id: "fb-alt", platform: "facebook", label: "Facebook image alt text is descriptive", passed: cleanText(facebook.imageAltText).length >= 20, weight: 5 },
-    { id: "fb-bait", platform: "facebook", label: "Facebook copy avoids engagement bait", passed: !hasEngagementBait(`${fbPost} ${facebook.cta || ""}`), weight: 7 },
+    { id: "fb-bait", platform: "facebook", label: "Facebook copy avoids engagement bait", passed: ![fbPost, facebook.shortPost, facebook.groupPost, facebook.reelCaption, facebook.cta].some(hasEngagementBait), weight: 7 },
+    { id: "ig-bait", platform: "instagram", label: "Instagram copy avoids engagement bait", passed: ![igCaption, instagram.reelCaption, instagram.reelHook, instagram.cta].some(hasEngagementBait), weight: 7 },
     { id: "ig-hook", platform: "instagram", label: "Instagram opens with a concise hook", passed: cleanText(igCaption.split(/\r?\n/)[0]).length >= 20 && cleanText(igCaption.split(/\r?\n/)[0]).length <= 125, weight: 7 },
     { id: "ig-depth", platform: "instagram", label: "Instagram caption delivers useful detail", passed: igCaption.length >= 100 && igCaption.length <= 2200, weight: 6 },
     { id: "ig-cta", platform: "instagram", label: "Instagram has one clear CTA", passed: cleanText(instagram.cta).length >= 8, weight: 5 },
