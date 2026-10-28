@@ -5,13 +5,13 @@ Impact/Effort: H/M/L. Confidence reflects code evidence (C = confirmed in code, 
 | Rank | Item | Impact | Effort | Conf. | Approval |
 |---|---|---|---|---|---|
 | 1 | ~~Meta 4:5 crop cuts Pin headlines and CTA~~ — done: fit over blurred copy | H | M | C | Approved and done |
-| 2 | Recipe-only rules and paid card repair applied to non-food listicles | H | M | C | Yes (needs paid test) |
-| 3 | Mark AI-invented recipes as untested; require review before Recipe schema | H | M | C+R | Yes (workflow) |
-| 4 | Roundups: `ItemList` + per-recipe `Recipe` schema; remove duplicate microdata | H | M | C+R | No |
-| 5 | Publish-time schema drops author/datePublished and user edits — merge instead | M | L | C | No |
+| 2 | ~~Recipe-only rules and paid card repair applied to non-food listicles~~ — done (deterministic; generated output quality not measured) | H | M | C | Approved and done |
+| 3 | ~~Mark AI-invented recipes as untested; require review before Recipe schema~~ — done: schema withheld until "I Reviewed This Recipe" | H | M | C+R | Approved and done |
+| 4 | Roundups: ~~per-recipe `Recipe` schema; remove duplicate microdata~~ done. Remaining: `ItemList` carousel needs per-recipe anchors and the published URL | H | M | C+R | No |
+| 5 | ~~Publish-time schema drops author/datePublished and user edits~~ — done: merged | M | L | C | Done |
 | 6 | Featured-image failure should publish as draft | M | L | C | Yes (behaviour) |
-| 7 | GHL logical dedupe key (article + platform + location) | M | M | C | No |
-| 8 | Do not auto-resubmit timed-out Pin text predictions (double-charge risk) | M | L | C | No |
+| 7 | ~~GHL logical dedupe~~ — done: same caption + platform + location within 14 days is blocked | M | M | C | Done |
+| 8 | ~~Do not auto-resubmit timed-out Pin text predictions~~ — done | M | L | C | Done |
 | 9 | Long article lengths exceed max_tokens → chunk or remove options | M | M | C | Yes (paid test) |
 | 10 | Collection path should use approved outline, brand voice, SEO brief | M | M | C | Yes (paid test) |
 | 11 | Overlay horizontal overflow + missing-glyph fallback, with QA bounds check | M | M | C | No |

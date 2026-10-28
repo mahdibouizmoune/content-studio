@@ -265,6 +265,9 @@ function makeMockApi() {
       writeStore({ ...store, articles: [...(store.articles || []), ...selection.accepted] });
       return { success: true, addedCount: selection.accepted.length, skipped: selection.skipped };
     },
+    async markRecipeReviewed() {
+      return { success: false, error: "Recipe review requires the desktop app." };
+    },
     async prepareArticleRecipe({ article }) {
       return { success: false, patch: { content: article.content, recipeCardQualityWarning: "Recipe validation requires the desktop app." } };
     },

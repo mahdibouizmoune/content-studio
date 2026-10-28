@@ -102,3 +102,81 @@ test('Meta 4:5 images fit the whole Pin over a blurred copy so headline and butt
   // The full Pin is scaled to ~759 px wide; the side bands are the softened, dimmed copy.
   assert.ok(pixel(60, 675).g < 190, 'side bands are the dimmed background copy');
 });
+
+test('timed-out Pin text predictions are never resubmitted automatically', () => {
+  const source = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'electron', 'main.js'), 'utf8');
+  const start = source.indexOf('async function generatePinAIContent');
+  const block = source.slice(start, source.indexOf('function parsePinStyle', start));
+  assert.ok(start > 0 && block.length > 0);
+  assert.doesNotMatch(block, /retrying|attempt < retries|for \(let attempt/);
+});
+
+test('publish-time recipe schema keeps editor fields and never carries ratings or nutrition', () => {
+  const { validatedRecipeSchema } = require('../electron/article-recipe-readiness');
+  const content = renderRecipes([rice]);
+  const previous = { '@context': 'https://schema.org', '@type': 'Recipe', name: 'Old', description: 'Bright lemon rice for weeknights.', author: { '@type': 'Person', name: 'Sam' }, datePublished: '2026-10-01', keywords: 'lemon rice', recipeCategory: 'Side dish', aggregateRating: { ratingValue: 5 }, nutrition: { calories: '100' } };
+  const schema = JSON.parse(validatedRecipeSchema({ title: 'Lemon Rice', structuredData: JSON.stringify(previous), featuredImageRemoteUrl: 'https://example.com/rice.jpg' }, content));
+  assert.equal(schema.name, 'Lemon Rice');
+  assert.deepEqual(schema.author, previous.author);
+  assert.equal(schema.datePublished, '2026-10-01');
+  assert.equal(schema.recipeCategory, 'Side dish');
+  assert.equal(schema.description, previous.description);
+  assert.equal(schema.aggregateRating, undefined); assert.equal(schema.nutrition, undefined);
+  assert.equal(schema.totalTime, 'PT30M'); assert.deepEqual(schema.image, ['https://example.com/rice.jpg']);
+  assert.equal(schema.recipeIngredient.length, 4);
+  // Temporary provider URLs are not durable recipe images.
+  assert.equal(JSON.parse(validatedRecipeSchema({ title: 'Lemon Rice', featuredImageRemoteUrl: 'https://replicate.delivery/x.jpg' }, content)).image, undefined);
+});
+
+test('complete recipe collections publish one Recipe per visible recipe', () => {
+  const { validatedRecipeSchema } = require('../electron/article-recipe-readiness');
+  const safeChicken = { ...rawChicken, instructions: [...rawChicken.instructions.slice(0, 2), 'Bake 30 minutes until a thermometer in the thickest part reads 165 F (74 C).'] };
+  const schema = JSON.parse(validatedRecipeSchema({ title: '2 Easy Dinners', recipeCollection: { depth: 'complete-recipes', itemCount: 2 }, featuredImageRemoteUrl: 'https://example.com/hero.jpg' }, renderRecipes([rice, safeChicken])));
+  assert.equal(schema['@graph'].length, 2);
+  assert.deepEqual(schema['@graph'].map((r) => r['@type']), ['Recipe', 'Recipe']);
+  assert.match(schema['@graph'][1].name, /Chicken Bake/);
+  assert.equal(schema['@graph'][1].recipeIngredient.length, 3);
+  assert.doesNotMatch(JSON.stringify(schema), /PTnullM|PTNaNM/);
+});
+
+test('recipe microdata is stripped so JSON-LD is the single recipe entity', () => {
+  const { stripRecipeMicrodata } = require('../electron/article-recipe-readiness');
+  const html = '<section id="recipe-card" class="recipe-card" itemscope itemtype="https://schema.org/Recipe"><h2 itemprop="name">Rice</h2><ul itemprop="recipeIngredient"><li>1 cup rice</li></ul></section>';
+  assert.equal(stripRecipeMicrodata(html), '<section id="recipe-card" class="recipe-card"><h2>Rice</h2><ul><li>1 cup rice</li></ul></section>');
+});
+
+test('AI-written recipes need a review matching the current recipe before recipe data is published', () => {
+  const { recipeReviewHash, recipeSchemaNeedsReview } = require('../electron/article-recipe-readiness');
+  const content = renderRecipes([rice]);
+  const generated = { content, generationCheckpoint: { content } };
+  assert.equal(recipeSchemaNeedsReview(generated), true);
+  const reviewed = { ...generated, recipeReview: { hash: recipeReviewHash(content) } };
+  assert.equal(recipeSchemaNeedsReview(reviewed), false);
+  const edited = renderRecipes([{ ...rice, ingredients: ['2 cups rice', ...rice.ingredients.slice(1)] }]);
+  assert.equal(recipeSchemaNeedsReview({ ...reviewed, content: edited }), true, 'editing the recipe requires a new review');
+  assert.equal(recipeSchemaNeedsReview({ content }), false, 'hand-written or imported recipes are not held');
+});
+
+test('GHL blocks a second post with the same caption on the same platform within 14 days', () => {
+  const { findLogicalGhlDuplicate } = require('../electron/ghl-dedupe');
+  const caption = 'Bright, garlicky lemon rice that is ready in 30 minutes. #LemonRice #EasyDinner';
+  const receipts = [{ platform: 'Facebook', locationId: 'loc', caption, scheduleDate: '2026-10-28T09:00:00Z', status: 'scheduled', postId: 'p1' }];
+  const again = { platform: 'facebook', locationId: 'loc', caption: `${caption} #WeeknightMeals`, scheduleDate: '2026-10-30T18:00:00Z' };
+  assert.equal(findLogicalGhlDuplicate(receipts, again)?.postId, 'p1');
+  assert.equal(findLogicalGhlDuplicate(receipts, { ...again, platform: 'Instagram' }), null);
+  assert.equal(findLogicalGhlDuplicate(receipts, { ...again, scheduleDate: '2026-12-01T09:00:00Z' }), null);
+  assert.equal(findLogicalGhlDuplicate([{ ...receipts[0], status: 'failed' }], again), null);
+  assert.equal(findLogicalGhlDuplicate(receipts, { ...again, caption: 'A completely different caption about roasted carrots and honey.' }), null);
+});
+
+test('non-food listicles skip recipe cards, repair and recipe data', async () => {
+  const { isNonFoodArticle } = require('../electron/article-recipe-readiness');
+  assert.equal(isNonFoodArticle({ category: 'homedecor' }), true);
+  assert.equal(isNonFoodArticle({}, { articleType: 'listicle', listicleCategory: 'fashion' }), true);
+  assert.equal(isNonFoodArticle({}, { articleType: 'article', listicleCategory: 'homedecor' }), false, 'a single recipe article is not reclassified by the global listicle setting');
+  assert.equal(isNonFoodArticle({ category: 'food' }), false);
+  const prepare = createRecipeReadinessService({ generateCard: async () => assert.fail('no paid recipe repair for decor') });
+  const result = await prepare({ id: 'd', category: 'homedecor', title: '12 Cozy Fall Porch Ideas', content: `<h2>1. Pumpkins</h2><p>${'Stack pumpkins by the door. '.repeat(10)}</p>` });
+  assert.equal(result.success, true); assert.equal(result.skipped, 'non-food');
+  assert.equal(result.patch.recipeCardEnabled, false); assert.equal(result.patch.structuredData, '');
+});
