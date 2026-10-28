@@ -715,6 +715,8 @@ export default function Queue({ articles, settings, refreshArticles, setActiveSc
       if (!finalRecipe.success) throw new Error(finalRecipe.patch.recipeCardQualityWarning || "Final recipe validation failed.");
       const completedArticle = {
         ...workingArticle,
+        // Non-food articles come back with recipeCardEnabled false; keep that so no recipe blocker applies.
+        ...(finalRecipe.skipped === "non-food" ? { recipeCardEnabled: false, recipeRequired: false } : {}),
         content: baseContent,
         generatedTitle,
         featuredImage: featured.displayUrl || featured.localImageUrl || featured.imageUrl,

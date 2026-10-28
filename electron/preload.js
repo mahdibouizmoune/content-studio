@@ -32,6 +32,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   saveArticle: (article) => ipcRenderer.invoke('save-article', article),
   queueArticles: (params) => ipcRenderer.invoke('queue-articles', params),
   prepareArticleRecipe: (params) => ipcRenderer.invoke('prepare-article-recipe', params),
+  markRecipeReviewed: (params) => ipcRenderer.invoke('mark-recipe-reviewed', params),
   deleteArticle: (articleId) => ipcRenderer.invoke('delete-article', articleId),
   exportArticles: () => ipcRenderer.invoke('export-articles'),
   importArticles: () => ipcRenderer.invoke('import-articles'),

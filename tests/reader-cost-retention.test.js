@@ -95,6 +95,7 @@ test('actual article generation avoids a second paid rewrite when reader checks 
   const content = paragraphs + useful;
   const context = vm.createContext({
     READER_RECIPE_GUIDANCE, assessEditorialGaps, validateRecipeCard, replaceRecipeCard,
+    isNonFoodArticle: require('../electron/article-recipe-readiness').isNonFoodArticle,
     AbortController, Map, Promise, Error, setTimeout, activeJobs: new Map(),
     secureIpcHandle: (_channel, fn) => { handler = fn; },
     resolveReplicateApiToken: () => 'test-token', relevantPinterestSignals: () => [], getAIModelUrl: () => 'test-url',

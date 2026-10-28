@@ -132,6 +132,28 @@ export default function ArticleEditor({ article, settings, saveSettings, onClose
     return revised;
   }
 
+  const aiWrittenRecipe = Boolean(draft.generationCheckpoint) || draft.recipeCardRepairApplied === true;
+  const [reviewingRecipe, setReviewingRecipe] = useState(false);
+
+  async function markRecipeReviewed() {
+    setReviewingRecipe(true);
+    try {
+      // Save first so the review covers exactly the recipe text that is stored.
+      const saved = await save(draft, { action: "recipe-review", reason: "Recipe reviewed by user" });
+      const result = await electronAPI.markRecipeReviewed?.({ articleId: saved.id });
+      if (!result?.success) throw new Error(result?.error || "Could not record the recipe review.");
+      const next = { ...saved, recipeReview: result.recipeReview };
+      lastSavedRef.current = next;
+      setDraft(next);
+      await refreshArticles();
+      setStatus("Recipe review recorded. Recipe rich-result data will be included the next time you publish.");
+    } catch (error) {
+      setStatus(error.message || "Could not record the recipe review.");
+    } finally {
+      setReviewingRecipe(false);
+    }
+  }
+
   async function approve() {
     let next = rescore({ ...draft, workflowStatus: "approved" });
     if (next.qualityReport?.blockers?.length) {
@@ -1434,6 +1456,21 @@ export default function ArticleEditor({ article, settings, saveSettings, onClose
                 {!draft.imageQa?.checks?.length ? <div className="text-sm text-slate-500">Save once to run image QA.</div> : null}
               </div>
             </div>
+            {aiWrittenRecipe ? (
+              <div className="soft-card rounded-lg p-4" aria-label="AI-written recipe review">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-lg font-black text-slate-900">AI-Written Recipe Review</div>
+                    <p className="mt-1 text-sm font-semibold text-slate-600">
+                      {draft.recipeReview?.reviewedAt
+                        ? `Reviewed ${new Date(draft.recipeReview.reviewedAt).toLocaleString()}. Changing the recipe later requires a new review.`
+                        : "Not reviewed. The article can publish, but recipe rich-result data is withheld until you check the ingredients, quantities, times, temperatures and yield."}
+                    </p>
+                  </div>
+                  <Button variant="secondary" disabled={reviewingRecipe} onClick={markRecipeReviewed}><PackageCheck className="h-4 w-4" />{draft.recipeReview?.reviewedAt ? "Review Again" : "I Reviewed This Recipe"}</Button>
+                </div>
+              </div>
+            ) : null}
             {draft.structuredData ? (
               <div className="soft-card rounded-lg p-4">
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-3">

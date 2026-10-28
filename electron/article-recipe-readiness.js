@@ -1,19 +1,97 @@
 const { validateRecipeCard, validateCompactRecipeCollection, replaceRecipeCard } = require('./recipe-generation');
 const { parseRecipeCard, durationMinutes } = require('./recipe-card-parser');
 const { inspectRecipe } = require('./recipe-quality');
+const { recipeUnits } = require('./recipe-units');
+const { createHash } = require('node:crypto');
 
-function validatedRecipeSchema(article, content) {
-  const card = parseRecipeCard(content);
-  const duration = (label) => `PT${durationMinutes(card.facts[label])}M`;
-  const image = article.featuredImageRemoteUrl || article.featuredImage || '';
-  return JSON.stringify({
-    '@context': 'https://schema.org', '@type': 'Recipe', name: card.name || article.generatedTitle || article.title,
-    description: article.metaDescription || article.excerpt || '',
-    ...(String(image).startsWith('https://') ? { image: [image] } : {}),
+// Fields the visible card cannot supply are kept from the editor's schema. Ratings, reviews and
+// nutrition are never carried over: they must come from real data, not a generated draft.
+const CARRIED_SCHEMA_FIELDS = ['author', 'datePublished', 'dateModified', 'keywords', 'recipeCategory', 'recipeCuisine', 'suitableForDiet', 'video'];
+
+function existingRecipeSchema(article) {
+  try {
+    const parsed = typeof article.structuredData === 'string' ? JSON.parse(article.structuredData) : article.structuredData;
+    const items = Array.isArray(parsed?.['@graph']) ? parsed['@graph'] : [parsed];
+    return items.find((item) => [].concat(item?.['@type'] || []).includes('Recipe')) || {};
+  } catch {
+    return {};
+  }
+}
+
+function durableImage(value = '') {
+  const url = String(value || '');
+  return url.startsWith('https://') && !/replicate\.delivery/i.test(url) ? url : '';
+}
+
+function recipeFromCard(html, extras = {}) {
+  const card = parseRecipeCard(html);
+  const duration = (label) => {
+    const minutes = durationMinutes(card.facts[label]);
+    return minutes === null ? undefined : `PT${Math.round(minutes)}M`;
+  };
+  const schema = {
+    '@type': 'Recipe', name: card.name, ...extras,
     recipeIngredient: card.ingredients, recipeInstructions: card.instructions.map((step) => ({ '@type': 'HowToStep', text: step })),
     prepTime: duration('Prep Time'), cookTime: duration('Cook Time'), totalTime: duration('Total Time'),
     recipeYield: card.facts.Servings || card.facts.Yield
+  };
+  Object.keys(schema).forEach((key) => (schema[key] === undefined || schema[key] === '') && delete schema[key]);
+  return schema;
+}
+
+function validatedRecipeSchema(article, content) {
+  const previous = existingRecipeSchema(article);
+  const carried = Object.fromEntries(CARRIED_SCHEMA_FIELDS.filter((key) => previous[key] !== undefined).map((key) => [key, previous[key]]));
+  const image = durableImage(article.featuredImageRemoteUrl) || durableImage(article.featuredImage);
+  const collection = article.generationCheckpoint?.recipeCollection || article.recipeCollection;
+  const units = collection?.depth === 'complete-recipes' ? recipeUnits(content) : [];
+  if (units.length > 1) {
+    // One Recipe per visible recipe; the page itself stays a roundup, not a single dish.
+    const recipes = units.map((unit, index) => {
+      const sectionImage = durableImage(unit.html.match(/<img\b[^>]*\bsrc=["']([^"']+)["']/i)?.[1]);
+      return recipeFromCard(unit.html, { ...carried, name: unit.name || `Recipe ${index + 1}`, ...(sectionImage || (index === 0 && image) ? { image: [sectionImage || image] } : {}) });
+    });
+    return JSON.stringify({ '@context': 'https://schema.org', '@graph': recipes }).replace(/</g, '\\u003c');
+  }
+  const card = parseRecipeCard(content);
+  return JSON.stringify({
+    '@context': 'https://schema.org',
+    ...recipeFromCard(content, {
+      ...carried,
+      name: card.name || article.generatedTitle || article.title,
+      description: previous.description || article.metaDescription || article.excerpt || '',
+      ...(image ? { image: [image] } : {})
+    })
   }).replace(/</g, '\\u003c');
+}
+
+// Known non-food listicle categories (src/prompts.js). Anything else keeps the recipe rules.
+const NON_FOOD_CATEGORIES = new Set(['homedecor', 'fashion']);
+
+function isNonFoodArticle(article = {}, settings = {}) {
+  const listicleCategory = String(settings.articleType || '').toLowerCase() === 'listicle' ? settings.listicleCategory : '';
+  return NON_FOOD_CATEGORIES.has(String(listicleCategory || article.category || '').toLowerCase());
+}
+
+// AI-written recipes (generated or AI-repaired) are published as recipe data only after the
+// user confirms the current recipe text; any later recipe edit needs a fresh review.
+function recipeReviewHash(content = '') {
+  const units = recipeUnits(content);
+  const text = (units.length ? units.map((unit) => unit.html) : [parseRecipeCard(content).html]).join('\n');
+  return createHash('sha256').update(text.replace(/\s+/g, ' ').trim()).digest('hex');
+}
+
+function isAiWrittenRecipe(article = {}) {
+  return Boolean(article.generationCheckpoint) || article.recipeCardRepairApplied === true;
+}
+
+function recipeSchemaNeedsReview(article = {}, content = article.content) {
+  return isAiWrittenRecipe(article) && article.recipeReview?.hash !== recipeReviewHash(content);
+}
+
+// JSON-LD is the single source of recipe data; card microdata would duplicate it incompletely.
+function stripRecipeMicrodata(html = '') {
+  return String(html).replace(/\s(?:itemscope|itemtype=(["'])[^"']*\1|itemprop=(["'])[^"']*\2)(?=[\s/>])/gi, '');
 }
 
 function buildRecipeRepairPrompt(article, issues) {
@@ -36,9 +114,16 @@ ${String(article.content || '').replace(/<[^>]+>/g, ' ').slice(0, 16000)}`;
 }
 
 function createRecipeReadinessService({ generateCard, clean = (value) => value }) {
-  return async function prepare(article, { signal, repair = true } = {}) {
+  return async function prepare(article, { signal, repair = true, settings = {} } = {}) {
     if (signal?.aborted) throw new Error('Cancelled by user');
     let content = String(article.content || '');
+    if (isNonFoodArticle(article, settings)) {
+      // No recipe card is required, repaired or published as recipe data for non-food content.
+      return { success: true, repaired: false, issues: [], skipped: 'non-food', patch: {
+        content, recipeRequired: false, recipeCardEnabled: false, structuredData: '',
+        recipeCardQualityWarning: '', recipeValidation: { ok: true, issues: [], notApplicable: true, checkedAt: new Date().toISOString() }
+      } };
+    }
     let validation = validateRecipeCard(content);
     const collection = article.generationCheckpoint?.recipeCollection || article.recipeCollection;
     const structuralIssues = collection?.depth === 'compact' && Number(collection.itemCount) > 0
@@ -92,4 +177,4 @@ function createRecipeReadinessService({ generateCard, clean = (value) => value }
   };
 }
 
-module.exports = { createRecipeReadinessService, buildRecipeRepairPrompt };
+module.exports = { createRecipeReadinessService, buildRecipeRepairPrompt, isNonFoodArticle, validatedRecipeSchema, recipeReviewHash, isAiWrittenRecipe, recipeSchemaNeedsReview, stripRecipeMicrodata };

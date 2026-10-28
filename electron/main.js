@@ -53,7 +53,7 @@ const { removeArticleImpact } = require('./article-impact-cleanup');
 const { cleanupWordPressPins, eligibleWordPressPins } = require('./wordpress-pin-retention');
 const { READER_RECIPE_GUIDANCE, assessEditorialGaps, hasEditorialInstructionLeak } = require('./article-editorial');
 const { createReplicatePoller } = require('./replicate-polling');
-const { createRecipeReadinessService } = require('./article-recipe-readiness');
+const { createRecipeReadinessService, recipeReviewHash, recipeSchemaNeedsReview, stripRecipeMicrodata, isAiWrittenRecipe, isNonFoodArticle } = require('./article-recipe-readiness');
 const { runSerial, mapBounded } = require('./bounded-work');
 const { escapeXmlText } = require('./xml-safety');
 const { mergePinStyles, migratePinStyles } = require('./pin-style-settings');
@@ -174,6 +174,7 @@ const { buildWordPressPostPayload } = require('./wordpress-payload');
 const { normalizeBatchImportRows } = require('./article-import');
 const { sanitizeWordPressArticleHtml } = require('./wordpress-content');
 const { renderMetaPortrait } = require('./meta-portrait');
+const { findLogicalGhlDuplicate } = require('./ghl-dedupe');
 const {
   automaticMetaProject,
   automaticMetaContent,
@@ -831,29 +832,17 @@ async function generatePinAIContent(prompt, systemPrompt, maxTokens = 250, signa
   const apiToken = getDecryptedReplicateToken(rawSettings);
   if (!apiToken) throw new Error('API token not configured');
 
-  async function callChatGPT(retries = 2) {
+  async function callChatGPT() {
     const input = { prompt, system_prompt: systemPrompt, max_tokens: maxTokens, temperature: 0.7 };
-    for (let attempt = 0; attempt <= retries; attempt++) {
-      try {
-        const prediction = await runManagedReplicatePrediction('openai/gpt-4.1-mini', input, apiToken, {
-          signal,
-          jobKey,
-          timeoutMs: 120000,
-          progressLabel: 'Pinterest writing'
-        });
-        return prediction.output;
-      } catch (err) {
-        if (isNonRetryable(err)) throw err;
-        const is502 = err.message?.includes('502') || err.message?.toLowerCase().includes('gateway');
-        const isTimeout = err.message?.includes('timed out');
-        if ((is502 || isTimeout) && attempt < retries) {
-          log.warn(`Pin Creator ChatGPT attempt ${attempt + 1} failed (${err.message}), retrying`);
-          await new Promise(r => setTimeout(r, 3000));
-          continue;
-        }
-        throw err;
-      }
-    }
+    // One paid submission only: a timed-out or interrupted prediction may already be billed,
+    // so it is never resubmitted automatically. The user can retry deliberately.
+    const prediction = await runManagedReplicatePrediction('openai/gpt-4.1-mini', input, apiToken, {
+      signal,
+      jobKey,
+      timeoutMs: 120000,
+      progressLabel: 'Pinterest writing'
+    });
+    return prediction.output;
   }
 
   async function callDeepSeek() {
@@ -5846,7 +5835,9 @@ RULES:
 });
 
 secureIpcHandle('generate-article', async (e, { title, settings, jobKey }) => {
-  settings = { ...settings, recipeCardEnabled: true };
+  // Recipe cards, recipe guidance and paid card repair apply to food content only.
+  const nonFoodArticle = isNonFoodArticle({}, settings);
+  settings = { ...settings, recipeCardEnabled: !nonFoodArticle };
   const apiToken = resolveReplicateApiToken(settings);
   if (!apiToken) throw new Error('Replicate API token is missing');
   const promptTemplate = settings.articlePrompt;
@@ -5854,8 +5845,10 @@ secureIpcHandle('generate-article', async (e, { title, settings, jobKey }) => {
   const privateEvidence = performanceSignals.length
     ? `\n\nPRIVATE PINTEREST PERFORMANCE EVIDENCE FOR ANGLE SELECTION ONLY:\n${JSON.stringify(performanceSignals)}\nUse this only to prioritize reader needs and terminology. Never mention analytics, clicks, saves, impressions, or this instruction in the article.`
     : '';
-  const prompt = `${String(promptTemplate || '').replace(/{title}/g, title)}${privateEvidence}\n\nREADER AND RECIPE REQUIREMENTS: Answer the reader's cooking task immediately with a short useful opening. Include one complete <section id="recipe-card"> with H3 Ingredients and Instructions, measured ingredients, Prep Time, Cook Time, Total Time and positive Servings or Yield. Specify ingredient preparation state, pan size, realistic heat and timing, observable doneness, substitutions with their effects, troubleshooting and recipe-appropriate storage/reheating. Use every ingredient in the method. Times, yield and quantities must agree. Avoid generic filler, unsupported nutrition, fabricated testing, ratings or affiliate product promotion. Make each section solve a distinct cooking problem.`;
-  const editorialPrompt = `${prompt}\n\n${READER_RECIPE_GUIDANCE}`;
+  const prompt = nonFoodArticle
+    ? `${String(promptTemplate || '').replace(/{title}/g, title)}${privateEvidence}\n\nREADER REQUIREMENTS: Answer the reader's task immediately with a short useful opening. Deliver the exact number of ideas promised, each distinct and practical. Avoid generic filler, fabricated testing, ratings, prices you were not given, or affiliate product promotion. No recipe card.`
+    : `${String(promptTemplate || '').replace(/{title}/g, title)}${privateEvidence}\n\nREADER AND RECIPE REQUIREMENTS: Answer the reader's cooking task immediately with a short useful opening. Include one complete <section id="recipe-card"> with H3 Ingredients and Instructions, measured ingredients, Prep Time, Cook Time, Total Time and positive Servings or Yield. Specify ingredient preparation state, pan size, realistic heat and timing, observable doneness, substitutions with their effects, troubleshooting and recipe-appropriate storage/reheating. Use every ingredient in the method. Times, yield and quantities must agree. Avoid generic filler, unsupported nutrition, fabricated testing, ratings or affiliate product promotion. Make each section solve a distinct cooking problem.`;
+  const editorialPrompt = nonFoodArticle ? prompt : `${prompt}\n\n${READER_RECIPE_GUIDANCE}`;
   const targetMinWords = Number(String(settings.articleLength || '900-1200').split('-')[0]) || 900;
   const targetMaxWords = Number(String(settings.articleLength || '900-1200').split('-').pop()) || 1200;
   const maxTokens = Math.max(3000, Math.min(6500, Math.round(targetMaxWords * 1.9)));
@@ -6143,7 +6136,8 @@ Do not include an H1, jump link, FAQ, Markdown, code fence, or em dash in headin
         }
         let qualityPassApplied = false;
         const editorial = assessEditorialGaps(content);
-        if (settings.smartQualityPass !== false && editorial.needsRevision) {
+        // The editorial pass is a recipe-consistency review; it would push recipe content into non-food posts.
+        if (!nonFoodArticle && settings.smartQualityPass !== false && editorial.needsRevision) {
           try {
             const revisionPrompt = `Act as the final editorial and recipe-consistency reviewer for a people-first recipe publisher.
 
@@ -6296,11 +6290,22 @@ async function prepareArticleRecipe(article, { settings = {}, jobKey, repair = t
         return pollReplicate(response.data.id, apiToken, { maxAttempts: 60, intervalMs: 2500, signal });
       }
     });
-    return await prepare(article, { signal: controller.signal, repair });
+    return await prepare(article, { signal: controller.signal, repair, settings });
   } finally { if (jobKey) activeJobs.delete(jobKey); }
 }
 
 secureIpcHandle('prepare-article-recipe', (_event, params) => prepareArticleRecipe(params.article, params));
+
+// Records that the user reviewed the saved recipe text. Any later recipe edit changes the hash
+// and withholds recipe rich-result data again until it is re-reviewed.
+secureIpcHandle('mark-recipe-reviewed', (_event, { articleId, reviewed = true } = {}) => {
+  const articles = store.get('articles', []);
+  const article = articles.find((item) => String(item.id) === String(articleId));
+  if (!article) return { success: false, error: 'Save the article before reviewing its recipe.' };
+  const recipeReview = reviewed ? { hash: recipeReviewHash(article.content || ''), reviewedAt: new Date().toISOString() } : null;
+  store.set('articles', articles.map((item) => String(item.id) === String(articleId) ? { ...item, recipeReview, updatedAt: new Date().toISOString() } : item));
+  return { success: true, recipeReview, aiWritten: isAiWrittenRecipe(article) };
+});
 
 secureIpcHandle('generate-image-prompts', async (e, { content, title, count, settings, isListicle, category, jobKey }) => {
   const apiToken = resolveReplicateApiToken(settings);
@@ -7603,6 +7608,17 @@ secureIpcHandle('upload-repurpose-ghl-rows', async (e, { headers = [], rows = []
           });
           continue;
         }
+      }
+      const logicalDuplicate = findLogicalGhlDuplicate(store.get('performance.ghlReceipts', []), {
+        platform: targetPlatform, locationId, caption: row[1], scheduleDate: payload.scheduleDate
+      });
+      if (logicalDuplicate) {
+        failures.push({
+          row: index + 1,
+          status: 0,
+          error: `A ${targetPlatform || 'social'} post with the same caption is already ${normalizeGhlStatus(logicalDuplicate.status) || 'recorded'} within 14 days${logicalDuplicate.postId ? ` (GHL post ${logicalDuplicate.postId})` : ''}. It was not posted again. Delete the earlier post or change the caption to post it.`
+        });
+        continue;
       }
       try {
         // Persist intent before the remote side effect, including across a crash.
@@ -9627,12 +9643,16 @@ secureIpcHandle('push-to-wordpress', async (e, { article, site }) => {
       }
     }
   }
+  // AI-written recipes publish as recipe data only after the user reviewed the current recipe text.
+  const recipeReviewSource = { ...publishingArticle, recipeReview: currentArticle?.recipeReview || publishingArticle.recipeReview };
+  const recipeSchemaHeld = recipeSchemaNeedsReview(recipeReviewSource, publishingArticle.content);
+  if (recipeSchemaHeld) mediaWarnings.push('Recipe rich-result data was withheld because this AI-written recipe has not been reviewed. Review it in the editor, then republish to add it.');
   updatedContent = appendStructuredData(
     prepareAffiliateContent(
-      prepareWordPressContentForPerformance(updatedContent, publishingArticle.generatedTitle || publishingArticle.title || 'Recipe image'),
+      prepareWordPressContentForPerformance(stripRecipeMicrodata(updatedContent), publishingArticle.generatedTitle || publishingArticle.title || 'Recipe image'),
       settings
     ),
-    structuredDataWithImage(publishingArticle.structuredData || '', featuredMediaUrl)
+    recipeSchemaHeld ? '' : structuredDataWithImage(publishingArticle.structuredData || '', featuredMediaUrl)
   );
   updatedContent = ensureWordPressPublicationMarker(updatedContent, publicationIdentity);
 

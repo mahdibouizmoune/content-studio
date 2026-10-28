@@ -24,10 +24,10 @@ Last updated: 2026-10-27. Branch: `claude/content-studio-360-audit`.
 
 ## Last verified counts
 
-lint pass · 427 tests pass · build pass · test:ui 6/6 (one transient screenshot-capture error on the first run, passed on re-run) · sweep 0 problems · prod audit 0.
+lint pass · 434 tests pass · build pass · test:ui 6/6 (one transient screenshot-capture error on the first run, passed on re-run) · sweep 0 problems · prod audit 0.
 
 Project skills confirmed discoverable: all three appeared in the session skill list after creation.
 
 ## Next actionable step
 
-Roadmap item 1 (Meta crop) is done. Get decisions on items 2–3 (non-food recipe rules, untested-recipe labelling), then implement items 4, 5, 7, 8 (no approval needed) test-first using the `recipe-publish-qa` and `content-studio-verify` skills.
+Roadmap items 1, 2, 3, 5, 7, 8 and most of 4 are done. Next: 11 (Pin overlay fit and glyph fallback), 12–13 (Meta caption quality), 6 (featured-image failure to draft, needs approval), then a paid prompt evaluation if you approve a budget.

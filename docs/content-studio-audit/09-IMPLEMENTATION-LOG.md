@@ -24,6 +24,13 @@ Pinterest board re-sync loop; reconnect sync state; disconnected-during-sync gua
 | Revenue CSV re-import updates rows (content-derived IDs) | electron/growth-workspace.js | audit-360: revenue test |
 | Revenue CSV import errors shown; update-check errors no longer leave buttons stuck | src/components/GrowthWorkspace.jsx, Diagnostics.jsx | Screen sweep |
 | Meta 4:5: whole Pin fitted over a blurred, dimmed copy instead of a centre crop; fingerprint `contain-blur:v3` rebuilds old assets | electron/meta-portrait.js, electron/main.js, electron/meta-auto-pack.js, src/components/MetaStudio.jsx | audit-360: pixel test (headline band at top, button band at bottom, dimmed side bands) |
+| Pin text: timed-out or interrupted predictions are not resubmitted (one paid submission) | electron/main.js generatePinAIContent | audit-360: no-retry source test |
+| Publish schema keeps author, datePublished, keywords, category, description from the editor; never carries ratings/nutrition; temporary replicate.delivery images excluded | electron/article-recipe-readiness.js | audit-360: schema merge test |
+| Complete collections publish one Recipe per visible recipe (@graph) | electron/article-recipe-readiness.js | audit-360: collection schema test |
+| Card microdata stripped at publish; JSON-LD is the single recipe entity | electron/article-recipe-readiness.js, main.js | audit-360: microdata test |
+| AI-written recipes (generated or AI-repaired) publish without Recipe JSON-LD until "I Reviewed This Recipe"; a recipe edit invalidates the review | article-recipe-readiness.js, main.js (mark-recipe-reviewed IPC, publish), preload.js, ArticleEditor.jsx, src/lib/electron.js | audit-360: review hash test; real-app click test (panel shown, review stored, 0 page errors) |
+| GHL upload blocks a second live post with the same caption body for the same platform and location within 14 days | electron/ghl-dedupe.js, main.js | audit-360: dedupe test |
+| Home decor and fashion articles: no forced recipe card, recipe guidance, recipe editorial pass, paid card repair or recipe schema | article-recipe-readiness.js, main.js generate-article, Queue.jsx | audit-360: non-food test |
 | Project skills + sweep script | .claude/skills/* | Sweep run from skill folder: 0 problems |
 
 Each new unit test was confirmed to **fail on the original code** (source files stashed) and pass after the fix.
@@ -44,6 +51,8 @@ Each new unit test was confirmed to **fail on the original code** (source files 
 - Bulk publishing now skips articles with critical quality issues unless an override was recorded in the editor.
 - Complete recipe collections with an unsafe or incomplete later recipe now stop at "Recipe needs review" instead of publishing.
 - A CSV/batch row with status "Draft" (any case) or an unknown value now creates a draft instead of a public post.
+- AI-written recipes publish without recipe rich-result data until reviewed in the editor; republish after review to add it.
+- GoHighLevel refuses a second post with the same caption on the same platform within 14 days.
 
 ## Unresolved
 

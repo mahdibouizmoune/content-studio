@@ -52,6 +52,7 @@ function generationHarness(outputs) {
   let handler;
   const context = vm.createContext({
     ...recipes, READER_RECIPE_GUIDANCE, assessEditorialGaps,
+    isNonFoodArticle: require('../electron/article-recipe-readiness').isNonFoodArticle,
     AbortController, Map, Promise, Error, setTimeout, activeJobs: new Map(),
     secureIpcHandle: (_channel, fn) => { handler = fn; },
     resolveReplicateApiToken: () => 'test-token', relevantPinterestSignals: () => [], getAIModelUrl: () => 'test-url',

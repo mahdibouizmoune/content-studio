@@ -38,6 +38,8 @@ function publisher({ get, post, generateCard } = {}) {
     toAscii: require('../electron/ascii.js').toAscii,
     validateRecipeCard: require('../electron/recipe-generation').validateRecipeCard,
     hasEditorialInstructionLeak: require('../electron/article-editorial').hasEditorialInstructionLeak,
+    recipeSchemaNeedsReview: require('../electron/article-recipe-readiness').recipeSchemaNeedsReview,
+    stripRecipeMicrodata: require('../electron/article-recipe-readiness').stripRecipeMicrodata,
     prepareArticleRecipe: require('../electron/article-recipe-readiness').createRecipeReadinessService({ generateCard: generateCard || (async () => { throw new Error('Replicate API token is missing'); }) }),
     removeArticleImpact: require('../electron/article-impact-cleanup').removeArticleImpact,
     Buffer, URL, Date, Number, String, Object, Array, Promise, Error, createHash, store, ...wordpress,
@@ -273,6 +275,7 @@ function ghlUploader(post) {
   let calls = 0;
   const context = vm.createContext({
     Date: Clock, createHash, store,
+    findLogicalGhlDuplicate: require('../electron/ghl-dedupe').findLogicalGhlDuplicate,
     decryptSecret: (value) => value,
     getPinCreatorSettings: () => ({ postInterval: 120 }),
     tagGhlRows: (_headers, rows) => rows,
