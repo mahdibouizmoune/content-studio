@@ -340,13 +340,10 @@ test('page and article text sent to the AI is marked as data, and decor prompts 
 });
 
 test('video requests reject unknown models, unsupported ratios and local start images before any paid call', async () => {
-  const source = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'electron', 'main.js'), 'utf8');
-  const vm = require('node:vm');
-  const start = source.indexOf('const VIDEO_MODEL_RATIOS');
-  let handler;
-  const context = vm.createContext({ secureIpcHandle: (_channel, fn) => { handler = fn; }, resolveReplicateApiToken: () => 'token', VIDEO_MODEL_CONFIGS: { 'pruna-p-video': {} }, AbortController, activeJobs: new Map(), replicateRequest: async () => assert.fail('no paid request') });
-  vm.runInContext(source.slice(start, source.indexOf('const controller = new AbortController();', start)) + '});', context);
-  const run = (params) => handler({}, { prompt: 'A slow pour of honey over pancakes', ...params });
+  const { registerVideoIpc } = require('../electron/video-ipc');
+  const handlers = {};
+  registerVideoIpc({ handle: (channel, fn) => { handlers[channel] = fn; }, resolveReplicateApiToken: () => 'token', activeJobs: new Map(), replicateRequest: async () => assert.fail('no paid request') });
+  const run = (params) => handlers['generate-video']({}, { prompt: 'A slow pour of honey over pancakes', ...params });
   assert.match((await run({ model: 'made-up' })).error, /Unknown video model/);
   assert.match((await run({ model: 'pruna-p-video', aspectRatio: '3:4' })).error, /accepts 1:1, 16:9, 9:16/);
   assert.match((await run({ model: 'pruna-p-video', aspectRatio: '9:16', image: 'C:/pics/pancakes.jpg' })).error, /public https/);

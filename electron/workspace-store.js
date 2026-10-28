@@ -19,8 +19,51 @@ const WORKSPACE_ROOTS = new Set([
   'repurposePacks',
   'trendResearch',
   'jobCenterJobs',
-  'postPublishQa'
+  'postPublishQa',
+  'settingsLists'
 ]);
+
+// The affiliate library and each site's synced post list are most of the
+// settings file. They live in the database so every small settings change no
+// longer rewrites them; readers still see one combined settings object.
+const SETTINGS_LISTS_KEY = 'settingsLists';
+
+function siteListKey(site, index) {
+  return String(site?.id || site?.url || `index-${index}`);
+}
+
+function splitSettingsLists(settings) {
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) return { settings, lists: null };
+  const slim = { ...settings };
+  const lists = { affiliateLinks: undefined, internalLinkPosts: {} };
+  if (Object.hasOwn(slim, 'affiliateLinks')) {
+    lists.affiliateLinks = slim.affiliateLinks;
+    delete slim.affiliateLinks;
+  }
+  if (Array.isArray(slim.wordpressSites)) {
+    slim.wordpressSites = slim.wordpressSites.map((site, index) => {
+      if (!site || typeof site !== 'object' || !Object.hasOwn(site, 'internalLinkPosts')) return site;
+      const { internalLinkPosts, ...rest } = site;
+      lists.internalLinkPosts[siteListKey(site, index)] = internalLinkPosts;
+      return rest;
+    });
+  }
+  return { settings: slim, lists };
+}
+
+function joinSettingsLists(settings, lists) {
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings) || !lists) return settings;
+  const full = { ...settings };
+  if (lists.affiliateLinks !== undefined && !Object.hasOwn(full, 'affiliateLinks')) full.affiliateLinks = lists.affiliateLinks;
+  if (Array.isArray(full.wordpressSites)) {
+    full.wordpressSites = full.wordpressSites.map((site, index) => {
+      const posts = lists.internalLinkPosts?.[siteListKey(site, index)];
+      if (!site || typeof site !== 'object' || posts === undefined || Object.hasOwn(site, 'internalLinkPosts')) return site;
+      return { ...site, internalLinkPosts: posts };
+    });
+  }
+  return full;
+}
 
 function splitKey(key = '') {
   const parts = String(key || '').split('.').filter(Boolean);
@@ -162,6 +205,25 @@ function createWorkspaceStore(settingsStore, userDataPath) {
     migrationChanged = true;
   }
 
+  let savedListsJson = JSON.stringify(database.get(SETTINGS_LISTS_KEY, null));
+  const readSettings = () => joinSettingsLists(settingsStore.get('settings', undefined), database.get(SETTINGS_LISTS_KEY, null));
+  const writeSettings = (full) => {
+    const { settings, lists } = splitSettingsLists(full);
+    settingsStore.set('settings', settings);
+    const listsJson = JSON.stringify(lists);
+    if (lists && listsJson !== savedListsJson) {
+      database.set(SETTINGS_LISTS_KEY, lists);
+      savedListsJson = listsJson;
+    }
+    return full;
+  };
+  const storedSettings = settingsStore.get('settings', undefined);
+  const initialSplit = splitSettingsLists(storedSettings);
+  if (initialSplit.lists && (initialSplit.lists.affiliateLinks !== undefined || Object.keys(initialSplit.lists.internalLinkPosts).length)) {
+    writeSettings(readSettings());
+    migrationChanged = true;
+  }
+
   const isWorkspaceKey = (key) => WORKSPACE_ROOTS.has(splitKey(key).root);
   let restoring = false;
   const listeners = new Set();
@@ -170,16 +232,25 @@ function createWorkspaceStore(settingsStore, userDataPath) {
     migrationChanged,
     get(key, fallback) {
       const { root, parts } = splitKey(key);
+      if (root === 'settings') {
+        const settings = readSettings();
+        return settings === undefined ? fallback : nestedGet(settings, parts, fallback);
+      }
       if (!WORKSPACE_ROOTS.has(root)) return settingsStore.get(key, fallback);
       return nestedGet(database.get(root, undefined), parts, fallback);
     },
     set(key, value) {
       const { root, parts } = splitKey(key);
+      if (root === 'settings') return writeSettings(parts.length ? nestedSet(readSettings() || {}, parts, value) : value);
       if (!WORKSPACE_ROOTS.has(root)) return settingsStore.set(key, value);
       return database.set(root, nestedSet(database.get(root, undefined), parts, value));
     },
     delete(key) {
       const { root, parts } = splitKey(key);
+      if (root === 'settings') {
+        if (!parts.length) { database.delete(SETTINGS_LISTS_KEY); savedListsJson = 'null'; return settingsStore.delete('settings'); }
+        return writeSettings(nestedDelete(readSettings() || {}, parts));
+      }
       if (!WORKSPACE_ROOTS.has(root)) return settingsStore.delete(key);
       if (!parts.length) return database.delete(root);
       return database.set(root, nestedDelete(database.get(root, undefined), parts));
@@ -221,6 +292,10 @@ function createWorkspaceStore(settingsStore, userDataPath) {
         }
         throw error;
       } finally { restoring = false; }
+      savedListsJson = JSON.stringify(database.get(SETTINGS_LISTS_KEY, null));
+      // Backups made before the lists moved keep them inside settings.
+      const restoredLists = splitSettingsLists(settingsStore.get('settings', undefined)).lists;
+      if (restoredLists && (restoredLists.affiliateLinks !== undefined || Object.keys(restoredLists.internalLinkPosts).length)) writeSettings(readSettings());
       for (const listener of listeners) listener();
     }
   };

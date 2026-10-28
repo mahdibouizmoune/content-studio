@@ -59,10 +59,11 @@ test('media polling preserves structured output and a closed progress view canno
 test('article images and videos use managed polling and video retains a longer provider deadline', () => {
   const source = fs.readFileSync(require.resolve('../electron/main.js'), 'utf8');
   // Check the actual media handlers, not just the helper implementation.
-  const start = source.lastIndexOf('const id = res.data.id;', source.indexOf("secureIpcHandle('generate-video'"));
-  const end = source.indexOf("secureIpcHandle('get-generated-videos'");
+  const start = source.lastIndexOf('const id = res.data.id;', source.indexOf('registerVideoIpc({'));
+  const end = source.indexOf('registerVideoIpc({', start);
   assert.ok(start > 0 && end > start);
-  const media = source.slice(start, end);
+  const video = fs.readFileSync(require.resolve('../electron/video-ipc.js'), 'utf8');
+  const media = source.slice(start, end) + video.slice(video.indexOf("handle('generate-video'"), video.indexOf("handle('get-generated-videos'"));
   assert.match(media, /onProgress: \(progress\) => emitProgress\('image-generation-progress'/);
   assert.match(media, /onProgress: \(progress\) => emitProgress\('video-generation-progress'/);
   assert.match(media, /predictionDeadlineSeconds: 660/);

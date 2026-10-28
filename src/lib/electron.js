@@ -38,7 +38,7 @@ function makeMockApi() {
     },
     async saveSettings(settings) {
       const store = readStore();
-      writeStore({ ...store, settings });
+      writeStore({ ...store, settings: { ...(store.settings || {}), ...settings } });
       return { success: true };
     },
     async getRecipeMoneyMakerState() { return readStore().recipeMoneyMaker || { settings: { brandColor: "#1f6b4f", accentColor: "#f3b44b", font: "Inter", language: "English", brandName: "Recipe Money Maker", hasApiKey: false }, recipes: [] }; },
@@ -376,6 +376,12 @@ function makeMockApi() {
       return { success: true };
     },
     async openWorkspaceBackups() {
+      return { success: true };
+    },
+    async chooseBackupMirrorFolder() {
+      return { success: false, canceled: true };
+    },
+    async clearBackupMirrorFolder() {
       return { success: true };
     },
     async estimateCost({ articleCount, settings, extraTextCalls = 0, outlineCalls = 0 }) {

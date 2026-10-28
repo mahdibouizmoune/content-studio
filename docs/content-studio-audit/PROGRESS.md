@@ -24,7 +24,7 @@ Last updated: 2026-10-27. Branch: `claude/content-studio-360-audit`.
 
 ## Last verified counts
 
-lint pass · 450 tests pass · build pass · test:ui 6/6 (one transient screenshot-capture error on the first run, passed on re-run) · sweep 0 problems · prod audit 0.
+lint pass · 467 tests pass · build pass · test:ui 6/6 · sweep 0 problems · npm audit 0 (all dependencies). Second audit: see 12-SECOND-AUDIT.md.
 
 Project skills confirmed discoverable: all three appeared in the session skill list after creation.
 

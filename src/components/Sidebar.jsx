@@ -2,6 +2,7 @@ import { useState } from "react";
 import {
   BarChart3,
   CalendarDays,
+  ChevronDown,
   CircleDollarSign,
   ChefHat,
   Facebook,
@@ -98,12 +99,37 @@ function screenIsActive(activeScreen, itemId) {
   return activeScreen === itemId;
 }
 
+// A hidden group still opens while searching, in the icon-only bar, and when it holds the current screen.
+export function sidebarGroupOpen(group, { hiddenGroups = [], activeScreen = "", searching = false, collapsed = false } = {}) {
+  if (searching || collapsed || !hiddenGroups.includes(group.id)) return true;
+  return group.items.some((item) => screenIsActive(activeScreen, item.id));
+}
+
+function readHiddenGroups() {
+  try {
+    const saved = JSON.parse(localStorage.getItem("studio-sidebar-hidden-groups") || "[]");
+    return Array.isArray(saved) ? saved.filter((id) => typeof id === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
 export default function Sidebar({ activeScreen, setActiveScreen, counts, theme, setTheme, settings, openArticleErrors }) {
   const isDark = theme === "dark";
   const [mobileMenu, setMobileMenu] = useState("");
   const [query, setQuery] = useState("");
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem("studio-sidebar-collapsed") === "true");
+  const [hiddenGroups, setHiddenGroups] = useState(readHiddenGroups);
   const groups = navigationGroups(settings?.featureFlags);
+  const searching = Boolean(query.trim());
+
+  function toggleGroup(groupId) {
+    setHiddenGroups((current) => {
+      const next = current.includes(groupId) ? current.filter((id) => id !== groupId) : [...current, groupId];
+      try { localStorage.setItem("studio-sidebar-hidden-groups", JSON.stringify(next)); } catch { /* the choice still applies until restart */ }
+      return next;
+    });
+  }
   const filteredGroups = groups.map((group) => ({ ...group, items: group.items.filter((item) => `${group.label} ${item.label}`.toLowerCase().includes(query.trim().toLowerCase())) })).filter((group) => group.items.length);
 
   function toggleCollapsed() {
@@ -135,10 +161,26 @@ export default function Sidebar({ activeScreen, setActiveScreen, counts, theme, 
         </div>
         {!collapsed ? <label className="sidebar-search"><Search size={15} aria-hidden="true" /><input aria-label="Find a workspace" placeholder="Find a workspace..." value={query} onChange={(event) => setQuery(event.target.value)} /></label> : null}
         <nav className="min-h-0 flex-1 space-y-4 overflow-y-auto py-3" aria-label="Main navigation">
-          {filteredGroups.map((group) => (
+          {filteredGroups.map((group) => {
+            const open = sidebarGroupOpen(group, { hiddenGroups, activeScreen, searching, collapsed });
+            return (
             <div key={group.id}>
-              <div className="sidebar-group-label mb-1 px-3 text-[10px] font-semibold uppercase text-slate-400">{group.label}</div>
-              <div className="space-y-0.5">
+              {searching ? (
+                <div className="sidebar-group-label mb-1 px-3 text-[10px] font-semibold uppercase text-slate-400">{group.label}</div>
+              ) : (
+                <button
+                  type="button"
+                  className="sidebar-group-label mb-1 flex w-full items-center justify-between px-3 text-[10px] font-semibold uppercase text-slate-400 hover:text-slate-200"
+                  aria-expanded={open}
+                  aria-label={`${hiddenGroups.includes(group.id) ? "Show" : "Hide"} ${group.label} group`}
+                  title={hiddenGroups.includes(group.id) ? `Show ${group.label}` : `Hide ${group.label}`}
+                  onClick={() => toggleGroup(group.id)}
+                >
+                  <span>{group.label}</span>
+                  <ChevronDown className={`h-3 w-3 transition-transform ${open ? "" : "-rotate-90"}`} aria-hidden="true" />
+                </button>
+              )}
+              {open ? <div className="space-y-0.5">
                 {group.items.map((item) => {
                   const Icon = item.icon;
                   const active = screenIsActive(activeScreen, item.id);
@@ -159,9 +201,10 @@ export default function Sidebar({ activeScreen, setActiveScreen, counts, theme, 
                     </button>
                   );
                 })}
-              </div>
+              </div> : null}
             </div>
-          ))}
+            );
+          })}
           {!filteredGroups.length ? <p className="px-3 text-xs text-slate-400" role="status">No matching workspace</p> : null}
         </nav>
         {counts.failed ? (

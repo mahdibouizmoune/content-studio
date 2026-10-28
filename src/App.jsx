@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import Sidebar from "@/components/Sidebar";
 import WorkspaceHeader from "@/components/WorkspaceHeader";
 import ErrorBoundary from "@/components/ErrorBoundary";
@@ -6,6 +6,7 @@ import ArticlesWorkflow from "@/components/ArticlesWorkflow";
 import { electronAPI, isElectronApp } from "@/lib/electron";
 import { DEFAULT_PIN_CUSTOM_STYLES, DEFAULT_PIN_TITLE_DESC_PROMPT, normalizePinCreatorDefaults } from "@/lib/pinCreatorDefaults";
 import { recoverInterruptedArticles } from "@/lib/articleWorkflow.mjs";
+import { settingsPatch } from "@/lib/settingsPatch.mjs";
 import {
   DEFAULT_ARTICLE_PROMPT,
   DEFAULT_FEATURED_IMAGE_INSTRUCTION,
@@ -371,6 +372,7 @@ export default function App() {
   useEffect(() => { setVisitedScreens(current => current.has(activeScreen) ? current : new Set([...current, activeScreen])); }, [activeScreen]);
   const [mode, setMode] = useState("article");
   const [settings, setSettings] = useState(null);
+  const savedSettingsRef = useRef(null);
   const [articles, setArticles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState("");
@@ -399,9 +401,9 @@ export default function App() {
     const filled = !isFreshInstall && stored.onboardingCompleted === undefined
       ? { ...defaults, onboardingCompleted: true, onboardingMigratedForExistingWorkspace: true }
       : defaults;
-    if (JSON.stringify(filled) !== JSON.stringify(stored)) {
-      await electronAPI.saveSettings(filled);
-    }
+    const patch = settingsPatch(stored, filled);
+    if (Object.keys(patch).length) await electronAPI.saveSettings(patch);
+    savedSettingsRef.current = filled;
     setSettings(filled);
     if (filled.onboardingCompleted !== true) setActiveScreen("onboarding");
   }
@@ -439,7 +441,9 @@ export default function App() {
 
   async function saveSettings(next) {
     const filled = fillPromptDefaults(next);
-    await electronAPI.saveSettings(filled);
+    const patch = settingsPatch(savedSettingsRef.current, filled);
+    if (Object.keys(patch).length) await electronAPI.saveSettings(patch);
+    savedSettingsRef.current = filled;
     setSettings(filled);
     setNotice("Settings saved.");
     setTimeout(() => setNotice(""), 2200);

@@ -586,6 +586,20 @@ export default function Settings({ settings, saveSettings, refreshArticles, setA
     setStatus(result?.success ? "Recovery backup created." : result?.error || "Could not create recovery backup.");
   }
 
+  async function chooseBackupMirrorFolder() {
+    const result = await electronAPI.chooseBackupMirrorFolder?.();
+    if (result?.canceled) return;
+    if (!result?.success) { setStatus(result?.error || "Could not set the second backup folder."); return; }
+    setDraft((current) => ({ ...current, backupMirrorFolder: result.folderPath }));
+    setStatus("Backups will also be copied to the chosen folder.");
+  }
+
+  async function clearBackupMirrorFolder() {
+    await electronAPI.clearBackupMirrorFolder?.();
+    setDraft((current) => ({ ...current, backupMirrorFolder: "" }));
+    setStatus("Backups are no longer copied to a second folder.");
+  }
+
   async function connectSearchConsole() {
     setAnalyticsBusy("google");
     setAnalyticsStatus("Saving credentials and opening Google...");
@@ -1483,7 +1497,19 @@ export default function Settings({ settings, saveSettings, refreshArticles, setA
 
         <SettingPanel id="backup" open={open} setOpen={setOpen} icon={ListChecks} tone="bg-slate-700" title="Backup and Logs" subtitle="Export, import, troubleshoot">
           <div className="mb-3 rounded-md bg-violet-50 px-3 py-2 text-sm font-semibold text-violet-700 ring-1 ring-violet-100">
-            Content Studio now keeps up to 12 automatic recovery snapshots of articles, settings, pins, social packs, and saved metadata.
+            Content Studio keeps recovery snapshots of articles, settings, pins, social packs, and saved metadata: the 6 newest, plus one per day for the last 7 days and one per week for the last 4 weeks.
+          </div>
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-md bg-slate-50 p-4 ring-1 ring-slate-100">
+            <span className="min-w-0">
+              <span className="block font-black text-slate-900">Second backup folder</span>
+              <span className="mt-1 block break-all text-sm font-medium text-slate-500">
+                {draft.backupMirrorFolder ? `Each backup is also copied to ${draft.backupMirrorFolder}.` : "Optional. Choose a OneDrive, Dropbox or USB folder so a copy survives if this computer fails."}
+              </span>
+            </span>
+            <span className="flex flex-wrap gap-2">
+              <Button variant="secondary" onClick={chooseBackupMirrorFolder}><FolderOpen className="h-4 w-4" />{draft.backupMirrorFolder ? "Change Folder" : "Choose Folder"}</Button>
+              {draft.backupMirrorFolder ? <Button variant="secondary" onClick={clearBackupMirrorFolder}>Stop Copying</Button> : null}
+            </span>
           </div>
           <div className="flex flex-wrap gap-2">
             <Button variant="secondary" onClick={exportArticles}><Download className="h-4 w-4" />Export Articles</Button>
