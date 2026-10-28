@@ -251,3 +251,44 @@ test('a post whose featured image failed to upload is saved as a draft and keeps
   const normal = buildWordPressPostPayload({ article: { title: 'Soup' }, featuredMediaId: 12, now });
   assert.equal(normal.status, 'publish'); assert.equal(normal.payload.featured_media, 12);
 });
+
+test('Rank Math canonical follows the current public permalink and Open Graph fields are separate', () => {
+  const { rankMathMetaFromArticle, rankMathSocialMeta } = require('../electron/rank-math-meta');
+  const stale = { title: 'Soup', canonicalUrl: 'https://old-site.example/soup/', openGraphTitle: 'Soup night', openGraphDescription: 'Warm soup.' };
+  assert.equal(rankMathMetaFromArticle(stale, { postLink: 'https://new.example/soup/' }).rank_math_canonical_url, 'https://new.example/soup/');
+  assert.equal(rankMathMetaFromArticle(stale, {}).rank_math_canonical_url, undefined, 'drafts leave the canonical to Rank Math');
+  assert.equal(rankMathMetaFromArticle({ ...stale, canonicalUrlManual: true }, { postLink: 'https://new.example/soup/' }).rank_math_canonical_url, stale.canonicalUrl);
+  assert.deepEqual(rankMathSocialMeta(stale, { imageUrl: 'https://new.example/soup.jpg' }), { rank_math_facebook_title: 'Soup night', rank_math_facebook_description: 'Warm soup.', rank_math_facebook_image: 'https://new.example/soup.jpg' });
+});
+
+test('generated H1s become H2s, user slugs are transliterated and image alt text names the dish once', async () => {
+  const source = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'electron', 'main.js'), 'utf8');
+  const vm = require('node:vm');
+  const slugStart = source.indexOf('function wordpressArticleSlug');
+  const context = vm.createContext({ toAscii: require('../electron/ascii.js').toAscii });
+  vm.runInContext(source.slice(slugStart, source.indexOf('\n}\n', slugStart) + 2), context);
+  assert.equal(context.wordpressArticleSlug({ slug: 'Crème-Brûlée Pudding' }), 'creme-brulee-pudding');
+  const cleanStart = source.indexOf('  function cleanArticleOutput');
+  vm.runInContext(source.slice(cleanStart, source.indexOf('\n  }\n', cleanStart) + 4), context);
+  assert.equal(context.cleanArticleOutput('<h1 class="t">Lemon Rice</h1><p>Hi</p>'), '<h2 class="t">Lemon Rice</h2><p>Hi</p>');
+  const { buildSeoImageAlt } = await import('../src/lib/articlePostProcess.mjs');
+  const alt = buildSeoImageAlt({ title: 'Easy Chicken Soup Recipe', seoBrief: { targetKeyword: 'easy chicken soup' } }, {}, 0, 'featured');
+  assert.doesNotMatch(alt, /recipe recipe/i);
+  assert.equal((alt.match(/chicken soup/gi) || []).length, 1);
+});
+
+test('doneness cues need real cues and numbered tips are not mistaken for recipes', () => {
+  const { validateRecipeCard } = require('../electron/recipe-generation');
+  const { recipeUnits } = require('../electron/recipe-units');
+  const weak = renderRecipes([{ ...rice, instructions: ['Mix the rice and lemon together.', 'Set aside.', 'Serve in the thickest bowls you have.'] }]);
+  assert.ok(validateRecipeCard(weak).issues.some((issue) => /cue|doneness|timing/i.test(issue)), validateRecipeCard(weak).issues.join('; '));
+  const single = `<h2>3 Common Mistakes</h2><p>Do not overcook.</p><h2>5 Ways to Serve</h2><p>With salad.</p>${renderRecipes([rice])}`;
+  assert.equal(recipeUnits(single).length, 1);
+});
+
+test('topic overlap catches a short title inside a longer one without flagging different dishes', async () => {
+  const { detectCannibalization } = await import('../electron/article-intake.mjs');
+  assert.ok(detectCannibalization('Easy Chicken Soup', [{ title: 'Easy Creamy Chicken Soup Recipe For Busy Weeknights' }]).length > 0);
+  assert.equal(detectCannibalization('Easy Beef Stew', [{ title: 'Easy Chicken Soup' }]).length, 0);
+  assert.equal(detectCannibalization('chicken chicken chicken', [{ title: 'chicken apple ginger rice soup' }]).length, 0);
+});

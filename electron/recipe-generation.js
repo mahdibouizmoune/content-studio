@@ -156,7 +156,7 @@ function validateRecipeCard(html = '') {
     /(?:\b\d+(?:\s+\d+\/\d+|[./]\d+)?\b|\u00bc|\u00bd|\u00be|\u2153|\u2154|\u215b|\u215c|\u215d|\u215e|\b(?:pinch|dash|to taste)\b|^(?:one|two|three|four|five|six|seven|eight|nine|ten|half|quarter)\b)/i.test(ingredient)
   ));
   const instructionCues = legacy.instructions.filter((step) => (
-    /(?:\b\d+(?:\s*[-\u2013]\s*\d+)?\s*(?:seconds?|minutes?|mins?|hours?|hrs?|days?|weeks?)\b|\b\d{2,3}\s*(?:\u00b0|degrees?)\s*[cf]\b|until|golden|browned|tender|crisp|thick|set|opaque|bubbling|fragrant|combined|evenly (?:mixed|coated|distributed)|fully (?:coated|incorporated)|smooth|frothy|foamy|dissolved|chilled|coats? (?:a )?spoon|internal temperature)/i.test(step)
+    /(?:\b\d+(?:\s*[-\u2013]\s*\d+)?\s*(?:seconds?|minutes?|mins?|hours?|hrs?|days?|weeks?)\b|\b\d{2,3}\s*(?:\u00b0|degrees?)\s*[cf]\b|until|golden|browned|tender|crisp|\bthick(?:ened|ens)?\b|\bset\b(?!\s+aside)|opaque|bubbling|fragrant|combined|evenly (?:mixed|coated|distributed)|fully (?:coated|incorporated)|smooth|frothy|foamy|dissolved|chilled|coats? (?:a )?spoon|internal temperature)/i.test(step)
   ));
   const issues = legacy.issues
     .filter((item) => item !== 'Most recipe card ingredients need explicit quantities')

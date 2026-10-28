@@ -1,5 +1,7 @@
 const stopWords = new Set(['a', 'an', 'and', 'are', 'as', 'at', 'be', 'best', 'by', 'for', 'from', 'how', 'in', 'into', 'is', 'it', 'of', 'on', 'or', 'that', 'the', 'this', 'to', 'with', 'you', 'your']);
 
+const GENERIC_TOPIC_WORDS = new Set(['easy', 'quick', 'simple', 'recipe', 'recipes', 'ideas', 'homemade', 'healthy', 'delicious', 'perfect', 'ultimate']);
+
 export function normalizeTopic(value = '') {
   return String(value).normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase()
     .replace(/https?:\/\/\S+/g, ' ').replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
@@ -18,7 +20,14 @@ export function detectCannibalization(title = '', articles = [], options = {}) {
       const other = topicTokens(name);
       if (!tokens.length || !other.length) return 0;
       const overlap = tokens.filter((token) => other.includes(token)).length;
-      return Math.round(overlap / Math.max(tokens.length, other.length) * 100);
+      const share = overlap / Math.max(tokens.length, other.length);
+      // A short title fully inside a longer one ("Chicken Soup" vs "Creamy Chicken Soup for Busy
+      // Nights") targets the same search; generic words are ignored so they cannot create matches.
+      const coreA = tokens.filter((token) => !GENERIC_TOPIC_WORDS.has(token));
+      const coreB = other.filter((token) => !GENERIC_TOPIC_WORDS.has(token));
+      const coreOverlap = coreA.filter((token) => coreB.includes(token)).length;
+      const contained = Math.min(coreA.length, coreB.length) >= 2 ? coreOverlap / Math.min(coreA.length, coreB.length) * 0.85 : 0;
+      return Math.round(Math.max(share, contained) * 100);
     }));
     return { article, score, reason: score === 100 ? 'Exact title or topic match' : 'Topic overlap' };
   }).filter((match) => match.score >= (options.threshold ?? 62)).sort((a, b) => b.score - a.score).slice(0, 5);
