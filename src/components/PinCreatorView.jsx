@@ -17,6 +17,7 @@ import {
   resolveInterestProfile
 } from "@/lib/pinterestInterestIntelligence.mjs";
 import { selectPinterestPublicImage, stablePinContentId } from "@/lib/pinterestSource.mjs";
+import { socialDishName, socialHashtags, trimAtSentence } from "@/lib/pinSocialCopy.mjs";
 import { selectPinterestExportRows } from "@/lib/pinterestExportSelection.mjs";
 import {
   PINTEREST_SCHEDULE_WINDOW_DAYS,
@@ -381,9 +382,10 @@ function preflightMessage(value) {
 function buildSocialPack(pin, index = 0) {
   const title = (pin.title || pin.sourceTitle || "Recipe idea").replace(/\*\*(.*?)\*\*/g, "$1");
   const description = (pin.description || pin.prompt || "").replace(/\*\*(.*?)\*\*/g, "$1");
-  const short = description.length > 220 ? `${description.slice(0, 217).trim()}...` : description;
-  const hashtags = dedupe(seoKeywords(pin, pin.csvBoard).split(",").slice(0, 8).map((tag) => `#${tag.trim().replace(/[^a-zA-Z0-9]/g, "")}`)).filter((tag) => tag.length > 1);
-  const instagramCaption = `${title} is the kind of recipe worth saving before a busy week.\n\n${short}\n\nSave it for your next meal plan, then find the complete recipe through the link in the profile.`;
+  const dish = socialDishName(title);
+  const short = trimAtSentence(description, 220);
+  const hashtags = socialHashtags(seoKeywords(pin, pin.csvBoard).split(","), 8);
+  const instagramCaption = `Saving this one for the week ahead: ${dish}.\n\n${short}\n\nThe complete recipe is linked in the profile.`;
   const pinterestUrl = trackedPinUrl(pin, index, "pinterest", "pin");
   const instagramUrl = trackedPinUrl(pin, index, "instagram", "post");
   const facebookUrl = trackedPinUrl(pin, index, "facebook", "post");
@@ -406,22 +408,22 @@ function buildSocialPack(pin, index = 0) {
       instagram: {
         caption: instagramCaption,
         hashtags,
-        altText: `Finished serving of ${title}`,
+        altText: `Finished serving of ${dish}`,
         carouselSlides: [
-          { heading: title, body: "A practical recipe idea worth saving for later." },
+          { heading: dish, body: "A practical recipe idea worth saving for later." },
           { heading: "Why It Works", body: short || "Simple, visual, and useful for real home cooking." },
           { heading: "Flavor Tip", body: "Use the full recipe notes to get the best texture and flavor." },
           { heading: "Make It Yours", body: "Check the article for substitutions, serving ideas, and storage tips." },
           { heading: "Save The Recipe", body: "Open the full post when you are ready to cook." }
         ],
-        reelScript: { hook: `The close-up that makes ${title} impossible to scroll past`, scenes: ["Show the finished dish in 9:16", "Move into a texture close-up", "Show one useful recipe detail", "End with a save and blog CTA inside the safe zone"], voiceover: `${title}. Save this for your next meal plan, then open the full recipe when you are ready to cook.`, caption: `${title}\n\n${hashtags.slice(0, 6).join(" ")}`, cta: "Save this idea and read the full recipe on the blog." }
+        reelScript: { hook: `The close-up that makes ${dish} impossible to scroll past`, scenes: ["Show the finished dish in 9:16", "Move into a texture close-up", "Show one useful recipe detail", "End with a save and blog CTA inside the safe zone"], voiceover: `${dish}. Save this for your next meal plan, then open the full recipe when you are ready to cook.`, caption: `${dish}\n\n${hashtags.slice(0, 6).join(" ")}`, cta: "Save this idea and read the full recipe on the blog." }
       },
       facebook: {
-        pagePost: `${title}\n\n${short}\n\nThis is a useful one to keep around for meal planning. What would you serve with it? Get the complete recipe here: ${facebookUrl || ""}`.trim(),
-        shortPost: `${title}\n\nA practical recipe idea for the week ahead. Full recipe: ${facebookUrl || ""}`.trim(),
-        groupPost: `I am collecting practical meal ideas for the week, and ${title} stood out. ${short}\n\nWhat substitutions or sides would you try with it? ${facebookUrl || ""}`.trim(),
+        pagePost: `${dish}\n\n${short}\n\nWhat would you serve with it? Get the complete recipe here: ${facebookUrl || ""}`.trim(),
+        shortPost: `${dish}\n\nA practical recipe idea for the week ahead. Full recipe: ${facebookUrl || ""}`.trim(),
+        groupPost: `I am collecting practical meal ideas for the week, and ${dish} stood out. ${short}\n\nWhat substitutions or sides would you try with it? ${facebookUrl || ""}`.trim(),
         hashtags: hashtags.slice(0, 2),
-        altText: `Finished serving of ${title}`
+        altText: `Finished serving of ${dish}`
       },
       threads: null,
       reddit: null,
@@ -1917,7 +1919,9 @@ export default function PinCreatorView({ settings, setActiveScreen }) {
             <div className="grid gap-4">
               {repurposePacks.map((pack) => {
                 const data = pack.content || {};
-                const image = pack.imageAssets?.[0]?.publicUrl || pack.imageAssets?.[0]?.fileUrl || "";
+                // The local copy always renders; the public WordPress copy is a fallback the app may block.
+                const image = pack.imageAssets?.[0]?.fileUrl || pack.imageAssets?.[0]?.publicUrl || "";
+                const fallbackImage = pack.imageAssets?.[0]?.publicUrl || "";
                 return (
                   <article key={pack.id} className="rounded-lg border border-slate-200 bg-white p-4">
                     <div className="mb-3 flex items-start justify-between gap-3">
@@ -1929,9 +1933,9 @@ export default function PinCreatorView({ settings, setActiveScreen }) {
                     </div>
                     <div className="grid gap-4 md:grid-cols-[140px_1fr]">
                       <div className="overflow-hidden rounded-md bg-slate-100 ring-1 ring-slate-200">
-                        {image ? <img src={image} alt={pack.articleTitle || "Social image"} className="aspect-square w-full object-cover" /> : <div className="grid aspect-square place-items-center text-slate-400"><ImageIcon className="h-8 w-8" /></div>}
+                        {image ? <img src={image} alt={pack.articleTitle || "Social image"} className="aspect-square w-full object-cover" onError={(event) => { if (fallbackImage && event.currentTarget.src !== fallbackImage) event.currentTarget.src = fallbackImage; }} /> : <div className="grid aspect-square place-items-center text-slate-400"><ImageIcon className="h-8 w-8" /></div>}
                       </div>
-                      <div className="space-y-3 text-sm leading-6 text-slate-700">
+                      <div className="min-w-0 space-y-3 break-words text-sm leading-6 text-slate-700 [overflow-wrap:anywhere]">
                         {data.socialPost?.caption ? <p className="whitespace-pre-line">{data.socialPost.caption}</p> : null}
                         {data.socialPost?.hashtags?.length ? <p className="font-bold text-indigo-600">{data.socialPost.hashtags.join(" ")}</p> : null}
                         {data.facebook?.pagePost ? <p className="rounded-md bg-slate-50 p-3"><strong>Facebook:</strong> {data.facebook.pagePost}</p> : null}
