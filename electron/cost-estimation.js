@@ -45,7 +45,13 @@ function calculateEstimatedCost({
     && (settings.impactAccountSid || settings.amazonPartnerTag)
     ? 1
     : 0;
-  const textCallsPerArticle = 2
+  // A complete recipe collection is written as an intro, one call per five recipes and an ending
+  // instead of one article call; repairs and retries can add more and are not predicted here.
+  const itemCount = Number(settings.listicleItemCount || 0);
+  const collectionCalls = settings.articleType === 'listicle' && settings.listicleCategory === 'food' && itemCount >= 6
+    ? Math.ceil(itemCount / 5) + 1
+    : 0;
+  const textCallsPerArticle = 2 + collectionCalls
     + (settings.smartQualityPass === false ? 0 : 1)
     + (settings.keepOriginalTitles ? 0 : 1)
     + intextImages
