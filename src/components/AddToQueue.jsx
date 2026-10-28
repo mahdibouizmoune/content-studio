@@ -97,6 +97,10 @@ export default function AddToQueue({ mode, settings, articles, refreshArticles, 
     const now = Date.now();
     try {
       const batch = [];
+      // Already-published WordPress posts count as existing coverage; an exact topic match is not queued again.
+      const publishedPosts = (settings.wordpressSites || []).flatMap((site) => (site.internalLinkPosts || [])
+        .map((post) => ({ id: `wp:${post.id}`, title: post.title, wordpressPostUrl: post.url || post.link || "" })));
+      let publishedDuplicates = 0;
       for (const [index, row] of safeRows.entries()) {
         const { title, sourceUrl } = cleanTitleFromInput(row.title);
         const rowSettings = resolveImportRow(row, settings, { projectPresetId, brandVoiceId });
@@ -138,7 +142,11 @@ export default function AddToQueue({ mode, settings, articles, refreshArticles, 
           globalSettings: settings
         });
         const category = rowMode === "listicle" ? (settings.listicleCategory || smart.category) : smart.category;
-        const conflicts = detectCannibalization(title, articles || [], { threshold: 62 });
+        const conflicts = detectCannibalization(title, [...(articles || []), ...publishedPosts], { threshold: 62 });
+        if (conflicts.some((conflict) => conflict.score === 100 && String(conflict.article.id).startsWith("wp:"))) {
+          publishedDuplicates++;
+          continue;
+        }
         const articleBrief = buildArticleBrief({
           article: { title, type: rowMode, category, seoBrief: resolved.seoBrief },
           resolvedSettings: resolved,
@@ -187,13 +195,17 @@ export default function AddToQueue({ mode, settings, articles, refreshArticles, 
           errorMessage: ""
         });
       }
+      if (!batch.length) {
+        setMessage(`No new articles added. ${selection.skipped.length + publishedDuplicates} titles were excluded${publishedDuplicates ? `, including ${publishedDuplicates} already published on your site` : ""}.`);
+        return;
+      }
       const result = await electronAPI.queueArticles({ articles: batch });
       if (!result?.success) throw new Error(result?.error || "Could not save the queue.");
-      const skipped = selection.skipped.length + (result.skipped?.length || 0);
+      const skipped = selection.skipped.length + (result.skipped?.length || 0) + publishedDuplicates;
       setTitles("");
       setImportRows([]);
       setImportErrors([]);
-      setMessage(`Added ${result.addedCount} articles. ${skipped} duplicate or overlapping titles excluded.`);
+      setMessage(`Added ${result.addedCount} articles. ${skipped} duplicate or overlapping titles excluded${publishedDuplicates ? `, including ${publishedDuplicates} already published on your site` : ""}.`);
       await refreshArticles();
       setArticlesWorkflowStage?.("queued");
       setActiveScreen("articles");

@@ -161,9 +161,9 @@ export function buildSeoImageAlt(article = {}, image = {}, _index = 0, kind = "i
   const title = sanitizeTitleText(article.generatedTitle || article.title || "recipe");
   const keyword = sanitizeTitleText(article.rankMathFocusKeyword || article.seoBrief?.targetKeyword || title);
   const promptText = stripHtml(image.prompt || "").replace(/\s+/g, " ").trim();
-  const context = kind === "featured"
-    ? `Finished ${keyword} recipe for ${title}`
-    : `${keyword} recipe step or serving idea from ${title}`;
+  // Name the dish once; repeating the keyword ("soup recipe recipe for ...") reads as stuffing.
+  const subject = title.toLowerCase().includes(keyword.toLowerCase()) ? title : `${title} (${keyword})`;
+  const context = kind === "featured" ? `${subject}, finished dish` : `${subject}, preparation or serving`;
   const usefulDetail = promptText
     .replace(/\b(high-quality|photo|image|realistic|professional|vertical|pinterest-friendly)\b/gi, "")
     .replace(/\s+/g, " ")

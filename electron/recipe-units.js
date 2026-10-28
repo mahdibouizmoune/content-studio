@@ -5,7 +5,8 @@ const { getOuterHTML, textContent } = require('domutils');
 const { extractRecipeSections } = require('./recipe-generation');
 function recipeUnits(html = '') {
   const source = String(html);
-  const numbered = extractRecipeSections(source);
+  // Numbered headings only count as recipes when they carry ingredients; "3 Common Mistakes" does not.
+  const numbered = extractRecipeSections(source).filter((section) => /ingredients/i.test(section.html));
   if (numbered.length > 1) return numbered.map(s => ({ name: s.title, html: `<section id="recipe-card">${s.html}</section>` }));
   const doc = parseDocument(source, { decodeEntities: true });
   const candidates = selectAll('[id="recipe-card"], [id^="recipe-card-"], .recipe-card', doc);

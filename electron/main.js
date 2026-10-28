@@ -174,6 +174,7 @@ const { buildWordPressPostPayload } = require('./wordpress-payload');
 const { normalizeBatchImportRows } = require('./article-import');
 const { sanitizeWordPressArticleHtml } = require('./wordpress-content');
 const { renderMetaPortrait } = require('./meta-portrait');
+const { rankMathMetaFromArticle, rankMathSocialMeta } = require('./rank-math-meta');
 const { findLogicalGhlDuplicate } = require('./ghl-dedupe');
 const {
   automaticMetaProject,
@@ -5857,6 +5858,8 @@ secureIpcHandle('generate-article', async (e, { title, settings, jobKey }) => {
     return String(value)
       .replace(/\n{3,}/g, '\n\n')
       .replace(/<(h1|h2)[^>]*>\s*Introduction\s*<\/(h1|h2)>/gi, '')
+      // The theme prints the post title as the page H1; generated H1s become section headings.
+      .replace(/<h1(\b[^>]*)>([\s\S]*?)<\/h1>/gi, '<h2$1>$2</h2>')
       .replace(/```html\s*/gi, '').replace(/\s*```\s*$/gi, '')
       .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
       .trim();
@@ -9345,16 +9348,6 @@ function prepareAffiliateContent(content = '', settings = {}) {
     : `${disclosureHtml}\n${next}`;
 }
 
-function rankMathMetaFromArticle(article = {}) {
-  const focusKeyword = article.rankMathFocusKeyword || article.seoBrief?.targetKeyword || article.generatedTitle || article.title || '';
-  return {
-    rank_math_title: article.rankMathTitle || article.metaTitle || article.generatedTitle || article.title || '',
-    rank_math_description: article.rankMathDescription || article.metaDescription || article.excerpt || '',
-    rank_math_focus_keyword: focusKeyword,
-    rank_math_canonical_url: article.canonicalUrl || ''
-  };
-}
-
 function appendStructuredData(content = '', structuredData = '') {
   if (!structuredData || /application\/ld\+json/i.test(content)) return content;
   try {
@@ -9385,10 +9378,19 @@ function structuredDataWithImage(structuredData = '', imageUrl = '') {
   }
 }
 
-async function updateRankMathMeta(siteUrl, auth, postId, article) {
-  const meta = rankMathMetaFromArticle(article);
-  Object.keys(meta).forEach((key) => !meta[key] && delete meta[key]);
+async function updateRankMathMeta(siteUrl, auth, postId, article, { postLink = '', imageUrl = '' } = {}) {
+  const meta = rankMathMetaFromArticle(article, { postLink });
   if (!postId || !Object.keys(meta).length) return { status: 'skipped' };
+  const sendSocialMeta = async () => {
+    const social = rankMathSocialMeta(article, { imageUrl });
+    if (!Object.keys(social).length) return;
+    try {
+      await axios.post(`${siteUrl}/wp-json/rankmath/v1/updateMeta`, { objectType: 'post', objectID: Number(postId), meta: social },
+        wordpressRequestConfig(siteUrl, { headers: { 'Authorization': auth, 'Content-Type': 'application/json' }, timeout: 30000 }));
+    } catch (error) {
+      log.warn('Rank Math Open Graph update was not accepted:', error.message);
+    }
+  };
 
   try {
     await axios.post(`${siteUrl}/wp-json/rankmath/v1/updateMeta`, {
@@ -9399,6 +9401,7 @@ async function updateRankMathMeta(siteUrl, auth, postId, article) {
       headers: { 'Authorization': auth, 'Content-Type': 'application/json' },
       timeout: 30000
     }));
+    await sendSocialMeta();
     return { status: 'updated' };
   } catch (primaryErr) {
     try {
@@ -9422,7 +9425,8 @@ function contentStudioStableId(...parts) {
 }
 
 function wordpressArticleSlug(article = {}) {
-  const supplied = String(article.slug || '').trim().toLowerCase();
+  // Transliterate user slugs too: "crème-brûlée" becomes "creme-brulee", not "cr-me-br-l-e".
+  const supplied = toAscii(String(article.slug || '').trim()).toLowerCase();
   if (supplied) return supplied.replace(/[^a-z0-9-]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').slice(0, 180);
   return toAscii(article.generatedTitle || article.title || 'content-studio-article')
     .toLowerCase()
@@ -9712,8 +9716,11 @@ secureIpcHandle('push-to-wordpress', async (e, { article, site }) => {
     createdAt: new Date().toISOString()
   });
   const finalPostUrl = postData.link || receipt.postUrl || '';
-  const rankMathResult = await updateRankMathMeta(url, auth, postData.id, publishingArticle);
   const actualStatus = postData.status || status;
+  // Only a public permalink is a valid canonical; drafts and scheduled posts leave it to Rank Math.
+  const rankMathResult = await updateRankMathMeta(url, auth, postData.id, publishingArticle, {
+    postLink: actualStatus === 'publish' ? finalPostUrl : '', imageUrl: featuredMediaUrl
+  });
   if (actualStatus === 'publish' && (settings.pinCreator?.autoQueueOnPublish ?? settings.autoQueueOnPublish ?? true) !== false && finalPostUrl) {
     await appendPinQueue([{
       url: finalPostUrl,
