@@ -155,6 +155,11 @@ function wrapOverlayText(value, maxChars = 22, maxLines = 3) {
 }
 
 const loadedFonts = new Map();
+const FALLBACK_FONT_FILE = 'Montserrat-Bold.ttf';
+
+function hasGlyphs(typeface, text = '') {
+  return [...String(text)].every((character) => /\s/.test(character) || typeface.charToGlyphIndex(character) > 0);
+}
 
 function loadFont(fontsDir, file) {
   const fontPath = path.join(fontsDir, file);
@@ -213,13 +218,31 @@ function buildOverlaySvg({ text, placement = 'middle', font = 'serif-sans', font
   while (lines.some((line) => line.length > definition.maxChars + 10) && fontSize > 54) fontSize -= 4;
   const primaryTypeface = loadFont(fontsDir, definition.file);
   const secondaryTypeface = definition.secondaryFile ? loadFont(fontsDir, definition.secondaryFile) : primaryTypeface;
-  const typefaces = lines.map((_, index) => definition.pairing && index > 0 ? secondaryTypeface : primaryTypeface);
-  while (
-    lines.some((line, index) => typefaces[index].getAdvanceWidth(line, fontSize, { kerning: true }) > PIN_WIDTH - 120)
-    && fontSize > 58
-  ) {
-    fontSize -= 3;
+  const fallbackTypeface = loadFont(fontsDir, FALLBACK_FONT_FILE);
+  let typefaces = [];
+  const assignTypefaces = () => {
+    // A line whose font lacks a character uses the fallback font; characters no font has (emoji) are dropped.
+    lines = lines.map((line, index) => {
+      const preferred = definition.pairing && index > 0 ? secondaryTypeface : primaryTypeface;
+      const missing = [...line].filter((character) => !/\s/.test(character) && preferred.charToGlyphIndex(character) === 0);
+      // Keep the styled font unless the fallback can draw a character it cannot.
+      const typeface = missing.every((character) => fallbackTypeface.charToGlyphIndex(character) === 0) ? preferred : fallbackTypeface;
+      typefaces[index] = typeface;
+      return [...line].filter((character) => /\s/.test(character) || typeface.charToGlyphIndex(character) > 0).join('').replace(/\s+/g, ' ').trim();
+    }).filter(Boolean);
+    typefaces = typefaces.slice(0, lines.length);
+  };
+  assignTypefaces();
+  const maxTextWidth = PIN_WIDTH - 120;
+  const widest = () => Math.max(...lines.map((line, index) => typefaces[index].getAdvanceWidth(line, fontSize, { kerning: true })), 0);
+  while (widest() > maxTextWidth && fontSize > 58) fontSize -= 3;
+  // Still too wide: re-wrap into narrower lines (up to 4) instead of letting text run off the Pin.
+  for (let maxChars = definition.maxChars - 2; widest() > maxTextWidth && maxChars >= 8; maxChars -= 2) {
+    lines = pairingLines(wrapOverlayText(lines.join(' '), maxChars, 4), lines.join(' '), definition);
+    assignTypefaces();
+    while (widest() > maxTextWidth && fontSize > 46) fontSize -= 2;
   }
+  while (widest() > maxTextWidth && fontSize > 30) fontSize -= 2;
   const geometry = overlayGeometry(resolvedPlacement, lines.length, fontSize);
   const top = isMagazine ? 28 : geometry.top;
   const panelHeight = isMagazine
@@ -324,6 +347,9 @@ function buildOverlaySvg({ text, placement = 'middle', font = 'serif-sans', font
     fontLabel: definition.label,
     lines,
     fontSize,
+    maxLineWidth: Math.round(maxLineWidth),
+    textWithinBounds: maxLineWidth <= maxTextWidth,
+    missingGlyphs: lines.flatMap((line, index) => [...line].filter((character) => !hasGlyphs(typefaces[index], character))),
     tone,
     ctaText: showCta ? ctaText : '',
     ctaTop: ctaY,
@@ -476,7 +502,8 @@ async function createPinterestOverlay({
     ctaText: overlay.ctaText,
     ctaVerified: !overlay.ctaText || (overlay.ctaTop >= 120 && overlay.ctaTop + overlay.ctaHeight <= PIN_HEIGHT - 60),
     safeZoneVerified: overlay.top >= (overlay.backgroundTreatment === 'modern-recipe-magazine' ? 20 : 60)
-      && overlay.top + overlay.panelHeight <= (overlay.ctaText ? overlay.ctaTop - 30 : PIN_HEIGHT - 60),
+      && overlay.top + overlay.panelHeight <= (overlay.ctaText ? overlay.ctaTop - 30 : PIN_HEIGHT - 60)
+      && overlay.textWithinBounds && !overlay.missingGlyphs.length,
     dimensionsVerified: metadata.width === PIN_WIDTH && metadata.height === PIN_HEIGHT,
     nonBlankVerified: entropy > 0.35 || variation > 2
   };

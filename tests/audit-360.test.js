@@ -180,3 +180,74 @@ test('non-food listicles skip recipe cards, repair and recipe data', async () =>
   assert.equal(result.success, true); assert.equal(result.skipped, 'non-food');
   assert.equal(result.patch.recipeCardEnabled, false); assert.equal(result.patch.structuredData, '');
 });
+
+test('long Pin headlines are re-wrapped to stay inside the image and QA checks horizontal bounds', () => {
+  const path = require('node:path');
+  const { buildOverlaySvg } = require('../electron/pinterest-overlay');
+  const fontsDir = path.join(__dirname, '..', 'electron', 'assets', 'fonts');
+  const text = "Grandma's Creamy Parmesan Spinach Stuffed Shells Casserole With Garlic Bread Crumbs";
+  for (const pinStyle of ['ingredient-closeup', 'custom-july-original-ai', 'modern-recipe-magazine', '']) {
+    const overlay = buildOverlaySvg({ text, placement: 'middle', font: 'serif-sans', fontsDir, pinStyle, variant: pinStyle ? 'generated' : 'reuse' });
+    assert.equal(overlay.textWithinBounds, true, pinStyle);
+    assert.ok(overlay.maxLineWidth <= 1080 - 120, `${pinStyle}: ${overlay.maxLineWidth}`);
+    assert.equal(overlay.lines.join(' ').replace(/\s+/g, ' ').toLowerCase(), text.replace(/[*_`#"]/g, '').toLowerCase().slice(0, 100), 'no words dropped');
+  }
+  // Normal headlines keep the established layout.
+  const normal = buildOverlaySvg({ text: 'Easy Garlic Butter Shrimp', placement: 'middle', font: 'serif-sans', fontsDir });
+  assert.equal(normal.textWithinBounds, true);
+  assert.ok(normal.lines.length <= 3);
+});
+
+test('Pin headlines never draw missing-glyph boxes: unsupported letters fall back and emoji are dropped', () => {
+  const path = require('node:path');
+  const opentype = require('opentype.js');
+  const { buildOverlaySvg } = require('../electron/pinterest-overlay');
+  const fontsDir = path.join(__dirname, '..', 'electron', 'assets', 'fonts');
+  for (const font of ['serif-sans', 'groovy', 'poppins', 'food-editorial']) {
+    const overlay = buildOverlaySvg({ text: 'Crème Brûlée Déjà Vu 🍮 Treat', placement: 'middle', font, fontsDir });
+    assert.deepEqual(overlay.missingGlyphs, [], font);
+    assert.doesNotMatch(overlay.lines.join(' '), /\u{1F36E}/u, font);
+    assert.match(overlay.lines.join(' ').toLowerCase(), /crème brûlée/, font);
+  }
+  assert.ok(opentype.loadSync(path.join(fontsDir, 'Montserrat-Bold.ttf')).charToGlyphIndex('é') > 0, 'fallback font covers accents');
+});
+
+test('Meta checks catch more engagement bait on every Facebook and Instagram field', async () => {
+  const { scoreMetaContent } = await import('../src/lib/metaQuality.mjs');
+  const base = { facebook: { primaryPost: 'A calm weeknight dinner idea with lemon, garlic and rice that comes together in thirty minutes for the whole family. What would you serve with it?', cta: 'Send us a message for the recipe' }, instagram: { feedCaption: 'Thirty-minute lemon rice for busy nights and easy lunches\n\nBright, simple and ready fast.', cta: 'Save it for later' } };
+  const check = (content, id) => scoreMetaContent(content).checks.find((c) => c.id === id).passed;
+  assert.equal(check(base, 'fb-bait'), true); assert.equal(check(base, 'ig-bait'), true);
+  for (const bait of ['Comment RECIPE below and we will send it', "DM us 'PASTA' for the recipe", 'Drop a ❤️ if you love rice', 'Share with someone who needs dinner ideas', 'Double tap if you agree']) {
+    assert.equal(check({ ...base, facebook: { ...base.facebook, shortPost: bait } }, 'fb-bait'), false, bait);
+    assert.equal(check({ ...base, instagram: { ...base.instagram, reelCaption: bait } }, 'ig-bait'), false, bait);
+  }
+});
+
+test('Meta link stripping removes bare domains but keeps ordinary text', () => {
+  const { withoutArticleLinks } = require('../electron/meta-captions');
+  const cleaned = withoutArticleLinks('Get it at myblog.com/pasta or www.gourmetgather.com today. Use 3.5 cups stock, e.g. homemade.');
+  assert.doesNotMatch(cleaned, /myblog\.com|gourmetgather\.com|www\./);
+  assert.match(cleaned, /3\.5 cups stock, e\.g\. homemade\./);
+});
+
+test('automatic Meta copy is platform-distinct, asks a natural question and keeps accents in hashtags', async () => {
+  const { scoreMetaContent } = await import('../src/lib/metaQuality.mjs');
+  const { automaticMetaContent } = require('../electron/meta-auto-pack');
+  const article = { title: 'Crème Brûlée Rice Pudding', metaDescription: 'A creamy baked rice pudding with a crackly caramel top, made with pantry staples and ready for a cozy dessert night.', content: renderRecipes([rice]) };
+  const content = automaticMetaContent(article, {});
+  const result = scoreMetaContent(content, { imageAssets: [{ publicUrl: 'https://images.example/p.jpg' }] });
+  assert.equal(result.checks.find((c) => c.id === 'platform-distinct').passed, true);
+  assert.equal(result.checks.find((c) => c.id === 'fb-question').passed, true);
+  assert.ok(content.instagram.hashtags.includes('#CremeBruleeRicePudding'), content.instagram.hashtags.join(' '));
+  assert.ok(content.instagram.hashtags.every((tag) => /^#[A-Za-z0-9]+$/.test(tag)));
+});
+
+test('a post whose featured image failed to upload is saved as a draft and keeps its existing image', () => {
+  const now = Date.parse('2026-10-28T09:00:00Z');
+  const deferred = buildWordPressPostPayload({ article: { title: 'Soup', publishStatusOverride: 'future', scheduledAt: '2026-11-01T09:00:00Z' }, featuredMediaId: null, featuredImageDeferred: true, now });
+  assert.equal(deferred.status, 'draft');
+  assert.equal(deferred.payload.date_gmt, undefined);
+  assert.equal('featured_media' in deferred.payload, false, 'an update must not clear the current featured image');
+  const normal = buildWordPressPostPayload({ article: { title: 'Soup' }, featuredMediaId: 12, now });
+  assert.equal(normal.status, 'publish'); assert.equal(normal.payload.featured_media, 12);
+});

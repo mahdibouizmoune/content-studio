@@ -7,6 +7,8 @@ function withoutArticleLinks(value = '') {
   return String(value || '').replace(/\[([^\]]+)\]\(https?:\/\/[^)]+\)/gi, '$1')
     .replace(/<a\b[^>]*>([\s\S]*?)<\/a>/gi, '$1').replace(/<[^>]+>/g, '')
     .replace(/https?:\/\/[^\s<>]+/gi, '')
+    // Bare domains ("myblog.com/pasta", "www.site.net") are links too; "e.g." and "3.5" are not.
+    .replace(/\b(?:www\.[^\s<>]+|[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:com|net|org|co|io|blog|recipes|kitchen|food|us|uk|ca|fr|ma)(?:\/[^\s<>]*)?)(?=[\s.,!?)]|$)/gi, '')
     .replace(/[^.!?\n]*(?:link in (?:the )?(?:bio|profile)|(?:visit|on|from) (?:our|the) (?:blog|website))[^.!?\n]*[.!?]?/gi, '')
     .replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
 }
