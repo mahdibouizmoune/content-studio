@@ -8872,6 +8872,20 @@ secureIpcHandle('generate-image', async (e, firstArg, pinAspectRatio = '9:16', p
   }
 });
 
+// Ratios each video model accepts, matching the model registry shown in Video Studio.
+const VIDEO_MODEL_RATIOS = Object.freeze({
+  'pruna-p-video': ['1:1', '16:9', '9:16'],
+  'seedance-1-lite': ['1:1', '16:9', '9:16'],
+  'seedance-1-pro-fast': ['1:1', '16:9', '9:16'],
+  'seedance-1-pro': ['1:1', '16:9', '9:16']
+});
+
+function videoRatioProblem(model, aspectRatio, image) {
+  const allowed = VIDEO_MODEL_RATIOS[model];
+  if (!allowed || String(image || '').trim() || allowed.includes(aspectRatio)) return '';
+  return `This model accepts ${allowed.join(', ')}. Choose one of those ratios; nothing was generated.`;
+}
+
 secureIpcHandle('generate-video', async (e, {
   model = 'pruna-p-video',
   prompt = '',
@@ -8890,7 +8904,13 @@ secureIpcHandle('generate-video', async (e, {
   const apiToken = resolveReplicateApiToken(settings);
   if (!apiToken) return { success: false, error: 'Replicate API token is missing. Add it in Settings first.' };
   if (!String(prompt || '').trim()) return { success: false, error: 'Enter a video prompt first.' };
-  const modelConfig = VIDEO_MODEL_CONFIGS[model] || VIDEO_MODEL_CONFIGS['pruna-p-video'];
+  const modelConfig = VIDEO_MODEL_CONFIGS[model];
+  if (!modelConfig) return { success: false, error: `Unknown video model "${String(model).slice(0, 60)}". Choose a model from the list.` };
+  const ratioProblem = videoRatioProblem(model, aspectRatio, image);
+  if (ratioProblem) return { success: false, error: ratioProblem };
+  if (String(image || '').trim() && !/^https:\/\//i.test(String(image).trim())) {
+    return { success: false, error: 'The starting image must be a public https:// address. Local files are not uploaded for video, so nothing was generated.' };
+  }
 
   const controller = new AbortController();
   if (jobKey) activeJobs.set(jobKey, controller);
