@@ -74,7 +74,15 @@ export default function VideoStudio({ settings }) {
     if (!selectedModel.resolutions.includes(resolution)) setResolution(selectedModel.resolutions[0]);
     if (!selectedModel.fpsOptions.includes(fps)) setFps(selectedModel.fpsOptions[0]);
     if (selectedModel.id === "hailuo-02" && duration === "10" && resolution === "1080p") setResolution("768p");
-  }, [selectedModel, duration, resolution, fps]);
+    const ratios = (selectedModel.ratios || []).filter((value) => /^\d+:\d+$/.test(value));
+    if (ratios.length && !ratios.includes(aspectRatio)) setAspectRatio(ratios[0]);
+  }, [selectedModel, duration, resolution, fps, aspectRatio]);
+
+  // Pruna is priced per second (720p $0.02, 1080p $0.04; drafts about 4x cheaper). Other models
+  // only publish a flat estimate, which is shown as-is.
+  const costEstimate = selectedModel.id === "pruna-p-video"
+    ? `About $${(Number(duration) * (resolution === "1080p" ? 0.04 : 0.02) * (draft ? 0.25 : 1)).toFixed(2)} for this video`
+    : selectedModel.cost;
 
   async function generateVideo() {
     if (!prompt.trim()) {
@@ -117,9 +125,9 @@ export default function VideoStudio({ settings }) {
   }
 
   async function cancelVideo() {
+    // Stay busy until the running job actually returns, so a second paid job cannot start meanwhile.
     if (activeJobKey) await electronAPI.cancelJob?.(activeJobKey);
-    setWorking(false);
-    setStatus("Cancel requested.");
+    setStatus("Cancel requested. Waiting for the provider to stop...");
   }
 
   async function deleteVideo(videoId) {
@@ -202,13 +210,8 @@ export default function VideoStudio({ settings }) {
             </Field>
             <Field label="Aspect ratio" hint={selectedModel.supportsAspect ? "" : "This model uses the image or model default framing."}>
               <select className={inputClass} value={aspectRatio} onChange={(event) => setAspectRatio(event.target.value)} disabled={Boolean(image.trim()) || !selectedModel.supportsAspect}>
-                <option value="9:16">9:16 Vertical</option>
-                <option value="16:9">16:9 Landscape</option>
-                <option value="1:1">1:1 Square</option>
-                <option value="3:4">3:4 Portrait</option>
-                <option value="4:3">4:3 Landscape</option>
-                <option value="2:3">2:3 Portrait</option>
-                <option value="3:2">3:2 Landscape</option>
+                {/* Only ratios the model registry lists for this model. */}
+                {(selectedModel.ratios || ["9:16"]).filter((value) => /^\d+:\d+$/.test(value)).map((value) => <option key={value} value={value}>{value}</option>)}
               </select>
             </Field>
             <Field label="Resolution">
@@ -232,6 +235,7 @@ export default function VideoStudio({ settings }) {
           </div>
 
           <div className="mt-4 grid gap-2">
+            <div className="text-xs font-bold text-violet-700" aria-label="Estimated cost">{costEstimate}</div>
             <Button onClick={generateVideo} disabled={!canGenerate}><Play className="h-4 w-4" />{working ? "Generating..." : "Generate Video"}</Button>
             <Button variant="secondary" onClick={cancelVideo} disabled={!working}>Cancel</Button>
             <Button variant="secondary" onClick={() => electronAPI.getGeneratedVideos?.().then((result) => result?.success && setVideos(result.videos || []))}>
