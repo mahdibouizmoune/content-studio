@@ -24,10 +24,10 @@ Last updated: 2026-10-27. Branch: `claude/content-studio-360-audit`.
 
 ## Last verified counts
 
-lint pass · 440 tests pass · build pass · test:ui 6/6 (one transient screenshot-capture error on the first run, passed on re-run) · sweep 0 problems · prod audit 0.
+lint pass · 450 tests pass · build pass · test:ui 6/6 (one transient screenshot-capture error on the first run, passed on re-run) · sweep 0 problems · prod audit 0.
 
 Project skills confirmed discoverable: all three appeared in the session skill list after creation.
 
 ## Next actionable step
 
-Roadmap items 1–3, 5–8, 11, 13 and most of 4 and 12 are done (version 1.6.3). Next: 14 (show Pin save and load failures), 15 (canonical and Open Graph), 16 (Recipe Money Maker backup), then a paid prompt evaluation if you approve a budget.
+All roadmap items are done except: 4 (ItemList carousel, needs per-recipe anchors and the published URL), 25 (9:16 vs 2:3 comparison, needs your analytics), and measured prompt quality (needs a paid evaluation budget). Version 1.6.3.

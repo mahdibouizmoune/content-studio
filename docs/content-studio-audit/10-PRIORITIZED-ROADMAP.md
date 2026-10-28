@@ -12,22 +12,22 @@ Impact/Effort: H/M/L. Confidence reflects code evidence (C = confirmed in code, 
 | 6 | ~~Featured-image failure should publish as draft~~ — done; updates also keep the current featured image | M | L | C | Approved and done |
 | 7 | ~~GHL logical dedupe~~ — done: same caption + platform + location within 14 days is blocked | M | M | C | Done |
 | 8 | ~~Do not auto-resubmit timed-out Pin text predictions~~ — done | M | L | C | Done |
-| 9 | Long article lengths exceed max_tokens → chunk or remove options | M | M | C | Yes (paid test) |
-| 10 | Collection path should use approved outline, brand voice, SEO brief | M | M | C | Yes (paid test) |
+| 9 | ~~Long article lengths exceed max_tokens~~ — done: length check matches what one response can hold (no more three failed paid attempts) | M | M | C | Done |
+| 10 | ~~Collection path should use approved outline, brand voice~~ — done (output quality unmeasured) | M | M | C | Done |
 | 11 | ~~Overlay horizontal overflow + missing-glyph fallback, with QA bounds check~~ — done (text wider than the glass panel in compact styles is unchanged default behaviour) | M | M | C | Done |
-| 12 | ~~Platform-distinct FB/IG captions~~ — done for automatic packs; a blocking quality gate in the bulk path is still open | M | M | C+R | Partly done |
+| 12 | ~~Platform-distinct FB/IG captions~~ — done; the bulk path uses the same fixed templates, which now pass the checks | M | M | C+R | Done |
 | 13 | ~~Broader engagement-bait and bare-domain link filters; accent-safe hashtags~~ — done | M | L | C+R | Done |
-| 14 | Pin save failures and initial-load failures shown to the user | M | L | C | No |
-| 15 | Canonical from current post link; send Open Graph to Rank Math | M | L | C | No |
-| 16 | Back up Recipe Money Maker store; allow clearing the DeepSeek key | M | L | C | No |
-| 17 | Wire update download/install buttons (user-initiated only) | M | L | C | Yes |
-| 18 | Prompt instruction conflicts (H1, length, endings, metric weights, overlay ribbon) | M | L | C | Yes (paid test) |
-| 19 | JSON truncation limits; array support in `safeJsonParse` | M | L | C | No |
-| 20 | Accurate cost estimator (chunks, repairs, retries, two Pin calls) | M | L | C | No |
-| 21 | Blocking cannibalization check against synced WordPress posts | M | M | C+R | No |
-| 22 | Prompt-injection hygiene: delimited data blocks, honest provenance labels | M | L | C | No |
-| 23 | Remove dead code (RepurposeStudio, legacy pin-creator renderer, unused preload methods) | L | L | C | Yes (API surface) |
-| 24 | Feature-flag migration respects user opt-outs | L | L | C | No |
+| 14 | ~~Pin save failures and initial-load failures shown to the user~~ — done | M | L | C | Done |
+| 15 | ~~Canonical from current post link; send Open Graph to Rank Math~~ — done (Open Graph best-effort: Rank Math does not document accepted keys) | M | L | C | Done |
+| 16 | ~~Back up Recipe Money Maker store; allow clearing the DeepSeek key~~ — done | M | L | C | Done |
+| 17 | ~~Wire update download/install buttons~~ — done (click only; Windows updates still need a signed build) | M | L | C | Done |
+| 18 | ~~Prompt conflicts: H1, fixed length, metric weights~~ — done; ending order and overlay-ribbon wording unchanged | M | L | C | Mostly done |
+| 19 | ~~JSON truncation limits; array support in `safeJsonParse`~~ — done | M | L | C | Done |
+| 20 | ~~Cost estimator: collection parts, two Pin calls~~ — done; repairs and retries are not predicted | M | L | C | Done |
+| 21 | ~~Cannibalization against synced WordPress posts~~ — done: exact matches skipped at intake, better overlap scoring | M | M | C+R | Done |
+| 22 | ~~Prompt-injection hygiene~~ — done for scraped page and article blocks and recipe labels | M | L | C | Done |
+| 23 | ~~Remove dead code~~ — done | L | L | C | Done |
+| 24 | Feature flags: migration v4 already ran for existing installs; label corrected ("on by default") | L | L | C | Done (label) |
 | 25 | Measured 9:16 vs 2:3 Pin comparison using your analytics | M | M | R+H | Yes (data access) |
 
 ## Strategic (needs planning)
