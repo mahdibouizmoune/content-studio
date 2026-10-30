@@ -21,7 +21,7 @@ const dns = require('dns');
 const Store = require('electron-store');
 const { pruneBackups, mirrorBackup } = require('./backup-retention');
 const { registerVideoIpc } = require('./video-ipc');
-const { WORKSPACE_ROOTS, createWorkspaceStore } = require('./workspace-store');
+const { WORKSPACE_ROOTS, createWorkspaceStore, isWorkspaceCorruption } = require('./workspace-store');
 const { recoverMaskedTokenFailures, resolveRendererSecret } = require('./credential-boundary');
 const { createJobCenter } = require('./job-center');
 const { buildPerformanceScheduleProfile, nextPerformanceSlots } = require('./performance-scheduling');
@@ -55,7 +55,9 @@ const { removeArticleImpact } = require('./article-impact-cleanup');
 const { cleanupWordPressPins, eligibleWordPressPins } = require('./wordpress-pin-retention');
 const { READER_RECIPE_GUIDANCE, assessEditorialGaps, hasEditorialInstructionLeak } = require('./article-editorial');
 const { createReplicatePoller } = require('./replicate-polling');
-const { createRecipeReadinessService, recipeReviewHash, recipeSchemaNeedsReview, stripRecipeMicrodata, isAiWrittenRecipe, isNonFoodArticle } = require('./article-recipe-readiness');
+const { createRecipeReadinessService, recipeReviewHash, recipeSchemaNeedsReview, stripRecipeMicrodata, isAiWrittenRecipe, isNonFoodArticle, prepareRecipeSchemaForPublication } = require('./article-recipe-readiness');
+const { mergeSettingsPatch } = require('./settings-patch.mjs');
+const { replaceRoundupSchema } = require('./recipe-roundup');
 const { runSerial, mapBounded } = require('./bounded-work');
 const { mergePinStyles, migratePinStyles } = require('./pin-style-settings');
 const { buildPinSourceSnapshot, sanitizePinSourceSnapshot } = require('./pin-source');
@@ -367,6 +369,7 @@ function createStore() {
   try {
     return createWorkspaceStore(settingsStore, app.getPath('userData'));
   } catch (error) {
+    if (!isWorkspaceCorruption(error)) throw error;
     const userDataPath = app.getPath('userData');
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
     const quarantined = [];
@@ -722,11 +725,12 @@ async function cancelReplicatePrediction(cancelUrl, apiToken) {
 async function runManagedReplicatePrediction(model, input, apiToken, {
   signal,
   jobKey = '',
+  pinId = '',
   timeoutMs = 120000,
   progressLabel = 'Replicate prediction'
 } = {}) {
   const deadlineSeconds = Math.max(5, Math.min(86400, Math.ceil(timeoutMs / 1000)));
-  const contextId = String(jobKey).match(/^native-(?:image|regen|title|prompt)-(.+)$/)?.[1];
+  const contextId = pinId || String(jobKey).match(/^native-(?:image|regen|title|prompt)-(.+)$/)?.[1];
   const contextPin = contextId ? pinCreatorPins().find(p => String(p.id) === contextId) : null;
   const create = await axios.post(
     `https://api.replicate.com/v1/models/${model}/predictions`,
@@ -3496,7 +3500,7 @@ secureIpcHandle('get-settings', async () => {
 
 secureIpcHandle('save-settings', (event, settings) => {
   const previous = store.get('settings', {});
-  const toStore = { ...previous, ...settings };
+  const toStore = mergeSettingsPatch(previous, settings);
   // Only the folder picker may change where backups are copied.
   if (previous.backupMirrorFolder) toStore.backupMirrorFolder = previous.backupMirrorFolder;
   else delete toStore.backupMirrorFolder;
@@ -3644,6 +3648,7 @@ secureIpcHandle('save-settings', (event, settings) => {
     delete migratedSettings.googleRefreshToken_encrypted;
   }
   store.set('settings', migratedSettings);
+  if (previous.updateFeedUrl !== migratedSettings.updateFeedUrl) appUpdater?.configure();
   scheduleAutomaticMediaCleanup(5000);
   if (migratedSettings.replicateApiToken_encrypted) initializePinReplicate();
   return { success: true };
@@ -5507,12 +5512,12 @@ secureIpcHandle('cleanup-unused-media', async (event, { olderThanDays = 7, dryRu
 });
 
 secureIpcHandle('get-growth-workspace', () => {
-  return Object.fromEntries(
+  return { ...Object.fromEntries(
     GROWTH_COLLECTIONS.map((collection) => [
       collection,
       store.get(`growthWorkspace.${collection}`, [])
     ])
-  );
+  ), deliveryCalendar: require('./publishing-calendar').buildPublishingCalendar({ articles: store.get('articles', []), pins: pinCreatorPins(), batches: store.get('pinterestDelivery.batches', []), ghl: store.get('performance.ghlReceipts', []), wordpress: store.get('performance.wordpressPublishReceipts', []) }) };
 });
 
 secureIpcHandle('upsert-growth-record', (event, { collection, record } = {}) => {
@@ -6508,9 +6513,11 @@ secureIpcHandle('delete-keyword-research', (e, researchId) => {
   return { success: true, history };
 });
 
-secureIpcHandle('research-keywords', async (e, { seed = '', geo = 'US', goal = 'traffic', settings = {}, existingTitles = [], jobKey } = {}) => {
+secureIpcHandle('research-keywords', async (e, { seed = '', geo = 'US', goal = 'traffic', settings = {}, existingTitles = [], opportunityWeights = {}, jobKey } = {}) => {
   const cleanSeed = String(seed || '').trim().slice(0, 180);
   if (!cleanSeed) return { success: false, error: 'Enter a seed topic or keyword first.' };
+  try { require('./keyword-opportunity').rankKeywordOpportunities([], { weights: opportunityWeights }); }
+  catch (error) { return { success: false, error: error.message }; }
   const controller = new AbortController();
   if (jobKey) activeJobs.set(jobKey, controller);
   const analytics = store.get('trendResearch.pinterestAnalytics', null);
@@ -6666,6 +6673,12 @@ Rules:
         cannibalization: cannibalizationMatch(item.keyword, item.suggestedTitle, existingTitles)
       }));
     }
+    const performance = store.get('performance.intelligence', {});
+    research.keywords = require('./keyword-opportunity').rankKeywordOpportunities(research.keywords || [], {
+      pinterest: evidence, queries: performance.google?.error || performance.google?.property !== store.get('settings.googleSearchConsoleProperty', '') ? [] : performance.google?.queries || [],
+      titles: [...existingTitles, ...store.get('articles', []).map(a => a.generatedTitle || a.title).filter(Boolean)], geo,
+      pinterestAt: analytics?.importedAt || '', searchAt: performance.generatedAt || '', weights: opportunityWeights
+    });
     research.websiteEvidence = websiteSignals;
     if (websiteSignals.length) research.contentPlan = [`Expand related cooking needs around ${websiteSignals[0].title} (${websiteSignals[0].engagedSessions} GA4 engaged sessions); avoid repeating the same recipe.`, ...(research.contentPlan || [])].slice(0, 8);
     const history = [research, ...store.get('trendResearch.history', []).filter((item) => item.id !== research.id)].slice(0, 25);
@@ -7501,7 +7514,7 @@ secureIpcHandle('upload-repurpose-ghl-rows', async (e, { headers = [], rows = []
         }
       }
       const logicalDuplicate = findLogicalGhlDuplicate(store.get('performance.ghlReceipts', []), {
-        platform: targetPlatform, locationId, caption: row[1], scheduleDate: payload.scheduleDate
+        platform: targetPlatform, locationId, caption: row[1], scheduleDate: payload.scheduleDate, targetAccountIds
       });
       if (logicalDuplicate) {
         failures.push({
@@ -7789,7 +7802,8 @@ function pinterestModelRequest(selectedModel, finalPrompt, aspectRatio = '9:16')
 async function generatePinterestBaseImage(prompt, aspectRatio, model, placement, signal, jobKey, {
   overlayText: _overlayText = '',
   textRenderMode = 'local',
-  pinStyle = ''
+  pinStyle = '',
+  pinId = ''
 } = {}) {
   const rawSettings = store.get('settings', {});
   const apiToken = getDecryptedReplicateToken(rawSettings);
@@ -7823,6 +7837,7 @@ async function generatePinterestBaseImage(prompt, aspectRatio, model, placement,
     signal,
     jobKey,
     timeoutMs: request.timeoutMs,
+    pinId,
     progressLabel: 'Pinterest food image'
   });
   const imageUrl = normalizeImageUrl(extractImageUrlFromOutput(prediction.output));
@@ -8328,7 +8343,8 @@ secureIpcHandle('create-pinterest-pin-asset', async (event, {
       generated = await generatePinterestBaseImage(prompt, sourceAspectRatio, model, placement, signal, jobKey, {
         overlayText: effectiveOverlayText,
         textRenderMode: effectiveTextRenderMode,
-        pinStyle
+        pinStyle,
+        pinId: savedPin?.id || ''
       });
       sourceBuffer = await imageSourceBuffer({ url: generated.imageUrl });
     }
@@ -9154,21 +9170,6 @@ function appendStructuredData(content = '', structuredData = '') {
   }
 }
 
-function structuredDataWithImage(structuredData = '', imageUrl = '') {
-  if (!structuredData || !imageUrl) return structuredData;
-  try {
-    const parsed = typeof structuredData === 'string' ? JSON.parse(structuredData) : structuredData;
-    const recipe = Array.isArray(parsed?.['@graph'])
-      ? parsed['@graph'].find((item) => item?.['@type'] === 'Recipe')
-      : parsed?.['@type'] === 'Recipe' ? parsed : null;
-    if (recipe) recipe.image = [imageUrl];
-    return JSON.stringify(parsed, null, 2);
-  } catch (error) {
-    log.warn('Could not update recipe schema image URL:', error.message);
-    return structuredData;
-  }
-}
-
 async function updateRankMathMeta(siteUrl, auth, postId, article, { postLink = '', imageUrl = '' } = {}) {
   const meta = rankMathMetaFromArticle(article, { postLink });
   if (!postId || !Object.keys(meta).length) return { status: 'skipped' };
@@ -9442,14 +9443,19 @@ secureIpcHandle('push-to-wordpress', async (e, { article, site }) => {
   }
   // AI-written recipes publish as recipe data only after the user reviewed the current recipe text.
   const recipeReviewSource = { ...publishingArticle, recipeReview: currentArticle?.recipeReview || publishingArticle.recipeReview };
-  const recipeSchemaHeld = recipeSchemaNeedsReview(recipeReviewSource, publishingArticle.content);
+  const recipeSchemaHeld = recipe.patch.recipeRequired !== false && recipeSchemaNeedsReview(recipeReviewSource, publishingArticle.content);
   if (recipeSchemaHeld) mediaWarnings.push('Recipe rich-result data was withheld because this AI-written recipe has not been reviewed. Review it in the editor, then republish to add it.');
+  const publicationSchema = recipeSchemaHeld || recipe.patch.recipeRequired === false
+    ? { structuredData: '', warnings: [] }
+    : prepareRecipeSchemaForPublication(publishingArticle, updatedContent, featuredMediaUrl, recoveredPost?.link || (siteContains(url, publishingArticle.wordpressPostUrl) ? publishingArticle.wordpressPostUrl : '') || '');
+  mediaWarnings.push(...publicationSchema.warnings);
+  updatedContent = publicationSchema.content || updatedContent;
   updatedContent = appendStructuredData(
     prepareAffiliateContent(
       prepareWordPressContentForPerformance(stripRecipeMicrodata(updatedContent), publishingArticle.generatedTitle || publishingArticle.title || 'Recipe image'),
       settings
     ),
-    recipeSchemaHeld ? '' : structuredDataWithImage(publishingArticle.structuredData || '', featuredMediaUrl)
+    publicationSchema.structuredData
   );
   updatedContent = ensureWordPressPublicationMarker(updatedContent, publicationIdentity);
 
@@ -9465,7 +9471,7 @@ secureIpcHandle('push-to-wordpress', async (e, { article, site }) => {
   const postEndpoint = effectivePostId
     ? `${url}/wp-json/wp/v2/posts/${encodeURIComponent(effectivePostId)}`
     : `${url}/wp-json/wp/v2/posts`;
-  const revision = payloadRevision(payload);
+  let revision = payloadRevision(payload);
   payload.content += `\n${revisionMarker(revision)}`;
   saveWordPressPublishReceipt({ identity: publicationIdentity, articleId: publishingArticle.id, siteUrl: url,
     postId: effectivePostId, postUrl: recoveredPost?.link || '', status: 'unknown', revision });
@@ -9495,6 +9501,27 @@ secureIpcHandle('push-to-wordpress', async (e, { article, site }) => {
       throw finalError;
     }
   }
+  let roundupUnresolved = false;
+  if (!effectivePostId && !recipeSchemaHeld && postData.status === 'publish' && postData.link) {
+    const finalSchema = prepareRecipeSchemaForPublication(publishingArticle, publicationSchema.content || publishingArticle.content, featuredMediaUrl, postData.link);
+    const finalContent = replaceRoundupSchema(payload.content, finalSchema.structuredData || '{}');
+    if (finalContent) {
+      const finalPayload = { ...payload, content: finalContent };
+      const finalRevision = payloadRevision(finalPayload);
+      finalPayload.content += `\n${revisionMarker(finalRevision)}`;
+      saveWordPressPublishReceipt({ identity: publicationIdentity, articleId: publishingArticle.id, siteUrl: url, postId: postData.id, postUrl: postData.link, status: 'unknown', revision: finalRevision });
+      try {
+        const response = await axios.post(`${url}/wp-json/wp/v2/posts/${encodeURIComponent(postData.id)}`, finalPayload, wordpressRequestConfig(url, { headers: { Authorization: auth, 'Content-Type': 'application/json' }, timeout: 60000 }));
+        if (Number(response.data?.id) !== Number(postData.id)) throw new Error('Roundup update did not confirm the same post.');
+        postData = { ...postData, ...response.data, link: response.data.link || postData.link, status: response.data.status || postData.status }; revision = finalRevision;
+        mediaWarnings.splice(0, mediaWarnings.length, ...mediaWarnings.filter(w => !w.includes('confirmed WordPress permalink')));
+      } catch (error) {
+        const recovered = await pollForWordPressPublication(url, auth, { ...publishingArticle, wordpressPostId: postData.id, wordpressPostUrl: postData.link }, publicationIdentity, finalRevision, finalPayload);
+        if (recovered) { postData = recovered; revision = finalRevision; }
+        else { roundupUnresolved = !isDefinitiveWordPressRejection(error); if (roundupUnresolved) revision = finalRevision; mediaWarnings.push('The article was created, but its roundup permalink markup update could not be confirmed. Review the existing WordPress post before retrying; no second post was created.'); }
+      }
+    }
+  }
   const receipt = saveWordPressPublishReceipt({
     identity: publicationIdentity,
     articleId: publishingArticle.id || '',
@@ -9503,7 +9530,8 @@ secureIpcHandle('push-to-wordpress', async (e, { article, site }) => {
     revision,
     postId: postData.id,
     postUrl: postData.link || recoveredPost?.link || '',
-    status: postData.status || status,
+    status: roundupUnresolved ? 'unknown' : postData.status || status,
+    scheduledAt: status === 'future' ? payload.date_gmt : '',
     createdAt: new Date().toISOString()
   });
   const finalPostUrl = postData.link || receipt.postUrl || '';
@@ -9673,6 +9701,7 @@ if (store) {
   const { createQualityWorkspace } = require('./quality-workspace');
   const quality = createQualityWorkspace({
     store, ledger: spendingLedger, sharp: (...args) => getSharp()(...args),
+    readiness: () => require('./operations-readiness').operationsReadiness({ store, metadata: { ...require('./release-provenance').releaseProvenance(app), ...require('../package.json') }, packaged: app.isPackaged, updateState: appUpdater?.state() }),
     mediaDirectory: () => { initializeImagesDir(); return imagesDir; }, displayUrl: localPathToFileUrl,
     cachePath: path.join(app.getPath('userData'), 'local-ocr'), fetchPage: fetchPublicHtml,
     releaseInfo: () => require('./release-provenance').releaseProvenance(app),

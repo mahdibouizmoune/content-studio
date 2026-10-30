@@ -1,7 +1,7 @@
 'use strict';
 
 function configuredWindowsPublisherNames(metadata = {}) {
-  const configured = metadata?.build?.win?.publisherName;
+  const configured = metadata?.build?.win?.publisherName || metadata?.windowsPublisherNames;
   return (Array.isArray(configured) ? configured : [configured])
     .map((value) => String(value || '').trim())
     .filter(Boolean);

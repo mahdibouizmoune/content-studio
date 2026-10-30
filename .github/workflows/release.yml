@@ -37,7 +37,7 @@ jobs:
       - name: Verify reviewed tag and clean source
         run: node scripts/release-provenance.cjs
       - name: Build signed artifacts
-        run: npm run dist
+        run: npm run dist:signed
         env:
           CSC_LINK: ${{ secrets[matrix.certificate] }}
           CSC_KEY_PASSWORD: ${{ secrets[matrix.password] }}
@@ -45,6 +45,8 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           CSC_IDENTITY_AUTO_DISCOVERY: 'true'
+          CONTENT_STUDIO_WINDOWS_PUBLISHER: ${{ vars.CONTENT_STUDIO_WINDOWS_PUBLISHER }}
+          CONTENT_STUDIO_UPDATE_URL: ${{ vars.CONTENT_STUDIO_UPDATE_URL }}
       - uses: actions/upload-artifact@v4
         with:
           name: signed-content-studio-${{ matrix.os }}
@@ -52,5 +54,6 @@ jobs:
             release/*.exe
             release/*.dmg
             release/*.blockmap
+            release/*.yml
             electron/assets/release-provenance.json
           if-no-files-found: error

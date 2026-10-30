@@ -28,6 +28,11 @@ const WORKSPACE_ROOTS = new Set([
 // longer rewrites them; readers still see one combined settings object.
 const SETTINGS_LISTS_KEY = 'settingsLists';
 
+function isWorkspaceCorruption(error) {
+  return ['SQLITE_CORRUPT', 'SQLITE_NOTADB', 'WORKSPACE_DATABASE_CORRUPT'].includes(error?.code)
+    || [11, 26].includes(Number(error?.errcode) & 255);
+}
+
 function siteListKey(site, index) {
   return String(site?.id || site?.url || `index-${index}`);
 }
@@ -125,7 +130,7 @@ class WorkspaceDatabase {
       const integrity = this.db.prepare('PRAGMA quick_check').get();
       const integrityResult = String(Object.values(integrity || {})[0] || '').toLowerCase();
       if (integrityResult && integrityResult !== 'ok') {
-        throw new Error(`Workspace database integrity check failed: ${integrityResult}`);
+        throw Object.assign(new Error(`Workspace database integrity check failed: ${integrityResult}`), { code: 'WORKSPACE_DATABASE_CORRUPT' });
       }
       this.readStatement = this.db.prepare('SELECT value FROM workspace_values WHERE key = ?');
       this.writeStatement = this.db.prepare(`
@@ -196,6 +201,7 @@ class WorkspaceDatabase {
 
 function createWorkspaceStore(settingsStore, userDataPath) {
   const database = new WorkspaceDatabase(path.join(userDataPath, 'workspace.sqlite'));
+  try {
   let migrationChanged = false;
   for (const root of WORKSPACE_ROOTS) {
     if (!settingsStore.has(root)) continue;
@@ -209,12 +215,28 @@ function createWorkspaceStore(settingsStore, userDataPath) {
   const readSettings = () => joinSettingsLists(settingsStore.get('settings', undefined), database.get(SETTINGS_LISTS_KEY, null));
   const writeSettings = (full) => {
     const { settings, lists } = splitSettingsLists(full);
-    settingsStore.set('settings', settings);
+    const previousSettings = settingsStore.get('settings', undefined);
+    const previousLists = database.get(SETTINGS_LISTS_KEY, undefined);
     const listsJson = JSON.stringify(lists);
-    if (lists && listsJson !== savedListsJson) {
+    const changedLists = lists && listsJson !== savedListsJson;
+    // Commit the replacement first. An interruption can leave redundant legacy fields, never no copy.
+    if (changedLists) {
       database.set(SETTINGS_LISTS_KEY, lists);
-      savedListsJson = listsJson;
+      if (JSON.stringify(database.get(SETTINGS_LISTS_KEY)) !== listsJson) throw new Error('Settings lists could not be verified; original settings were retained.');
     }
+    try { settingsStore.set('settings', settings); }
+    catch (error) {
+      if (changedLists) {
+        if (previousLists === undefined) database.delete(SETTINGS_LISTS_KEY);
+        else database.set(SETTINGS_LISTS_KEY, previousLists);
+      }
+      if (JSON.stringify(settingsStore.get('settings')) !== JSON.stringify(previousSettings)) {
+        if (previousSettings === undefined) settingsStore.delete('settings');
+        else settingsStore.set('settings', previousSettings);
+      }
+      throw error;
+    }
+    if (changedLists) savedListsJson = listsJson;
     return full;
   };
   const storedSettings = settingsStore.get('settings', undefined);
@@ -300,10 +322,15 @@ function createWorkspaceStore(settingsStore, userDataPath) {
     }
   };
   return facade;
+  } catch (error) {
+    database.close();
+    throw error;
+  }
 }
 
 module.exports = {
   WORKSPACE_ROOTS,
   WorkspaceDatabase,
+  isWorkspaceCorruption,
   createWorkspaceStore
 };

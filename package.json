@@ -1,6 +1,6 @@
 {
   "name": "content-studio",
-  "version": "1.6.3",
+  "version": "1.6.5",
   "description": "Content Studio - AI article generation, images, recipes, and WordPress publishing",
   "main": "electron/main.js",
   "author": "Mahdi Bouizmoune",
@@ -24,7 +24,8 @@
     "check": "npm run lint && npm test && npm run build",
     "dist": "vite build && electron-builder",
     "dist:win": "vite build && electron-builder --win",
-    "dist:mac": "vite build && electron-builder --mac"
+    "dist:mac": "vite build && electron-builder --mac",
+    "dist:signed": "vite build && node scripts/build-signed-release.cjs"
   },
   "dependencies": {
     "@js-temporal/polyfill": "^0.5.1",

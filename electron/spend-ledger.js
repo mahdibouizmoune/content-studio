@@ -32,6 +32,14 @@ function createSpendLedger({ store, now = Date.now }) {
       if (d.policy.enabled) { const error = new Error(`Set a per-request reservation for ${model} before using the daily spending guard.`); error.noRetry = true; throw error; }
       estimateUsd = null;
     }
+    const evaluation = store.get('contentOperations.evaluationRuns', []).find(run => run.pinIds?.includes(context.pinId));
+    if (evaluation) {
+      const entries = d.entries.filter(e => evaluation.pinIds.includes(e.pinId) && e.status !== 'rejected');
+      const committed = entries.reduce((sum, e) => sum + (e.reportedUsd ?? e.estimateUsd ?? 0), 0);
+      if (!estimateUsd || entries.some(e => e.estimateUsd === null && e.reportedUsd === null) || committed + estimateUsd > evaluation.budgetUsd + 1e-9) {
+        const error = new Error('Evaluation estimated budget reached or price unknown. Reconcile charges and create a new explicitly budgeted run before more test generations.'); error.noRetry = true; throw error;
+      }
+    }
     if (d.policy.enabled && summary().today.estimatedCommitted + estimateUsd > d.policy.dailyUsd + 1e-9) {
       const error = new Error('Daily generation budget reached. Review Spending before submitting another paid request.'); error.noRetry = true; throw error;
     }

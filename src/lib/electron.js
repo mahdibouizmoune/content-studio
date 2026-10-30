@@ -1,4 +1,5 @@
 import { filterArticleIntake } from "../../electron/article-intake.mjs";
+import { mergeSettingsPatch } from "./settingsPatch.mjs";
 
 const storageKey = "content-studio-dev-store";
 export const isElectronApp = Boolean(window.electronAPI);
@@ -38,7 +39,7 @@ function makeMockApi() {
     },
     async saveSettings(settings) {
       const store = readStore();
-      writeStore({ ...store, settings: { ...(store.settings || {}), ...settings } });
+      writeStore({ ...store, settings: mergeSettingsPatch(store.settings || {}, settings) });
       return { success: true };
     },
     async getRecipeMoneyMakerState() { return readStore().recipeMoneyMaker || { settings: { brandColor: "#1f6b4f", accentColor: "#f3b44b", font: "Inter", language: "English", brandName: "Recipe Money Maker", hasApiKey: false }, recipes: [] }; },

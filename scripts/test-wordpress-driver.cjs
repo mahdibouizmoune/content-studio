@@ -12,6 +12,11 @@ async function main() {
     const proof = JSON.parse(await fs.readFile(path.join(dir, 'passed.json'), 'utf8'));
     assert.deepEqual(proof, { mediaOutage: true, mediaRecovered: true, recipePreserved: true, noDuplicate: true, unauthorizedBlocked: true, analyticsDefaultOff: true });
     console.log('Verified WordPress PHP assertion receipt: 6 real staging checks passed.');
-  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+  } finally {
+    const target = await fs.realpath(dir);
+    assert.equal(path.dirname(target), await fs.realpath(os.tmpdir()));
+    assert.ok(path.basename(target).startsWith('cs-wp-proof-'));
+    await fs.rm(target, { recursive: true, force: true });
+  }
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

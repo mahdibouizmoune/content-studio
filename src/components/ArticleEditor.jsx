@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import { useConfirmDialog } from "@/components/ConfirmDialog";
 import { Button, Field, inputClass } from "@/components/ui";
 import { electronAPI } from "@/lib/electron";
+import { isAiWrittenRecipe } from "../../electron/recipe-provenance.mjs";
 import { buildMetadata, buildRankMathMeta, buildRecipeSchema, buildSeoImageAlt, buildSeoImageFilename, insertArticleImages, qaArticleImages, scoreArticle } from "@/lib/articlePostProcess.mjs";
 import { applyInternalLinksToHtml, buildInternalLinkSuggestions, resolveArticleSite } from "@/lib/internalLinks";
 import { categoryNeedsReview, matchWordPressCategory, manualCategoryForSite } from "@/lib/wordpressCategories";
@@ -132,7 +133,7 @@ export default function ArticleEditor({ article, settings, saveSettings, onClose
     return revised;
   }
 
-  const aiWrittenRecipe = Boolean(draft.generationCheckpoint) || draft.recipeCardRepairApplied === true;
+  const aiWrittenRecipe = isAiWrittenRecipe(draft);
   const [reviewingRecipe, setReviewingRecipe] = useState(false);
 
   async function markRecipeReviewed() {

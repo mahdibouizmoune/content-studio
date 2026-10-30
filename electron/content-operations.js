@@ -7,6 +7,7 @@ const { parseRecipeCard } = require('./recipe-card-parser');
 const { parseDocument } = require('htmlparser2');
 const { selectAll } = require('css-select');
 const { getOuterHTML } = require('domutils');
+const { EVALUATION_CASES, evaluateSavedOutputs } = require('./prompt-evaluation');
 const hash = value => createHash('sha256').update(Buffer.isBuffer(value) || typeof value === 'string' ? value : JSON.stringify(value)).digest('hex');
 const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const safeUrl = value => { try { const u = new URL(value); return /^https?:$/.test(u.protocol) && !u.username && !u.password ? u.href : ''; } catch { return ''; } };
@@ -41,11 +42,12 @@ function experimentReport(experiment, metrics, currentPins) {
   });
   return { ...experiment, variants: mapped, status: mapped.every(v => v.evidence === 'measured' && v.impressions >= 1000) ? 'observational-comparison' : 'insufficient-evidence', limitation: 'Different dates, audiences and distribution may explain differences. No causal winner is declared.' };
 }
-function createContentOperations({ store, ledger, saveFile, readMedia, readArchive }) {
+function createContentOperations({ store, ledger, saveFile, readMedia, readArchive, readiness = () => null }) {
   const evidence = require('./recipe-evidence').createRecipeEvidence({ store, saveFile });
   const archive = require('./wordpress-archive').createWordPressArchive({ store, readArchive });
   const countCache = new Map();
-  const get = () => ({ baselines: {}, recipeRecords: {}, styleVersions: [], benchmarkCases: [], experiments: [], packs: [], costLinks: {}, ...store.get('contentOperations', {}) });
+  const evaluationCache = new Map();
+  const get = () => ({ baselines: {}, recipeRecords: {}, styleVersions: [], benchmarkCases: [], evaluationRuns: [], experiments: [], packs: [], costLinks: {}, ...store.get('contentOperations', {}) });
   const save = value => store.set('contentOperations', value);
   const articles = () => store.get('articles', []);
   const pins = () => store.get('pinCreatorPins', []);
@@ -96,7 +98,7 @@ function createContentOperations({ store, ledger, saveFile, readMedia, readArchi
       case 'snapshot': {
         const metrics = store.get('trendResearch.pinterestAnalytics', {}).rows || [];
         const lines = pipeline(d);
-        return { styleVersions: d.styleVersions, benchmarkCases: d.benchmarkCases, packs: d.packs, pipeline: lines, costs: costs(d, lines), spending: ledger.get().entries.map(e => ({ id: e.id, model: e.model, predictionId: e.predictionId, createdAt: e.createdAt, estimateUsd: e.estimateUsd, reportedUsd: e.reportedUsd })),
+        return { readiness: readiness(), evaluationCases: EVALUATION_CASES, evaluationRuns: d.evaluationRuns.map(r => ({ ...r, results: evaluateSavedOutputs(r.assignments, articles(), pins(), evaluationCache), committedUsd: ledger.get().entries.filter(e => r.pinIds.includes(e.pinId) && e.status !== 'rejected').reduce((sum, e) => sum + (e.reportedUsd ?? e.estimateUsd ?? 0), 0) })), styleVersions: d.styleVersions, benchmarkCases: d.benchmarkCases, packs: d.packs, pipeline: lines, costs: costs(d, lines), spending: ledger.get().entries.map(e => ({ id: e.id, model: e.model, predictionId: e.predictionId, createdAt: e.createdAt, estimateUsd: e.estimateUsd, reportedUsd: e.reportedUsd })),
           experiments: d.experiments.map(e => experimentReport(e, metrics, pins())), metricsFetchedAt: store.get('trendResearch.pinterestAnalytics', {}).importedAt || null,
           pins: pins().map(p => ({ id: p.id, title: p.title, prompt: p.prompt || '', style: p.generationConfig?.pinStyle || p.promptStyle || '', sourceArticleId: p.articleId || '', sha256: p.imageQa?.sha256 || '', displayUrl: p.displayUrl || p.imageUrl })),
           styles: Object.entries(store.get('settings', {}).pinCreator?.customStyles || {}).map(([id, s]) => ({ id, name: s.name, prompt: s.prompt })),
@@ -158,6 +160,33 @@ function createContentOperations({ store, ledger, saveFile, readMedia, readArchi
           description: '', prompt: v.prompt, promptStyle: v.styleId, imageSourceMode: 'generate-new', status: 'pending', promptLabVersionId: v.id, promptLabPromptHash: v.promptHash,
           promptLabPrompt: v.prompt, promptLabSourceHash: hash(a.content || ''), sourceSnapshot: { title: a.generatedTitle || a.title, recipe: { name: a.generatedTitle || a.title, ingredients: editableRecipes(a)[0]?.ingredients || [], instructions: editableRecipes(a)[0]?.instructions || [] } }, createdAt: new Date().toISOString() };
         store.set('pinCreatorPins', [...pins(), pin]); return { pin };
+      }
+      case 'evaluation-create': {
+        const v = d.styleVersions.find(v => v.id === p.versionId), budgetUsd = Number(p.budgetUsd);
+        if (!v || !Number.isFinite(budgetUsd) || budgetUsd <= 0 || budgetUsd > 25) throw new Error('Choose a saved candidate and an estimated budget above zero, up to 25 USD.');
+        if (!Array.isArray(p.assignments) || !p.assignments.length || p.assignments.length > 15) throw new Error('Assign 1 to 15 evaluation cases.');
+        if (d.evaluationRuns.length >= 100) throw new Error('Evaluation run limit reached. Export records before adding more.');
+        const used = new Set();
+        const pendingPins = [], assignments = p.assignments.map(assignment => {
+          if (!EVALUATION_CASES.some(c => c.id === assignment.caseId) || used.has(assignment.caseId)) throw new Error('Invalid or duplicate evaluation case.');
+          used.add(assignment.caseId);
+          const a = article(assignment.articleId), url = safeUrl(a.wordpressPostUrl || a.sourceUrl);
+          if (!url || !a.content || inspectRecipe(a).status === 'needs-repair') throw new Error('Each evaluation article needs a public source URL and complete recipe structure.');
+          const id = randomUUID();
+          pendingPins.push({ id, url, articleId: a.id, queueType: 'prompt-benchmark', title: a.generatedTitle || a.title, sourceTitle: a.generatedTitle || a.title,
+            prompt: v.prompt, promptStyle: v.styleId, imageSourceMode: 'generate-new', status: 'pending', promptLabVersionId: v.id, promptLabPromptHash: v.promptHash, promptLabPrompt: v.prompt, promptLabSourceHash: hash(a.content),
+            sourceSnapshot: { title: a.generatedTitle || a.title, recipe: editableRecipes(a)[0] }, createdAt: new Date().toISOString() });
+          return { caseId: assignment.caseId, articleId: a.id, pinId: id, sourceHash: hash(a.content) };
+        });
+        const run = { id: randomUUID(), versionId: v.id, budgetUsd, assignments, pinIds: pendingPins.map(pin => pin.id), datasetVersion: 1, createdAt: new Date().toISOString() };
+        // Persist the budget guard before making the Pins available for generation.
+        d.evaluationRuns.push(run); save(d);
+        store.set('pinCreatorPins', [...pins(), ...pendingPins]);
+        return { run, paidRequestsSubmitted: 0 };
+      }
+      case 'evaluation-export': {
+        const run = d.evaluationRuns.find(r => r.id === p.id); if (!run) throw new Error('Evaluation run no longer exists.');
+        return saveFile('prompt-evaluation.json', Buffer.from(JSON.stringify({ ...run, results: evaluateSavedOutputs(run.assignments, articles(), pins()), limitation: 'Local checks and human visual review do not prove cooking results, CTR or retention. Budget is an estimated reservation cap, not a provider billing guarantee.' }, null, 2)), [{ name: 'Evaluation Report', extensions: ['json'] }]);
       }
       case 'experiment-save': {
         const name = text(p.name, 120);

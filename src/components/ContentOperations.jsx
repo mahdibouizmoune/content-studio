@@ -5,8 +5,9 @@ import SectionHeader from '@/components/SectionHeader';
 import VirtualList from '@/components/VirtualList';
 import RecipeEvidenceWorkbench from '@/components/RecipeEvidenceWorkbench';
 import PublishedArchive from '@/components/PublishedArchive';
+import PromptEvaluation from '@/components/PromptEvaluation';
 import { Button, Field, inputClass } from '@/components/ui';
-const tabs = ['Pipeline', 'Review Desk', 'Published Archive', 'Recipes', 'Prompt Lab', 'Experiments', 'Costs', 'Recipe Packs'];
+const tabs = ['Pipeline', 'Review Desk', 'Published Archive', 'Recipes', 'Prompt Lab', 'Experiments', 'Costs', 'Recipe Packs', 'Readiness'];
 const money = n => n == null ? 'Unknown' : `$${Number(n).toFixed(4)}`;
 export default function ContentOperations({ activeScreen, setActiveScreen, refreshArticles }) {
   const [data, setData] = useState(null), [tab, setTab] = useState('Pipeline'), [busy, setBusy] = useState(false), [message, setMessage] = useState('');
@@ -66,6 +67,11 @@ export default function ContentOperations({ activeScreen, setActiveScreen, refre
         <Field label="Review notes"><input className={inputClass} value={note} onChange={e => setNote(e.target.value)} /></Field>
         <Button disabled={busy || !versionId || !articleId || !pinId} onClick={() => run('benchmark-save', { versionId, articleId, pinId, note })}><FlaskConical size={16} />Record Benchmark</Button>
         {data.benchmarkCases.map(c => <div key={c.id} className="border-b border-slate-200 py-2 text-sm">{data.styleVersions.find(v => v.id === c.versionId)?.name} · {c.recipeStatus} · Text: {c.textStatus} · Realism: {c.realism}<p className="text-xs text-slate-500">{c.note}</p></div>)}
+        <PromptEvaluation data={data} versionId={versionId} busy={busy} run={run} />
+      </div>}
+      {tab === 'Readiness' && <div className="space-y-3">
+        {(data.readiness?.checks || []).map(check => <section key={check.id} className="border-b border-slate-200 py-4"><div className="flex flex-wrap items-center justify-between gap-2"><h3 className="font-semibold">{check.name}</h3><span className="text-sm text-slate-500">{check.status}</span></div><p className="mt-2 text-sm text-slate-500">{check.detail}</p></section>)}
+        <div className="flex flex-wrap gap-2"><Button variant="secondary" onClick={() => setActiveScreen('settings')}><ArrowRight size={16} />Settings</Button><Button variant="secondary" onClick={() => setActiveScreen('pin-publishing')}><ArrowRight size={16} />Pinterest Results</Button></div>
       </div>}
       {tab === 'Experiments' && <div className="space-y-4">
         <Field label="Experiment name"><input className={inputClass} value={experimentName} onChange={e => setExperimentName(e.target.value)} /></Field>

@@ -21,7 +21,7 @@ async function main() {
       const ledger = createSpendLedger({ store }); ledger.reserve({ model: 'image', estimateUsd: 0.03, input: {}, context: { articleId: 'a0' } });
       state.settings.wordpressSites = [{ id: 'archive-site', name: 'Recipe Archive', url: 'https://recipe.example' }];
       let download;
-      const service = createContentOperations({ store, ledger, readMedia: async () => Buffer.from('artwork'), readArchive: async () => ({ posts: [{ id: 900, status: 'publish', link: 'https://recipe.example/archive-rice', title: { rendered: 'Published Archive Rice' }, content: { rendered: renderRecipes([recipe]) }, modified_gmt: '2026-10-19T12:00:00' }], totalPages: 1 }), saveFile: async (name, bytes) => { download = bytes.toString(); return { path: name }; } });
+      const service = createContentOperations({ store, ledger, readiness: () => require('../electron/operations-readiness').operationsReadiness({ store, platform: 'win32' }), readMedia: async () => Buffer.from('artwork'), readArchive: async () => ({ posts: [{ id: 900, status: 'publish', link: 'https://recipe.example/archive-rice', title: { rendered: 'Published Archive Rice' }, content: { rendered: renderRecipes([recipe]) }, modified_gmt: '2026-10-19T12:00:00' }], totalPages: 1 }), saveFile: async (name, bytes) => { download = bytes.toString(); return { path: name }; } });
       const batches = ['b1', 'b2'].map(id => ({ id, createdAt: new Date().toISOString(), rows: [{ number: 1, cells: ['Lemon Rice', '', 'Dinner'] }, { number: 2, cells: ['Other Rice', '', 'Dinner'] }], outcomes: {}, fileStatus: 'saved', revision: 1 }));
       const receiptDrafts = {};
       const page = await browser.newPage({ viewport: { width, height: 980 }, reducedMotion: 'reduce' }); const errors = [];
@@ -63,6 +63,22 @@ async function main() {
       await page.getByRole('button', { name: 'Open Pin Creator', exact: true }).click();
       assert.equal(await page.evaluate(() => window.testNavigation), 'pin-creator');
       assert.equal(ledger.get().entries.length, 1); assert.equal(state.pinCreatorPins.length, 3);
+      await page.getByLabel('Evaluation article: Bean soup', { exact: true }).selectOption('a0');
+      await page.getByLabel('Estimated run cap (USD)', { exact: true }).fill('0.10');
+      await page.getByRole('button', { name: 'Queue Budgeted Evaluation', exact: true }).click();
+      await page.getByText('Natural Light Candidate · 1/15 cases', { exact: true }).waitFor();
+      assert.equal(state.contentOperations.evaluationRuns.length, 1);
+      assert.equal(ledger.get().entries.length, 1);
+      await page.getByRole('button', { name: 'Export Report', exact: true }).click();
+      await page.getByText('Saved: prompt-evaluation.json', { exact: true }).waitFor();
+      assert.match(download, /"datasetVersion": 1/);
+      await page.screenshot({ path: path.resolve(`artifacts/prompt-evaluation-${name}.png`), fullPage: true });
+      await page.getByRole('tab', { name: 'Readiness', exact: true }).click();
+      await page.getByRole('heading', { name: 'Signed releases', exact: true }).waitFor();
+      await page.getByRole('button', { name: 'Pinterest Results', exact: true }).click();
+      assert.equal(await page.evaluate(() => window.testNavigation), 'pin-publishing');
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 2), false);
+      await page.screenshot({ path: path.resolve(`artifacts/readiness-${name}.png`) });
       await page.getByRole('tab', { name: 'Experiments', exact: true }).click();
       await page.getByLabel('Experiment name', { exact: true }).fill('Center Headline Comparison');
       for (const [i, id, remote] of [[1, 'p1', '111'], [2, 'p2', '222']]) { await page.getByLabel(`Variant ${i}`, { exact: true }).selectOption(id); await page.getByLabel(`Pinterest Pin ID ${i}`, { exact: true }).fill(remote); }

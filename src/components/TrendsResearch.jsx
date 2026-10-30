@@ -49,6 +49,7 @@ export default function TrendsResearch({ settings, articles, refreshArticles, se
   const [intentFilter, setIntentFilter] = useState("all");
   const [evidenceFilter, setEvidenceFilter] = useState("all");
   const [hideOverlap, setHideOverlap] = useState(false);
+  const [opportunityWeights, setOpportunityWeights] = useState({ pinterest: 35, search: 35, coverage: 20, seasonal: 10 });
 
   async function loadWorkspace() {
     const workspace = await electronAPI.getTrendWorkspace?.();
@@ -140,6 +141,7 @@ export default function TrendsResearch({ settings, articles, refreshArticles, se
         seed: seed.trim(),
         geo,
         goal,
+        opportunityWeights,
         settings,
         existingTitles: articles.map((article) => article.generatedTitle || article.title).filter(Boolean),
         jobKey
@@ -313,6 +315,7 @@ export default function TrendsResearch({ settings, articles, refreshArticles, se
               <select className={inputClass} value={goal} onChange={(event) => setGoal(event.target.value)}>{goals.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
             </Field>
           </div>
+          <details className="mt-4 border-t border-slate-200 pt-3"><summary className="cursor-pointer text-sm font-semibold">Opportunity Weights</summary><div className="mt-3 grid grid-cols-2 gap-3 md:grid-cols-4">{Object.entries(opportunityWeights).map(([key, value]) => <Field key={key} label={`${key === 'search' ? 'Search Console' : key.charAt(0).toUpperCase() + key.slice(1)} weight`}><input type="number" min="0" max="100" step="1" aria-label={`${key} weight`} className={inputClass} value={value} onChange={e => setOpportunityWeights(current => ({ ...current, [key]: e.target.value }))} /></Field>)}</div></details>
           <div className="mt-4 flex flex-wrap gap-2">
             <Button onClick={runResearch} disabled={!!working || !seed.trim()}><Search className="h-4 w-4" />Research Keywords</Button>
             {working.startsWith("keyword-research-") ? <Button variant="secondary" onClick={cancelResearch}>Cancel</Button> : null}
@@ -393,10 +396,10 @@ export default function TrendsResearch({ settings, articles, refreshArticles, se
                     <tr key={`${item.keyword}-${index}`} className={selected.includes(index) ? "bg-violet-50/50" : "bg-white"}>
                       <td className="px-4 py-4 align-top"><input type="checkbox" checked={selected.includes(index)} onChange={() => toggleSelected(index)} aria-label={`Select ${item.keyword}`} /></td>
                       <td className="max-w-md px-3 py-4 align-top"><div className="font-black text-slate-900">{item.keyword}</div><div className="mt-1 font-semibold text-slate-600">{item.suggestedTitle}</div><div className="mt-1 text-xs leading-5 text-slate-500">{item.rationale}</div>{item.cannibalization?.title ? <div className="mt-2 rounded-md bg-violet-100 px-2 py-1 text-xs font-bold text-violet-700">Possible overlap: {item.cannibalization.title}</div> : null}</td>
-                      <td className="px-3 py-4 align-top"><span className={`inline-flex min-w-12 justify-center rounded-full px-2.5 py-1 text-xs font-black ${scoreTone(item.opportunityScore)}`}>{item.opportunityScore}</span><div className="mt-2 text-xs font-bold text-slate-500">{item.competition || "unknown"} competition</div></td>
+                      <td className="px-3 py-4 align-top"><span title={item.scoreLimitation || ''} className={`inline-flex min-w-12 justify-center rounded-full px-2.5 py-1 text-xs font-black ${scoreTone(item.opportunityScore)}`}>{item.opportunityScore}</span>{item.opportunityFactors && <dl className="mt-2 space-y-1 text-xs text-slate-500">{Object.entries(item.opportunityFactors).map(([key, value]) => <div key={key}><dt className="inline capitalize">{key}: </dt><dd className="inline">{value === null ? 'No fresh data' : Math.round(value)}</dd></div>)}</dl>}</td>
                       <td className="px-3 py-4 align-top font-bold text-slate-600">{item.intent || "informational"}<div className="mt-1 text-xs text-slate-500">{item.contentType || "article"}</div><div className="mt-2 rounded bg-violet-50 px-2 py-1 text-xs font-black text-violet-700">{item.interestProfile.primary.label}</div><div className="mt-1 text-xs capitalize text-slate-500">{item.interestProfile.lifecycle.stage} / {item.interestProfile.primary.confidence}% confidence</div><div className="mt-1 max-w-64 text-xs font-medium text-slate-500">Next: {item.interestProfile.adjacent.slice(0, 2).join(", ")}</div></td>
                       <td className="px-3 py-4 align-top"><div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs"><span className="text-slate-500">Outbound</span><strong>{number(item.pinterestEvidence?.outboundClicks)}</strong><span className="text-slate-500">Pin clicks</span><strong>{number(item.pinterestEvidence?.pinClicks)}</strong><span className="text-slate-500">Saves</span><strong>{number(item.pinterestEvidence?.saves)}</strong><span className="text-slate-500">Views</span><strong>{number(item.pinterestEvidence?.impressions)}</strong></div></td>
-                      <td className="max-w-56 px-3 py-4 align-top text-xs font-semibold leading-5 text-slate-600"><span className={`inline-flex rounded-full px-2 py-1 font-black ${item.evidenceConfidence === "high" ? "bg-emerald-100 text-emerald-700" : item.evidenceConfidence === "medium" ? "bg-violet-100 text-violet-700" : "bg-slate-100 text-slate-600"}`}>{item.evidenceLabel || item.trendSignal || "Inferred"} / {item.evidenceConfidence || "low"}</span><div className="mt-2">{item.freshnessLabel || "Evidence date unavailable"}</div><div className="mt-1 font-bold text-indigo-600">{item.publishWindow || item.seasonalTiming}</div></td>
+                      <td className="max-w-56 px-3 py-4 align-top text-xs font-semibold leading-5 text-slate-600"><span className={`inline-flex rounded-full px-2 py-1 font-black ${item.evidenceConfidence === "high" ? "bg-emerald-100 text-emerald-700" : item.evidenceConfidence === "medium" ? "bg-violet-100 text-violet-700" : "bg-slate-100 text-slate-600"}`}>{item.evidenceLabel || item.trendSignal || "Inferred"} / {item.evidenceConfidence || "low"}</span><div className="mt-2">{item.freshnessLabel || "Evidence date unavailable"}</div><div className="mt-1 font-bold text-indigo-600">{item.publishWindow || item.seasonalTiming}</div>{item.seasonalOpportunity && <p className="mt-2">{item.seasonalOpportunity.label}: {item.seasonalOpportunity.start} to {item.seasonalOpportunity.end}<span className="block font-normal">{item.seasonalOpportunity.evidence}</span></p>}</td>
                       <td className="max-w-44 px-3 py-4 align-top font-semibold text-slate-600">{item.board || "Auto match"}</td>
                     </tr>
                   ))}

@@ -1,6 +1,13 @@
+import { generationMetadata } from '../../electron/recipe-provenance.mjs';
+
+export function completeGenerationMetadata(article, checkpoint) {
+  return generationMetadata(article, checkpoint);
+}
+
 export function checkpointArticleDraft(article, checkpoint) {
   return {
     ...article,
+    ...generationMetadata(article, checkpoint),
     ...(checkpoint.content ? { content: checkpoint.content } : {}),
     ...(checkpoint.generatedTitle ? { generatedTitle: checkpoint.generatedTitle } : {}),
     generationCheckpoint: checkpoint

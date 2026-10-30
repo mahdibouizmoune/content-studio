@@ -54,6 +54,7 @@ function FeatureDisabled({ label, onOpenSettings }) {
 }
 
 function CalendarView({ articles, settings, workspace, saveRecord }) {
+  const [mode, setMode] = useState('deliveries');
   const [filters, setFilters] = useState({ site: "", platform: "", campaign: "", status: "", contentType: "" });
   const rows = useMemo(() => buildCalendarRows(articles, workspace.calendarEntries), [articles, workspace.calendarEntries]);
   const filtered = rows.filter((row) => (
@@ -89,6 +90,8 @@ function CalendarView({ articles, settings, workspace, saveRecord }) {
 
   return (
     <>
+      <div role="tablist" aria-label="Calendar view" className="mb-4 flex gap-2 border-b border-slate-200 pb-2">{[['deliveries', 'Publishing Agenda'], ['plans', 'Planning Dates']].map(([value, label]) => <button key={value} type="button" role="tab" aria-selected={mode === value} className={`rounded px-3 py-2 text-sm font-semibold ${mode === value ? 'bg-emerald-700 text-white' : 'text-slate-500'}`} onClick={() => setMode(value)}>{label}</button>)}</div>
+      {mode === 'deliveries' ? <PublishingAgenda events={workspace.deliveryCalendar || []} /> : <>
       <div className="mb-4 grid gap-3 md:grid-cols-3 xl:grid-cols-5">
         <select aria-label="Filter calendar by site" className={inputClass} value={filters.site} onChange={(event) => setFilters({ ...filters, site: event.target.value })}>
           <option value="">All sites</option>
@@ -145,8 +148,20 @@ function CalendarView({ articles, settings, workspace, saveRecord }) {
           </table>
         </div>
       )}
+      </>}
     </>
   );
+}
+
+function PublishingAgenda({ events }) {
+  const [platform, setPlatform] = useState(''), [state, setState] = useState('');
+  const [limit, setLimit] = useState(100);
+  const filtered = events.filter(e => (!platform || e.platform === platform) && (!state || e.status === state));
+  return <section className="space-y-4">
+    <div className="flex flex-wrap gap-3"><select aria-label="Agenda platform" className={`${inputClass} max-w-64`} value={platform} onChange={e => { setPlatform(e.target.value); setLimit(100); }}><option value="">All platforms</option>{[...new Set(events.map(e => e.platform))].map(p => <option key={p}>{p}</option>)}</select><select aria-label="Agenda status" className={`${inputClass} max-w-64`} value={state} onChange={e => { setState(e.target.value); setLimit(100); }}><option value="">All results</option>{[...new Set(events.map(e => e.status))].map(s => <option key={s}>{s}</option>)}</select></div>
+    {!filtered.length ? <EmptyState title="No delivery records" /> : <div className="overflow-auto"><table className="w-full min-w-[750px] text-left text-sm"><thead><tr><th className="p-3">Date (UTC)</th><th className="p-3">Content</th><th className="p-3">Platform</th><th className="p-3">Result</th><th className="p-3">Evidence</th></tr></thead><tbody>{filtered.slice(0, limit).map(event => <tr key={event.id} className="border-t border-slate-200 align-top"><td className="whitespace-nowrap p-3">{event.date ? new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'UTC' }).format(new Date(event.date)) : 'Undated / immediate'}</td><td className="max-w-96 break-words p-3 font-semibold">{event.title}</td><td className="p-3">{event.platform}</td><td className="p-3">{event.status}</td><td className="max-w-64 p-3 text-xs text-slate-500">{event.evidence}</td></tr>)}</tbody></table></div>}
+    {filtered.length > limit && <Button variant="secondary" onClick={() => setLimit(n => n + 100)}>Show More</Button>}
+  </section>;
 }
 
 function CampaignsView({ articles, workspace, saveRecord, deleteRecord }) {

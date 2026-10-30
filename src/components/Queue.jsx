@@ -28,7 +28,7 @@ import { applyAffiliateLinksToArticle } from "@/lib/affiliateLinks.mjs";
 import { buildListiclePrompt, parseItemCountFromTitle, parsePromisedRecipeCount } from "@/prompts";
 import { buildArticleBrief } from "@/lib/articleBrief.mjs";
 import { buildArticleQualityReport } from "@/lib/articleQuality.mjs";
-import { checkpointArticleDraft, checkpointParallelTasks } from "@/lib/generationCheckpoint.mjs";
+import { checkpointArticleDraft, checkpointParallelTasks, completeGenerationMetadata } from "@/lib/generationCheckpoint.mjs";
 import { detectCannibalization } from "@/lib/contentPlanning";
 import { applyReaderRetentionElements } from "@/lib/readerRetention.mjs";
 
@@ -475,7 +475,7 @@ export default function Queue({ articles, settings, refreshArticles, setActiveSc
       }
       if (checkpoint.collectionQualityWarning) throw new Error(`Saved draft needs the promised recipe collection repaired: ${checkpoint.collectionQualityWarning}`);
 
-      const recipeReady = await electronAPI.prepareArticleRecipe({ article: { ...article, content: baseContent }, settings: settingsForGen, repair: resumingSavedDraft || !checkpoint.recipeCardQualityWarning, jobKey: `${jobKey}:recipe-validation` });
+      const recipeReady = await electronAPI.prepareArticleRecipe({ article: { ...workingArticle, ...completeGenerationMetadata(workingArticle, checkpoint), content: baseContent }, settings: settingsForGen, repair: resumingSavedDraft || !checkpoint.recipeCardQualityWarning, jobKey: `${jobKey}:recipe-validation` });
       baseContent = finalizeArticleContent(recipeReady.patch.content, article.title, settingsForGen);
       await saveCheckpoint("recipe-validation", {
         content: baseContent,
@@ -711,10 +711,11 @@ export default function Queue({ articles, settings, refreshArticles, setActiveSc
         settingsForGen
       ).content;
 
-      const finalRecipe = await electronAPI.prepareArticleRecipe({ article: { ...article, content: baseContent, generatedTitle }, settings: settingsForGen, repair: false });
+      const finalRecipe = await electronAPI.prepareArticleRecipe({ article: { ...workingArticle, ...completeGenerationMetadata(workingArticle, checkpoint), content: baseContent, generatedTitle }, settings: settingsForGen, repair: false });
       if (!finalRecipe.success) throw new Error(finalRecipe.patch.recipeCardQualityWarning || "Final recipe validation failed.");
       const completedArticle = {
         ...workingArticle,
+        ...completeGenerationMetadata(workingArticle, checkpoint),
         // Non-food articles come back with recipeCardEnabled false; keep that so no recipe blocker applies.
         ...(finalRecipe.skipped === "non-food" ? { recipeCardEnabled: false, recipeRequired: false } : {}),
         content: baseContent,
@@ -744,7 +745,7 @@ export default function Queue({ articles, settings, refreshArticles, setActiveSc
           })),
         queueStatus: checkpoint.recipeCardQualityWarning ? "error" : "completed",
         workflowStatus: "needs-review",
-        recipeRequired: true,
+        recipeRequired: finalRecipe.skipped !== "non-food",
         editorialQualityPassApplied: !!checkpoint.qualityPassApplied,
         recipeCardRepairApplied: !!checkpoint.recipeCardRepairApplied,
         recipeCardQualityWarning: "",

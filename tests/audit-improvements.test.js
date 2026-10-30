@@ -190,7 +190,7 @@ test('cluster plans have one pillar, cap the count, and link supports back to th
   assert.match(buildClusterPlan('', {}, 1)[0].title, /^Easy Recipe Ideas/);
 });
 
-function loadAppUpdater() {
+function loadAppUpdater(provenance) {
   const { EventEmitter } = require('node:events');
   const fake = Object.assign(new EventEmitter(), {
     calls: [],
@@ -201,12 +201,16 @@ function loadAppUpdater() {
   });
   const resolved = require.resolve('electron-updater');
   const previous = require.cache[resolved];
+  const provenanceModule = require.resolve('../electron/release-provenance');
+  const previousProvenance = require.cache[provenanceModule];
+  if (provenance) require.cache[provenanceModule] = { id: provenanceModule, filename: provenanceModule, loaded: true, exports: { releaseProvenance: () => provenance } };
   require.cache[resolved] = { id: resolved, filename: resolved, loaded: true, exports: { autoUpdater: fake } };
   delete require.cache[require.resolve('../electron/app-updater')];
   try {
     return { fake, ...require('../electron/app-updater') };
   } finally {
     if (previous) require.cache[resolved] = previous; else delete require.cache[resolved];
+    if (previousProvenance) require.cache[provenanceModule] = previousProvenance; else delete require.cache[provenanceModule];
   }
 }
 
@@ -219,23 +223,19 @@ test('updates stay off without a packaged app, a safe https feed, and (on Window
   assert.equal(unsafe.configure().configured, false);
   const packaged = createAppUpdater({ app: { isPackaged: true, getVersion: () => '1.6.3' }, log, getFeedUrl: () => 'https://updates.example.com/' });
   const state = packaged.configure();
-  if (process.platform === 'win32') {
-    assert.equal(state.configured, false);
-    assert.match(state.message, /signed Windows build/);
-    assert.equal(fake.calls.length, 0);
-  } else {
-    assert.equal(state.configured, true);
-    assert.deepEqual(fake.calls[0], ['feed', { provider: 'generic', url: 'https://updates.example.com' }]);
-  }
+  assert.equal(state.configured, false);
+  assert.match(state.message, /verified signed production/);
+  assert.equal(fake.calls.length, 0);
 });
 
 test('update download and install only run from the matching state', async () => {
-  const { fake, createAppUpdater } = loadAppUpdater();
+  const { fake, createAppUpdater } = loadAppUpdater({ verified: true, releaseMode: 'signed-production', windowsPublisherNames: ['Example Publisher'], updateFeedUrl: 'https://updates.example.com/app' });
   const statuses = [];
-  const updater = createAppUpdater({ app: { isPackaged: false, getVersion: () => '1.6.3' }, log: {}, onStatus: (state) => statuses.push(state.status) });
+  const updater = createAppUpdater({ app: { isPackaged: true, getVersion: () => '1.6.3' }, log: {}, onStatus: (state) => statuses.push(state.status) });
   assert.equal((await updater.check()).success, false);
   assert.equal((await updater.download()).success, false);
   assert.equal(updater.install().success, false);
+  updater.configure();
   fake.emit('update-available', { version: '1.6.4' });
   assert.equal(updater.state().availableVersion, '1.6.4');
   assert.equal((await updater.download()).success, true);
@@ -243,10 +243,21 @@ test('update download and install only run from the matching state', async () =>
   fake.emit('update-downloaded', { version: '1.6.4' });
   assert.equal(updater.install().success, true);
   await new Promise((resolve) => setTimeout(resolve, 5));
-  assert.deepEqual(fake.calls.map((call) => call[0]), ['download', 'install']);
+  assert.deepEqual(fake.calls.map((call) => call[0]), ['feed', 'download', 'install']);
   fake.emit('error', new Error('x'.repeat(900)));
   assert.equal(updater.state().message.length, 500);
-  assert.deepEqual(statuses, ['available', 'ready', 'error']);
+  assert.deepEqual(statuses, ['idle', 'available', 'ready', 'error']);
+});
+
+test('unsigned test releases cannot activate update installation through stale updater events', async () => {
+  const { fake, createAppUpdater } = loadAppUpdater({ verified: true, releaseMode: 'unsigned-test', windowsPublisherNames: ['Example Publisher'] });
+  const updater = createAppUpdater({ app: { isPackaged: true, getVersion: () => '1.6.5' }, log: {}, getFeedUrl: () => 'https://updates.example.com' });
+  assert.equal(updater.configure().configured, false);
+  fake.emit('update-available', { version: '1.6.6' });
+  assert.equal((await updater.download()).success, false);
+  fake.emit('update-downloaded', { version: '1.6.6' });
+  assert.equal(updater.install().success, false);
+  assert.deepEqual(fake.calls, []);
 });
 
 test('video handlers live in their own module and deleting a video with a missing file still succeeds', async () => {

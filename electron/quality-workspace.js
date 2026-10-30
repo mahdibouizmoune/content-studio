@@ -7,8 +7,8 @@ const { createTextChecker } = require('./pin-text-check');
 const { renderExactTemplate } = require('./exact-pin-template');
 const { analyticsConfig } = require('./google-analytics');
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
-function createQualityWorkspace({ store, ledger, readMedia, sharp, mediaDirectory, displayUrl, cachePath, saveFile, fetchPage, refreshEvents, pluginFiles, releaseInfo, encrypt, decrypt, readPublicImage, readReceipt, workerFiles, readModelMetadata, readArchive }) {
-  const operations = require('./content-operations').createContentOperations({ store, ledger, saveFile, readMedia, readArchive });
+function createQualityWorkspace({ store, ledger, readMedia, sharp, mediaDirectory, displayUrl, cachePath, saveFile, fetchPage, refreshEvents, pluginFiles, releaseInfo, encrypt, decrypt, readPublicImage, readReceipt, workerFiles, readModelMetadata, readArchive, readiness }) {
+  const operations = require('./content-operations').createContentOperations({ store, ledger, saveFile, readMedia, readArchive, readiness });
   let checker;
   const get = () => ({ reports: {}, collections: [], ...store.get('qualityWorkspace', {}) });
   const save = d => store.set('qualityWorkspace', d);

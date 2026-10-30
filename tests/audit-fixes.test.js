@@ -39,6 +39,8 @@ function publisher({ get, post, generateCard } = {}) {
     validateRecipeCard: require('../electron/recipe-generation').validateRecipeCard,
     hasEditorialInstructionLeak: require('../electron/article-editorial').hasEditorialInstructionLeak,
     recipeSchemaNeedsReview: require('../electron/article-recipe-readiness').recipeSchemaNeedsReview,
+    prepareRecipeSchemaForPublication: require('../electron/article-recipe-readiness').prepareRecipeSchemaForPublication,
+    replaceRoundupSchema: require('../electron/recipe-roundup').replaceRoundupSchema,
     stripRecipeMicrodata: require('../electron/article-recipe-readiness').stripRecipeMicrodata,
     prepareArticleRecipe: require('../electron/article-recipe-readiness').createRecipeReadinessService({ generateCard: generateCard || (async () => { throw new Error('Replicate API token is missing'); }) }),
     removeArticleImpact: require('../electron/article-impact-cleanup').removeArticleImpact,
@@ -125,6 +127,49 @@ test('WordPress creates on site B without reusing site A post ID', async () => {
   const app = publisher();
   await app.run(article, 'https://site-b.example');
   assert.equal(app.requests[0].url, 'https://site-b.example/wp-json/wp/v2/posts');
+});
+
+function roundupContent() {
+  const { renderRecipes } = require('../electron/content-operations');
+  const card = { name: 'Lemon Rice', facts: { 'Prep Time': '5 minutes', 'Cook Time': '15 minutes', 'Total Time': '20 minutes', Servings: '4' }, ingredients: ['1 cup rice', '2 cups water', '1 tbsp lemon juice'], instructions: ['Combine rice and water in a saucepan.', 'Simmer for 15 minutes until rice is tender.', 'Stir in lemon juice until evenly combined.'] };
+  return renderRecipes([card, { ...card, name: 'Herb Rice' }]).replace('<h2>1. Lemon Rice</h2>', '<h2>1. Lemon Rice</h2><img src="https://site-b.example/rice.jpg">').replace('<h2>2. Herb Rice</h2>', '<h2>2. Herb Rice</h2><img src="https://site-b.example/herbs.jpg">');
+}
+test('new roundup uses the confirmed permalink and finalizes only the already-created post', async () => {
+  const content = roundupContent();
+  const app = publisher();
+  const result = await app.run({ ...article, content }, 'https://site-b.example');
+  assert.equal(result.success, true);
+  assert.equal(app.requests.length, 2);
+  assert.equal(app.requests[1].url, 'https://site-b.example/wp-json/wp/v2/posts/73');
+  assert.match(app.requests[1].payload.content, /https:\/\/site-b.example\/recipe#cs-recipe-1/);
+  assert.match(app.requests[1].payload.content, /ItemList/);
+  assert.ok(!app.requests[1].payload.content.includes('https://site-a.example/recipe#'));
+  assert.equal(app.store.get('performance.wordpressPublishReceipts')[0].status, 'publish');
+});
+
+test('a lost roundup markup response reconciles the exact revision without recreating a post', async () => {
+  let remote;
+  const app = publisher({ get: () => remote || [], post: (url, payload, context) => {
+    if (url.endsWith('/73')) {
+      remote = { id: 73, slug: context.wordpressArticleSlug(article), status: 'publish', link: 'https://site-b.example/recipe', content: { raw: payload.content } };
+      throw remoteError(503);
+    }
+    return { id: 73, status: 'publish', link: 'https://site-b.example/recipe' };
+  } });
+  const result = await app.run({ ...article, content: roundupContent() }, 'https://site-b.example');
+  assert.equal(result.success, true); assert.equal(app.requests.length, 2);
+  assert.equal(app.store.get('performance.wordpressPublishReceipts')[0].status, 'publish');
+});
+
+test('an unresolved roundup markup response preserves the known post ID and prevents blind recreation', async () => {
+  const app = publisher({ post: (url, payload) => { if (url.endsWith('/73')) throw remoteError(503); return { id: 73, status: payload.status, link: 'https://site-b.example/recipe' }; } });
+  const draft = { ...article, content: roundupContent() };
+  const result = await app.run(draft, 'https://site-b.example');
+  assert.ok(result.mediaWarnings.some(w => /could not be confirmed/.test(w)));
+  assert.equal(app.store.get('performance.wordpressPublishReceipts')[0].status, 'unknown');
+  assert.equal(app.store.get('performance.wordpressPublishReceipts')[0].postId, 73);
+  await assert.rejects(app.run(draft, 'https://site-b.example'));
+  assert.equal(app.requests.filter(r => r.url.endsWith('/posts')).length, 1);
 });
 
 test('WordPress refuses an unrelated post and refuses creation when lookup fails', async () => {

@@ -3,6 +3,8 @@ const { parseRecipeCard, durationMinutes } = require('./recipe-card-parser');
 const { inspectRecipe } = require('./recipe-quality');
 const { recipeUnits } = require('./recipe-units');
 const { createHash } = require('node:crypto');
+const { isAiWrittenRecipe } = require('./recipe-provenance.mjs');
+const { anchorRecipeRoundup, roundupSchema } = require('./recipe-roundup');
 
 // Fields the visible card cannot supply are kept from the editor's schema. Ratings, reviews and
 // nutrition are never carried over: they must come from real data, not a generated draft.
@@ -44,7 +46,7 @@ function validatedRecipeSchema(article, content) {
   const carried = Object.fromEntries(CARRIED_SCHEMA_FIELDS.filter((key) => previous[key] !== undefined).map((key) => [key, previous[key]]));
   const image = durableImage(article.featuredImageRemoteUrl) || durableImage(article.featuredImage);
   const collection = article.generationCheckpoint?.recipeCollection || article.recipeCollection;
-  const units = collection?.depth === 'complete-recipes' ? recipeUnits(content) : [];
+  const units = collection?.depth !== 'compact' ? recipeUnits(content) : [];
   if (units.length > 1) {
     // One Recipe per visible recipe; the page itself stays a roundup, not a single dish.
     const recipes = units.map((unit, index) => {
@@ -79,10 +81,6 @@ function recipeReviewHash(content = '') {
   const units = recipeUnits(content);
   const text = (units.length ? units.map((unit) => unit.html) : [parseRecipeCard(content).html]).join('\n');
   return createHash('sha256').update(text.replace(/\s+/g, ' ').trim()).digest('hex');
-}
-
-function isAiWrittenRecipe(article = {}) {
-  return Boolean(article.generationCheckpoint) || article.recipeCardRepairApplied === true;
 }
 
 function recipeSchemaNeedsReview(article = {}, content = article.content) {
@@ -162,8 +160,11 @@ function createRecipeReadinessService({ generateCard, clean = (value) => value }
       }
     }
     const recipeQuality = inspectRecipe({ ...article, content });
+    if (validation.ok && collection?.depth === 'complete-recipes' && Number(collection.itemCount) > recipeQuality.recipeCount) {
+      validation = { ok: false, issues: [`The collection promises ${collection.itemCount} recipes but only ${recipeQuality.recipeCount} complete recipe units were found.`] };
+    }
     // A complete collection publishes every recipe, so each one must pass, not only the primary card.
-    if (validation.ok && collection?.depth === 'complete-recipes' && recipeQuality.status === 'needs-repair') {
+    if (validation.ok && collection?.depth !== 'compact' && recipeQuality.recipeCount > 1 && recipeQuality.status === 'needs-repair') {
       const collectionIssues = recipeQuality.issues.filter((issue) => issue.severity === 'error').map((issue) => issue.message);
       validation = { ok: false, issues: collectionIssues };
     }
@@ -177,4 +178,24 @@ function createRecipeReadinessService({ generateCard, clean = (value) => value }
   };
 }
 
-module.exports = { createRecipeReadinessService, buildRecipeRepairPrompt, isNonFoodArticle, validatedRecipeSchema, recipeReviewHash, isAiWrittenRecipe, recipeSchemaNeedsReview, stripRecipeMicrodata };
+function prepareRecipeSchemaForPublication(article, content, featuredImageUrl = '', pageUrl = article.wordpressPostUrl || '') {
+  const parsed = JSON.parse(validatedRecipeSchema({ ...article, ...(featuredImageUrl ? { featuredImageRemoteUrl: featuredImageUrl } : {}) }, content));
+  const warnings = [];
+  const eligible = recipe => {
+    const images = [].concat(recipe.image || []).filter(value => durableImage(typeof value === 'string' ? value : value?.url));
+    if (images.length) { recipe.image = images; return true; }
+    warnings.push(`${recipe.name || 'Recipe'}: recipe rich-result data omitted until a matching durable photo is available. The visible recipe was kept.`);
+    return false;
+  };
+  if (Array.isArray(parsed['@graph'])) {
+    const anchored = anchorRecipeRoundup(content);
+    parsed['@graph'] = parsed['@graph'].filter(eligible);
+    const list = roundupSchema(parsed['@graph'], anchored.anchors, pageUrl);
+    if (list) parsed['@graph'] = [list];
+    else if (parsed['@graph'].length > 1 && !pageUrl) warnings.push('Roundup links are anchored. ItemList data will be added when republishing with the confirmed WordPress permalink.');
+    return { content: anchored.content, structuredData: parsed['@graph'].length ? JSON.stringify(parsed).replace(/</g, '\\u003c') : '', warnings };
+  }
+  return { structuredData: eligible(parsed) ? JSON.stringify(parsed).replace(/</g, '\\u003c') : '', warnings };
+}
+
+module.exports = { createRecipeReadinessService, buildRecipeRepairPrompt, isNonFoodArticle, validatedRecipeSchema, prepareRecipeSchemaForPublication, recipeReviewHash, isAiWrittenRecipe, recipeSchemaNeedsReview, stripRecipeMicrodata };

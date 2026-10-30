@@ -16,7 +16,7 @@ function captionKey(value = '') {
     .slice(0, 200);
 }
 
-function findLogicalGhlDuplicate(receipts = [], { platform = '', locationId = '', caption = '', scheduleDate = '' } = {}) {
+function findLogicalGhlDuplicate(receipts = [], { platform = '', locationId = '', caption = '', scheduleDate = '', targetAccountIds = [] } = {}) {
   const key = captionKey(caption);
   if (key.length < 20) return null;
   const at = Date.parse(scheduleDate);
@@ -24,6 +24,10 @@ function findLogicalGhlDuplicate(receipts = [], { platform = '', locationId = ''
     if (INACTIVE.has(String(receipt.status || '').toLowerCase())) return false;
     if (String(receipt.platform || '').toLowerCase() !== String(platform || '').toLowerCase()) return false;
     if (receipt.locationId && locationId && receipt.locationId !== locationId) return false;
+    const previousAccounts = Array.isArray(receipt.targetAccountIds) ? receipt.targetAccountIds.map(String) : [];
+    const nextAccounts = Array.isArray(targetAccountIds) ? targetAccountIds.map(String) : [];
+    // Unknown legacy targets remain conservative; disjoint known targets are not duplicates.
+    if (previousAccounts.length && nextAccounts.length && !previousAccounts.some(id => nextAccounts.includes(id))) return false;
     const previous = Date.parse(receipt.scheduleDate || receipt.createdAt || '');
     if (Number.isFinite(at) && Number.isFinite(previous) && Math.abs(at - previous) > WINDOW_MS) return false;
     return captionKey(receipt.caption) === key;
